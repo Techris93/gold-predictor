@@ -5,6 +5,7 @@ import numpy as np
 import itertools
 import os
 import re
+import subprocess
 from concurrent.futures import ProcessPoolExecutor
 
 def generate_signals_custom(df, ema_short_win, ema_long_win, rsi_ob, rsi_os, cmf_win):
@@ -146,6 +147,18 @@ def run_swarm():
         with open(backtest_file, "w") as f: f.write(b_content)
         
         print(f"✅ Successfully updated agent code with optimal parameters: EMA {best_ema_s}/{best_ema_l}, RSI {best_rsi_ob}/{best_rsi_os}, CMF {best_cmf}")
+        
+        # Check if files changed and auto-commit to git
+        status_output = subprocess.run(["git", "status", "--porcelain"], cwd=base_dir, capture_output=True, text=True)
+        if "predict_gold.py" in status_output.stdout or "backtest.py" in status_output.stdout:
+            print("🚀 New superior strategy detected! Committing to repository...")
+            commit_msg = f"Auto-Evolve: New Best Strategy Found | ROI: {roi:.2f}% | EMA: {best_ema_s}/{best_ema_l} CMF: {best_cmf}"
+            subprocess.run(["git", "add", "predict_gold.py", "backtest.py"], cwd=base_dir)
+            subprocess.run(["git", "commit", "-m", commit_msg], cwd=base_dir)
+            print("💾 Saved! You can now run `git push` to deploy the new strategy.")
+        else:
+            print("⚖️ The current applied strategy is still the most optimal. No changes made.")
+
     except Exception as e:
         print("⚠️ Failed to auto-apply parameters:", e)
 

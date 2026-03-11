@@ -1,4 +1,6 @@
 from flask import Flask, jsonify, render_template
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 import sys
 import os
 
@@ -8,11 +10,27 @@ import predict_gold
 
 app = Flask(__name__)
 
+# Rate Limiter setup to prevent Yahoo Finance scraping bans (DoS protection)
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=["200 per day", "10 per minute"],
+    storage_uri="memory://"
+)
+
+@app.after_request
+def apply_security_headers(response):
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
+
 @app.route('/')
 def home():
     return render_template('index.html')
 
 @app.route('/api/predict')
+@limiter.limit("5 per minute")  # Strict limit for the expensive scraping endpoint
 def get_prediction():
     try:
         # Fetch data using the existing script logic
@@ -84,4 +102,4 @@ def get_prediction():
 
 if __name__ == '__main__':
     # Run on 0.0.0.0 to allow access from other devices on the local network (like your phone)
-    app.run(host='0.0.0.0', port=5001, debug=True)
+    app.run(host='0.0.0.0', port=5001, debug=False)
