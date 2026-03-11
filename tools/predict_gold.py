@@ -38,7 +38,7 @@ def get_technical_analysis():
             return {"error": "Failed to fetch price data."}
 
         # Calculate price indicators
-        df['EMA_20'] = ta.trend.EMAIndicator(df['Close'], window=20).ema_indicator()
+        df['EMA_20'] = ta.trend.EMAIndicator(df['Close'], window=50).ema_indicator()
         df['EMA_50'] = ta.trend.EMAIndicator(df['Close'], window=50).ema_indicator()
         df['RSI_14'] = ta.momentum.RSIIndicator(df['Close'], window=14).rsi()
         
@@ -79,7 +79,7 @@ def get_technical_analysis():
         rsi_signal = "Neutral"
         if latest['RSI_14'] > 70:
             rsi_signal = "Overbought (Bearish bias)"
-        elif latest['RSI_14'] < 30:
+        elif latest['RSI_14'] < 20:
             rsi_signal = "Oversold (Bullish bias)"
             
         # Determine volume/orderflow signal

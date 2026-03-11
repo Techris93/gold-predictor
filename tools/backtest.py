@@ -11,7 +11,7 @@ def generate_signals(df):
     - Bearish if EMA 20 < EMA 50 AND CMF < 0 AND OBV is falling AND (Price Action is Bearish Structure OR Bearish Engulfing OR RSI > 70)
     """
     # Calculate indicators
-    df['EMA_20'] = ta.trend.EMAIndicator(df['Close'], window=20).ema_indicator()
+    df['EMA_20'] = ta.trend.EMAIndicator(df['Close'], window=50).ema_indicator()
     df['EMA_50'] = ta.trend.EMAIndicator(df['Close'], window=50).ema_indicator()
     df['RSI_14'] = ta.momentum.RSIIndicator(df['Close'], window=14).rsi()
     df['OBV'] = ta.volume.OnBalanceVolumeIndicator(df['Close'], df['Volume']).on_balance_volume()
@@ -41,7 +41,7 @@ def generate_signals(df):
         bull_engulfing = current['Close'] > current['Open'] and prev['Close'] < prev['Open'] and current['Close'] > prev['Open'] and current['Open'] < prev['Close']
         bear_engulfing = current['Close'] < current['Open'] and prev['Close'] > prev['Open'] and current['Close'] < prev['Open'] and current['Open'] > prev['Close']
         
-        rsi_oversold = current['RSI_14'] < 30
+        rsi_oversold = current['RSI_14'] < 20
         rsi_overbought = current['RSI_14'] > 70
 
         if bull_trend and obv_rising and cmf_bull and (pa_bull_struct or bull_engulfing or rsi_oversold):
