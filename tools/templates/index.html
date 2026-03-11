@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>XAUUSD Predictor</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #0B0E14;
+            --card-bg: rgba(20, 24, 34, 0.7);
+            --gold-primary: #FFD700;
+            --gold-gradient: linear-gradient(135deg, #BF953F, #FCF6BA, #B38728, #FBF5B7, #AA771C);
+            --bullish: #00E676;
+            --bearish: #FF1744;
+            --neutral: #9E9E9E;
+            --text-main: #FFFFFF;
+            --text-muted: #8E9BAE;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Inter', sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 2rem 1rem;
+            background-image: 
+                radial-gradient(circle at 15% 50%, rgba(191, 149, 63, 0.08), transparent 25%),
+                radial-gradient(circle at 85% 30%, rgba(191, 149, 63, 0.05), transparent 25%);
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 2rem;
+            animation: fadeIn 1s ease-out;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            font-weight: 800;
+            background: var(--gold-gradient);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 0.5rem;
+            letter-spacing: -1px;
+        }
+
+        .subtitle {
+            color: var(--text-muted);
+            font-size: 0.9rem;
+            font-weight: 300;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+        }
+
+        .glass-card {
+            background: var(--card-bg);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 215, 0, 0.1);
+            border-radius: 24px;
+            padding: 2rem;
+            width: 100%;
+            max-width: 450px;
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+            margin-bottom: 1.5rem;
+            transition: transform 0.3s ease, border-color 0.3s ease;
+        }
+
+        .glass-card:hover {
+            border-color: rgba(255, 215, 0, 0.3);
+            transform: translateY(-2px);
+        }
+
+        .verdict-container {
+            text-align: center;
+            padding-bottom: 2rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            margin-bottom: 2rem;
+        }
+
+        .price {
+            font-size: 3rem;
+            font-weight: 300;
+            margin: 1rem 0;
+            letter-spacing: -1px;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 0.5rem 1.5rem;
+            border-radius: 50px;
+            font-size: 1.2rem;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+        }
+
+        .badge.bullish {
+            background-color: rgba(0, 230, 118, 0.15);
+            color: var(--bullish);
+            border: 1px solid rgba(0, 230, 118, 0.3);
+        }
+
+        .badge.bearish {
+            background-color: rgba(255, 23, 68, 0.15);
+            color: var(--bearish);
+            border: 1px solid rgba(255, 23, 68, 0.3);
+        }
+
+        .badge.neutral {
+            background-color: rgba(158, 158, 158, 0.15);
+            color: var(--neutral);
+            border: 1px solid rgba(158, 158, 158, 0.3);
+        }
+
+        .confidence {
+            margin-top: 1rem;
+            font-size: 0.9rem;
+            color: var(--text-muted);
+        }
+
+        .confidence-bar-bg {
+            width: 100%;
+            height: 6px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 10px;
+            margin-top: 0.5rem;
+            overflow: hidden;
+        }
+
+        .confidence-bar-fill {
+            height: 100%;
+            background: var(--gold-gradient);
+            border-radius: 10px;
+            width: 0%;
+            transition: width 1s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .metric-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+            padding: 0.8rem;
+            background: rgba(0,0,0,0.2);
+            border-radius: 12px;
+        }
+
+        .metric-label {
+            color: var(--text-muted);
+            font-size: 0.85rem;
+        }
+
+        .metric-value {
+            font-weight: 600;
+            font-size: 0.95rem;
+        }
+
+        .value-bullish { color: var(--bullish); }
+        .value-bearish { color: var(--bearish); }
+        
+        .refresh-btn {
+            background: var(--gold-gradient);
+            color: #000;
+            border: none;
+            border-radius: 50px;
+            padding: 1rem 2rem;
+            font-size: 1rem;
+            font-weight: 800;
+            cursor: pointer;
+            width: 100%;
+            max-width: 450px;
+            box-shadow: 0 4px 15px rgba(255, 215, 0, 0.2);
+            transition: transform 0.2s, box-shadow 0.2s;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .refresh-btn:active {
+            transform: scale(0.98);
+        }
+
+        .loading {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: var(--bg-color);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 999;
+            transition: opacity 0.5s ease;
+        }
+
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 3px solid rgba(255, 215, 0, 0.1);
+            border-radius: 50%;
+            border-top-color: var(--gold-primary);
+            animation: spin 1s ease-in-out infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .hide {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        /* Responsive fixes */
+        @media (max-width: 480px) {
+            h1 { font-size: 2rem; }
+            .glass-card { padding: 1.5rem; border-radius: 20px; }
+            .price { font-size: 2.5rem; }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Loading Screen -->
+    <div class="loading" id="loading-screen">
+        <div class="spinner"></div>
+        <div style="margin-top: 20px; color: var(--text-muted); font-weight: 300; letter-spacing: 2px;">ANALYZING MARKETS</div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="header">
+        <h1>XAUUSD PREDICTION</h1>
+        <div class="subtitle">Agentic Quantitative Analyst</div>
+    </div>
+
+    <div class="glass-card">
+        <div class="verdict-container">
+            <div class="subtitle">Current 1H Analysis</div>
+            <div class="price" id="current-price">$0.00</div>
+            <div id="verdict-badge" class="badge neutral">Loading</div>
+            
+            <div class="confidence">
+                AI Confidence: <span id="confidence-val" style="color: white; font-weight: 600;">0%</span>
+                <div class="confidence-bar-bg">
+                    <div class="confidence-bar-fill" id="confidence-bar"></div>
+                </div>
+            </div>
+        </div>
+
+        <div style="margin-bottom: 2rem;">
+            <div style="margin-bottom: 1rem; color: var(--gold-primary); font-size: 0.8rem; font-weight: 600; text-transform: uppercase; letter-spacing: 1px;">Price Action</div>
+            
+            <div class="metric-row">
+                <span class="metric-label">Market Structure</span>
+                <span class="metric-value" id="pa-structure">---</span>
+            </div>
+            <div class="metric-row">
+                <span class="metric-label">Candle Pattern</span>
+                <span class="metric-value" id="pa-pattern">---</span>
+            </div>
+        </div>
+
+        <div style="margin-bottom: 2rem;">
+            <div style="margin-bottom: 1rem; color: var(--gold-primary); font-size: 0.8rem; font-weight: 600; text-transform: uppercase; letter-spacing: 1px;">Technical Indicators</div>
+            
+            <div class="metric-row">
+                <span class="metric-label">Trend Structure</span>
+                <span class="metric-value" id="ta-trend">---</span>
+            </div>
+            <div class="metric-row">
+                <span class="metric-label">RSI Momentum (14)</span>
+                <span class="metric-value" id="ta-rsi">---</span>
+            </div>
+            <div class="metric-row">
+                <span class="metric-label">EMA 20 / EMA 50</span>
+                <span class="metric-value" style="font-weight: 400;"><span id="ta-ema20">---</span> / <span id="ta-ema50">---</span></span>
+            </div>
+        </div>
+
+        <div>
+            <div style="margin-bottom: 1rem; color: var(--gold-primary); font-size: 0.8rem; font-weight: 600; text-transform: uppercase; letter-spacing: 1px;">Volume & Orderflow</div>
+            
+            <div class="metric-row">
+                <span class="metric-label">Institutional Flow</span>
+                <span class="metric-value" id="vol-cmf">---</span>
+            </div>
+            <div class="metric-row">
+                <span class="metric-label">Overall Pressure</span>
+                <span class="metric-value" id="vol-signal">---</span>
+            </div>
+        </div>
+        
+    </div>
+
+    <button class="refresh-btn" onclick="fetchPrediction()">Refresh Analysis</button>
+    
+    <div style="margin-top: 2rem; font-size: 0.7rem; color: var(--text-muted); text-align: center; max-width: 400px; line-height: 1.5;">
+        Predictions are generated by the Antigravity XAUUSD Quantitative Agent using 1H historical candle data, On-Balance Volume, and Chaikin Money Flow. For educational purposes only. Not financial advice.
+    </div>
+
+    <script>
+        async function fetchPrediction() {
+            const loader = document.getElementById('loading-screen');
+            loader.classList.remove('hide');
+            
+            try {
+                const response = await fetch('/api/predict');
+                const data = await response.json();
+                
+                if (data.status === 'success') {
+                    updateUI(data);
+                } else {
+                    alert("Error fetching prediction: " + data.message);
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert("Failed to connect to the prediction server.");
+            } finally {
+                setTimeout(() => {
+                    loader.classList.add('hide');
+                }, 500); // Small delay for smooth transition
+            }
+        }
+
+        function updateUI(data) {
+            // Update Price
+            const ta = data.TechnicalAnalysis;
+            document.getElementById('current-price').innerText = `$${ta.current_price.toFixed(2)}`;
+            
+            // Update Verdict Badge
+            const badge = document.getElementById('verdict-badge');
+            badge.innerText = data.verdict;
+            badge.className = `badge ${data.verdict.toLowerCase()}`;
+            
+            // Update Confidence
+            document.getElementById('confidence-val').innerText = `${data.confidence}%`;
+            document.getElementById('confidence-bar').style.width = `${data.confidence}%`;
+            
+            // Update TAs
+            const trendEl = document.getElementById('ta-trend');
+            trendEl.innerText = ta.ema_trend;
+            trendEl.className = `metric-value ${ta.ema_trend === 'Bullish' ? 'value-bullish' : ta.ema_trend === 'Bearish' ? 'value-bearish' : ''}`;
+            
+            // Update Price Action
+            const paStructureEl = document.getElementById('pa-structure');
+            paStructureEl.innerText = ta.price_action.structure;
+            if (ta.price_action.structure.includes('Bullish')) paStructureEl.className = 'metric-value value-bullish';
+            else if (ta.price_action.structure.includes('Bearish')) paStructureEl.className = 'metric-value value-bearish';
+            
+            const paPatternEl = document.getElementById('pa-pattern');
+            paPatternEl.innerText = ta.price_action.latest_candle_pattern;
+            if (ta.price_action.latest_candle_pattern.includes('Bullish')) paPatternEl.className = 'metric-value value-bullish';
+            else if (ta.price_action.latest_candle_pattern.includes('Bearish')) paPatternEl.className = 'metric-value value-bearish';
+
+            document.getElementById('ta-rsi').innerText = `${ta.rsi_14} (${ta.rsi_signal.split(' ')[0]})`;
+            document.getElementById('ta-ema20').innerText = ta.ema_20;
+            document.getElementById('ta-ema50').innerText = ta.ema_50;
+            
+            // Update Volume
+            const vol = ta.volume_analysis;
+            document.getElementById('vol-cmf').innerText = `${vol.cmf_14} (${vol.obv_trend})`;
+            
+            const volSignalEl = document.getElementById('vol-signal');
+            volSignalEl.innerText = vol.overall_volume_signal;
+            if (vol.overall_volume_signal.includes('Buying')) volSignalEl.className = 'metric-value value-bullish';
+            else if (vol.overall_volume_signal.includes('Selling')) volSignalEl.className = 'metric-value value-bearish';
+            else volSignalEl.className = 'metric-value';
+        }
+
+        // Fetch on load
+        window.addEventListener('DOMContentLoaded', fetchPrediction);
+    </script>
+</body>
+</html>
