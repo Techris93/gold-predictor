@@ -11,28 +11,59 @@ Prerequisites:
 
 import sys
 import json
+import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env
+load_dotenv()
+
 try:
     import yfinance as yf
     import pandas as pd
     import ta
     import requests
+    from twelvedata import TDClient
 except ImportError:
     print(json.dumps({
-        "error": "Missing dependencies. Please run: pip install yfinance pandas ta requests"
+        "error": "Missing dependencies. Please run: pip install yfinance pandas ta requests twelvedata python-dotenv"
     }))
     sys.exit(1)
 
+# Initialize Twelve Data Client
+TD_API_KEY = os.getenv("TWELVE_DATA_API_KEY")
+td_client = None
+if TD_API_KEY and TD_API_KEY != "your_twelve_data_api_key_here":
+    td_client = TDClient(apikey=TD_API_KEY)
+
 def get_technical_analysis():
-    """Fetches 1H interval data for Gold (XAUUSD=X) and calculates RSI and EMA."""
-    ticker = "GC=F" # Gold Futures (or "XAUUSD=X" for spot)
+    """Fetches 1H interval data for Gold and calculates RSI and EMA."""
+    ticker = "GC=F" # Yahoo Ticker
+    td_symbol = "XAU/USD" # Twelve Data Symbol
+    
+    df = pd.DataFrame()
+    data_source = "yfinance (Delayed)"
+    
     try:
-        gold = yf.Ticker(ticker)
-        # Fetch 1H data for the last 5 days
-        df = gold.history(period="5d", interval="1h")
-        
+        # Try Twelve Data first if client is available
+        if td_client:
+            try:
+                ts = td_client.time_series(symbol=td_symbol, interval="1h", outputsize=100)
+                df = ts.as_pandas()
+                if not df.empty:
+                    data_source = "Twelve Data (Real-Time)"
+                    # Rename TD columns to match expected format (TD uses lowercase)
+                    df.columns = [col.capitalize() for col in df.columns]
+            except Exception as td_err:
+                print(f"Twelve Data Error: {td_err}. Falling back to yfinance...")
+
+        # Fallback to yfinance if df is still empty
         if df.empty:
-            # Fallback to daily if hourly fails
-            df = gold.history(period="1mo", interval="1d")
+            gold = yf.Ticker(ticker)
+            df = gold.history(period="5d", interval="1h")
+            
+            if df.empty:
+                # Last resort: daily data
+                df = gold.history(period="1mo", interval="1d")
 
         if df.empty:
             return {"error": "Failed to fetch price data."}
@@ -42,11 +73,17 @@ def get_technical_analysis():
         df['EMA_50'] = ta.trend.EMAIndicator(df['Close'], window=50).ema_indicator()
         df['RSI_14'] = ta.momentum.RSIIndicator(df['Close'], window=14).rsi()
         
-        # Calculate volume/orderflow proxies
-        # On-Balance Volume (OBV) measures cumulative buying vs selling pressure
-        df['OBV'] = ta.volume.OnBalanceVolumeIndicator(df['Close'], df['Volume']).on_balance_volume()
-        # Chaikin Money Flow (CMF) measures accumulation vs distribution over 14 periods
-        df['CMF_14'] = ta.volume.ChaikinMoneyFlowIndicator(df['High'], df['Low'], df['Close'], df['Volume'], window=14).chaikin_money_flow()
+        # Calculate volume/orderflow proxies if volume data is available
+        has_volume = 'Volume' in df.columns and not df['Volume'].empty and (df['Volume'] > 0).any()
+        
+        if has_volume:
+            # On-Balance Volume (OBV) measures cumulative buying vs selling pressure
+            df['OBV'] = ta.volume.OnBalanceVolumeIndicator(df['Close'], df['Volume']).on_balance_volume()
+            # Chaikin Money Flow (CMF) measures accumulation vs distribution over 14 periods
+            df['CMF_14'] = ta.volume.ChaikinMoneyFlowIndicator(df['High'], df['Low'], df['Close'], df['Volume'], window=14).chaikin_money_flow()
+        else:
+            df['OBV'] = 0
+            df['CMF_14'] = 0
 
         latest = df.iloc[-1]
         prev = df.iloc[-2] if len(df) > 1 else latest
@@ -95,6 +132,7 @@ def get_technical_analysis():
             volume_signal = "Slight Selling Bias"
 
         return {
+            "data_source": data_source,
             "current_price": round(latest['Close'], 2),
             "ema_trend": ema_trend,
             "ema_20": round(latest['EMA_20'], 2),
@@ -106,9 +144,9 @@ def get_technical_analysis():
                 "latest_candle_pattern": candle_pattern
             },
             "volume_analysis": {
-                "cmf_14": round(latest['CMF_14'], 4),
-                "obv_trend": "Rising" if obv_rising else "Falling",
-                "overall_volume_signal": volume_signal
+                "cmf_14": round(latest['CMF_14'], 4) if has_volume else "N/A",
+                "obv_trend": ("Rising" if obv_rising else "Falling") if has_volume else "N/A",
+                "overall_volume_signal": volume_signal if has_volume else "N/A (Volume data not available for Spot Gold)"
             },
             "data_points_analyzed": len(df)
         }
