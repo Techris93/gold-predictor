@@ -1,11 +1,5 @@
 from flask import Flask, jsonify, render_template
-import sys
-import os
-
-# Add the tools directory to the path so we can import predict_gold
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-TOOLS_DIR = os.path.join(CURRENT_DIR, 'tools')
-sys.path.append(TOOLS_DIR)
+from tools import predict_gold
 
 app = Flask(__name__)
 
@@ -22,11 +16,26 @@ def home():
 
 @app.route('/api/predict')
 def get_prediction():
-    import predict_gold
     try:
         # Fetch data using the existing script logic
         ta_data = predict_gold.get_technical_analysis()
         sa_data = predict_gold.get_sentiment_analysis()
+
+        if not isinstance(ta_data, dict):
+            ta_data = {"error": "Technical analysis payload is invalid."}
+
+        if not isinstance(sa_data, list):
+            sa_data = []
+
+        if ta_data.get("error"):
+            return jsonify({
+                "status": "error",
+                "message": ta_data["error"],
+                "verdict": "Neutral",
+                "confidence": 50,
+                "TechnicalAnalysis": ta_data,
+                "SentimentalAnalysis": sa_data
+            }), 502
         
         # Calculate a basic final verdict based on TA and Volume
         verdict = "Neutral"

@@ -21,7 +21,6 @@ try:
     import yfinance as yf
     import pandas as pd
     import ta
-    import requests
     from twelvedata import TDClient
 except ImportError:
     print(json.dumps({
@@ -82,7 +81,7 @@ def get_technical_analysis():
             return {"error": "Failed to fetch price data."}
 
         # Calculate price indicators
-        df['EMA_20'] = ta.trend.EMAIndicator(df['Close'], window=50).ema_indicator()
+        df['EMA_20'] = ta.trend.EMAIndicator(df['Close'], window=20).ema_indicator()
         df['EMA_50'] = ta.trend.EMAIndicator(df['Close'], window=50).ema_indicator()
         df['RSI_14'] = ta.momentum.RSIIndicator(df['Close'], window=14).rsi()
         
@@ -119,8 +118,6 @@ def get_technical_analysis():
 
         # Price Action: Single Candle Patterns (Engulfing)
         candle_pattern = "None"
-        prev_body = abs(prev['Close'] - prev['Open'])
-        latest_body = abs(latest['Close'] - latest['Open'])
         if latest['Close'] > latest['Open'] and prev['Close'] < prev['Open'] and latest['Close'] > prev['Open'] and latest['Open'] < prev['Close']:
             candle_pattern = "Bullish Engulfing"
         elif latest['Close'] < latest['Open'] and prev['Close'] > prev['Open'] and latest['Close'] < prev['Open'] and latest['Open'] > prev['Close']:
