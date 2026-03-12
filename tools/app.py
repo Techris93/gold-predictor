@@ -1,6 +1,4 @@
 from flask import Flask, jsonify, render_template
-from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
 import sys
 import os
 
@@ -8,14 +6,6 @@ import os
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 app = Flask(__name__)
-
-# Rate Limiter setup to prevent Yahoo Finance scraping bans (DoS protection)
-limiter = Limiter(
-    get_remote_address,
-    app=app,
-    default_limits=["200 per day", "10 per minute"],
-    storage_uri="memory://"
-)
 
 @app.after_request
 def apply_security_headers(response):
@@ -29,7 +19,6 @@ def home():
     return render_template('index.html')
 
 @app.route('/api/predict')
-@limiter.limit("5 per minute")  # Strict limit for the expensive scraping endpoint
 def get_prediction():
     import predict_gold
     try:
