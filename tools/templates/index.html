@@ -292,6 +292,12 @@
                 <span class="metric-value" style="font-weight: 400;"><span id="ta-ema20">---</span> / <span id="ta-ema50">---</span></span>
             </div>
         </div>
+        <div style="margin-bottom: 2rem;">
+            <div style="margin-bottom: 1rem; color: var(--gold-primary); font-size: 0.8rem; font-weight: 600; text-transform: uppercase; letter-spacing: 1px;">Market Sentiment</div>
+            <div id="sa-headlines">
+                <!-- News loaded via JS -->
+            </div>
+        </div>
         
     </div>
 
@@ -328,8 +334,21 @@
         function updateUI(data) {
             // Update Price
             const ta = data.TechnicalAnalysis;
-            document.getElementById('current-price').innerText = `$${ta.current_price.toFixed(2)}`;
+            const priceEl = document.getElementById('current-price');
+            const oldPrice = parseFloat(priceEl.innerText.replace('$', ''));
+            const newPrice = ta.current_price;
             
+            priceEl.innerText = `$${newPrice.toFixed(2)}`;
+            
+            // Highlight price change
+            if (newPrice > oldPrice) {
+                priceEl.style.color = 'var(--bullish)';
+                setTimeout(() => priceEl.style.color = 'white', 1000);
+            } else if (newPrice < oldPrice) {
+                priceEl.style.color = 'var(--bearish)';
+                setTimeout(() => priceEl.style.color = 'white', 1000);
+            }
+
             // Add/Update Data Source Label
             let sourceEl = document.getElementById('price-source');
             if (!sourceEl) {
@@ -338,10 +357,31 @@
                 sourceEl.style.fontSize = '0.7rem';
                 sourceEl.style.marginTop = '-0.5rem';
                 sourceEl.style.marginBottom = '1rem';
-                document.getElementById('current-price').after(sourceEl);
+                priceEl.after(sourceEl);
             }
             sourceEl.innerText = ta.data_source;
             sourceEl.style.color = ta.data_source.includes('Real-Time') ? 'var(--gold-primary)' : 'var(--text-muted)';
+            
+            // Update News/Sentiment
+            const newsList = data.SentimentalAnalysis;
+            const saContainer = document.getElementById('sa-headlines');
+            if (saContainer) {
+                saContainer.innerHTML = '';
+                newsList.forEach(news => {
+                    const row = document.createElement('div');
+                    row.className = 'metric-row';
+                    row.style.cursor = 'pointer';
+                    row.onclick = () => window.open(news.link, '_blank');
+                    row.innerHTML = `
+                        <div style="flex: 1; padding-right: 10px;">
+                            <div style="font-size: 0.85rem; font-weight: 600; line-height: 1.2;">${news.title}</div>
+                            <div style="font-size: 0.7rem; color: var(--text-muted); margin-top: 4px;">${news.publisher}</div>
+                        </div>
+                        <div style="font-size: 0.8rem; color: var(--gold-primary);">→</div>
+                    `;
+                    saContainer.appendChild(row);
+                });
+            }
 
             // Update Verdict Badge
             const badge = document.getElementById('verdict-badge');
@@ -374,7 +414,11 @@
         }
 
         // Fetch on load
-        window.addEventListener('DOMContentLoaded', fetchPrediction);
+        window.addEventListener('DOMContentLoaded', () => {
+            fetchPrediction();
+            // Auto-refresh every 30 seconds
+            setInterval(fetchPrediction, 30000);
+        });
     </script>
 </body>
 </html>

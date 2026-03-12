@@ -47,12 +47,22 @@ def get_technical_analysis():
         # Try Twelve Data first if client is available
         if td_client:
             try:
+                # 1. Fetch TimeSeries for indicators
                 ts = td_client.time_series(symbol=td_symbol, interval="1h", outputsize=100)
                 df = ts.as_pandas()
+                
+                # 2. Fetch Real-Time Price for the dashboard tick
+                price_data = td_client.price(symbol=td_symbol).as_json()
+                live_price = float(price_data.get('price', 0))
+
                 if not df.empty:
                     data_source = "Twelve Data (Real-Time)"
-                    # Rename TD columns to match expected format (TD uses lowercase)
+                    # Rename TD columns to match expected format
                     df.columns = [col.capitalize() for col in df.columns]
+                    
+                    # Overwrite the latest "Close" with the ultra-live tick
+                    if live_price > 0:
+                        df.iloc[-1, df.columns.get_loc('Close')] = live_price
             except Exception as td_err:
                 print(f"Twelve Data Error: {td_err}. Falling back to yfinance...")
 
@@ -155,20 +165,27 @@ def get_technical_analysis():
 
 def get_sentiment_analysis():
     """Fetches recent news headlines related to gold for sentiment analysis."""
-    # We use yfinance news as a free built-in proxy without needing API keys
+    # GLD is a highly tracked ETF and provides much better news coverage than specific futures tickers
     try:
-        gold = yf.Ticker("GC=F")
+        gold = yf.Ticker("GLD")
         news = gold.news
         headlines = []
-        for article in news[:5]:
-            headlines.append({
-                "title": article.get("title", ""),
-                "publisher": article.get("publisher", ""),
-                "link": article.get("link", "")
-            })
+        if news:
+            for article in news[:5]:
+                # yfinance news structure changed to nest data under 'content'
+                content = article.get("content", article) 
+                headlines.append({
+                    "title": content.get("title", "No Title"),
+                    "publisher": content.get("provider", {}).get("displayName", "Unknown"),
+                    "link": content.get("clickThroughUrl", {}).get("url", "#")
+                })
+        
+        if not headlines:
+            return [{"title": "No recent gold news found.", "publisher": "System", "link": "#"}]
+            
         return headlines
     except Exception as e:
-        return {"error": str(e)}
+        return [{"title": f"Sentiment Query Error: {str(e)}", "publisher": "Error", "link": "#"}]
 
 def main():
     ta_data = get_technical_analysis()
