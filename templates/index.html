@@ -416,6 +416,45 @@
           <!-- Sentiment summary loaded via JS -->
         </div>
       </div>
+
+      <div style="margin-bottom: 0.5rem">
+        <div
+          style="
+            margin-bottom: 1rem;
+            color: var(--gold-primary);
+            font-size: 0.8rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+          "
+        >
+          Autoresearch
+        </div>
+        <div id="ar-summary">
+          <div class="metric-row">
+            <span class="metric-label">Status</span>
+            <span class="metric-value" id="ar-status">Pending</span>
+          </div>
+          <div class="metric-row">
+            <span class="metric-label">Median Score</span>
+            <span class="metric-value" id="ar-score">---</span>
+          </div>
+          <div class="metric-row">
+            <span class="metric-label">Pass Rate</span>
+            <span class="metric-value" id="ar-pass-rate">---</span>
+          </div>
+          <div class="metric-row">
+            <span class="metric-label">Promotion Gate</span>
+            <span class="metric-value" id="ar-promote">---</span>
+          </div>
+          <div class="metric-row">
+            <span class="metric-label">Updated</span>
+            <span class="metric-value" id="ar-updated" style="font-size: 0.8rem"
+              >---</span
+            >
+          </div>
+        </div>
+      </div>
     </div>
 
     <button class="refresh-btn" onclick="fetchPrediction()">
@@ -470,6 +509,62 @@
         document.getElementById("verdict-badge").className = "badge bearish";
         document.getElementById("current-price").innerText = "---";
         alert("MARKET DATA ERROR: " + msg);
+      }
+
+      async function fetchAutoresearchSummary() {
+        try {
+          const response = await fetch("/api/autoresearch/latest");
+          if (!response.ok) {
+            throw new Error(`Autoresearch endpoint status ${response.status}`);
+          }
+          const data = await response.json();
+          updateAutoresearchUI(data);
+        } catch (error) {
+          const statusEl = document.getElementById("ar-status");
+          if (statusEl) {
+            statusEl.innerText = "No report";
+            statusEl.className = "metric-value value-bearish";
+          }
+        }
+      }
+
+      function updateAutoresearchUI(data) {
+        if (!data || data.status !== "success") {
+          return;
+        }
+
+        const statusEl = document.getElementById("ar-status");
+        const scoreEl = document.getElementById("ar-score");
+        const passRateEl = document.getElementById("ar-pass-rate");
+        const promoteEl = document.getElementById("ar-promote");
+        const updatedEl = document.getElementById("ar-updated");
+
+        if (statusEl) {
+          statusEl.innerText = "Loaded";
+          statusEl.className = "metric-value value-bullish";
+        }
+        if (scoreEl) {
+          scoreEl.innerText =
+            data.median_score !== null && data.median_score !== undefined
+              ? Number(data.median_score).toFixed(3)
+              : "N/A";
+        }
+        if (passRateEl) {
+          passRateEl.innerText =
+            data.pass_rate !== null && data.pass_rate !== undefined
+              ? `${(Number(data.pass_rate) * 100).toFixed(1)}%`
+              : "N/A";
+        }
+        if (promoteEl) {
+          promoteEl.innerText = data.promote ? "Pass" : "Hold";
+          promoteEl.className = `metric-value ${data.promote ? "value-bullish" : "value-bearish"}`;
+          promoteEl.title = data.promotion_reason || "";
+        }
+        if (updatedEl) {
+          updatedEl.innerText = data.generated_at
+            ? new Date(data.generated_at).toLocaleString()
+            : "N/A";
+        }
       }
 
       function classifyMarketSentiment(newsList) {
@@ -751,6 +846,7 @@
       // Fetch on load
       window.addEventListener("DOMContentLoaded", () => {
         fetchPrediction();
+        fetchAutoresearchSummary();
       });
     </script>
   </body>
