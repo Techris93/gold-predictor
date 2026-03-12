@@ -3,7 +3,9 @@ import sys
 import os
 
 # Add the tools directory to the path so we can import predict_gold
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+TOOLS_DIR = os.path.join(CURRENT_DIR, 'tools')
+sys.path.append(TOOLS_DIR)
 
 app = Flask(__name__)
 
