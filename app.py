@@ -125,9 +125,9 @@ def get_prediction():
             bull_score += 2.0
         elif "Bearish Breakdown" in pa_struct:
             bear_score += 2.0
-        elif "Bullish Structure" in pa_struct:
+        elif "Bullish Structure" in pa_struct or "Bullish Drift" in pa_struct or "Bullish Pressure" in pa_struct:
             bull_score += 1.0
-        elif "Bearish Structure" in pa_struct:
+        elif "Bearish Structure" in pa_struct or "Bearish Drift" in pa_struct or "Bearish Pressure" in pa_struct:
             bear_score += 1.0
         
         if "Bullish Engulfing" in pa_pattern:

@@ -213,6 +213,33 @@ def get_technical_analysis():
             elif p3['High'] < p2['High'] < p1['High'] and p3['Low'] < p2['Low'] < p1['Low']:
                 pa_structure = "Lower Highs / Lower Lows (Bearish Structure)"
 
+        # If still not broken out/structured, detect directional drift and pressure in range.
+        if pa_structure == "Consolidating" and len(df) >= 12:
+            recent12 = df.iloc[-12:]
+            high_now = recent12['High'].iloc[-4:].mean()
+            high_prev = recent12['High'].iloc[-8:-4].mean()
+            low_now = recent12['Low'].iloc[-4:].mean()
+            low_prev = recent12['Low'].iloc[-8:-4].mean()
+            close_now = recent12['Close'].iloc[-3:].mean()
+            close_prev = recent12['Close'].iloc[-6:-3].mean()
+
+            if high_now > high_prev and low_now > low_prev and close_now > close_prev:
+                pa_structure = "Bullish Drift"
+            elif high_now < high_prev and low_now < low_prev and close_now < close_prev:
+                pa_structure = "Bearish Drift"
+
+        if pa_structure == "Consolidating" and len(df) >= 20:
+            recent20 = df.iloc[-20:]
+            range_high = recent20['High'].max()
+            range_low = recent20['Low'].min()
+            range_size = max(range_high - range_low, 1e-8)
+            close_pos = (latest['Close'] - range_low) / range_size
+
+            if ema_trend == "Bullish" and close_pos >= 0.67:
+                pa_structure = "Bullish Pressure in Range"
+            elif ema_trend == "Bearish" and close_pos <= 0.33:
+                pa_structure = "Bearish Pressure in Range"
+
         # Price Action: Single Candle Patterns (Engulfing + reversal candles)
         candle_pattern = "None"
         if latest['Close'] > latest['Open'] and prev['Close'] < prev['Open'] and latest['Close'] > prev['Open'] and latest['Open'] < prev['Close']:
