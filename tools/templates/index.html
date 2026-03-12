@@ -314,39 +314,57 @@
             
             try {
                 const response = await fetch('/api/predict');
+                if (!response.ok) {
+                    throw new Error(`Server Error: ${response.status}`);
+                }
                 const data = await response.json();
                 
                 if (data.status === 'success') {
                     updateUI(data);
                 } else {
-                    alert("Error fetching prediction: " + data.message);
+                    showInlineError(data.message || "Unknown error occurred");
                 }
             } catch (error) {
                 console.error('Error:', error);
-                alert("Failed to connect to the prediction server.");
+                showInlineError("Check your internet connection or API key.");
             } finally {
+                // Force loader to hide even if JS crashed
                 setTimeout(() => {
                     loader.classList.add('hide');
-                }, 500); // Small delay for smooth transition
+                }, 800);
             }
         }
 
+        function showInlineError(msg) {
+            document.getElementById('verdict-badge').innerText = "ERROR";
+            document.getElementById('verdict-badge').className = "badge bearish";
+            document.getElementById('current-price').innerText = "---";
+            alert("MARKET DATA ERROR: " + msg);
+        }
+
         function updateUI(data) {
+            if (!data || !data.TechnicalAnalysis) {
+                showInlineError("Malformed server response");
+                return;
+            }
             // Update Price
             const ta = data.TechnicalAnalysis;
             const priceEl = document.getElementById('current-price');
-            const oldPrice = parseFloat(priceEl.innerText.replace('$', ''));
-            const newPrice = ta.current_price;
+            const oldPriceText = priceEl.innerText.replace('$', '');
+            const oldPrice = isNaN(parseFloat(oldPriceText)) ? 0 : parseFloat(oldPriceText);
+            const newPrice = ta.current_price || 0;
             
             priceEl.innerText = `$${newPrice.toFixed(2)}`;
             
             // Highlight price change
-            if (newPrice > oldPrice) {
-                priceEl.style.color = 'var(--bullish)';
-                setTimeout(() => priceEl.style.color = 'white', 1000);
-            } else if (newPrice < oldPrice) {
-                priceEl.style.color = 'var(--bearish)';
-                setTimeout(() => priceEl.style.color = 'white', 1000);
+            if (oldPrice > 0) {
+                if (newPrice > oldPrice) {
+                    priceEl.style.color = 'var(--bullish)';
+                    setTimeout(() => priceEl.style.color = 'white', 1000);
+                } else if (newPrice < oldPrice) {
+                    priceEl.style.color = 'var(--bearish)';
+                    setTimeout(() => priceEl.style.color = 'white', 1000);
+                }
             }
 
             // Add/Update Data Source Label

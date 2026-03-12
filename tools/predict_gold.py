@@ -51,20 +51,23 @@ def get_technical_analysis():
                 ts = td_client.time_series(symbol=td_symbol, interval="1h", outputsize=100)
                 df = ts.as_pandas()
                 
-                # 2. Fetch Real-Time Price for the dashboard tick
-                price_data = td_client.price(symbol=td_symbol).as_json()
-                live_price = float(price_data.get('price', 0))
-
                 if not df.empty:
                     data_source = "Twelve Data (Real-Time)"
-                    # Rename TD columns to match expected format
+                    # Rename TD columns immediately to prevent KeyErrors later
                     df.columns = [col.capitalize() for col in df.columns]
                     
-                    # Overwrite the latest "Close" with the ultra-live tick
-                    if live_price > 0:
-                        df.iloc[-1, df.columns.get_loc('Close')] = live_price
+                    # 2. Separately fetch Real-Time Price for the dashboard tick
+                    # This is wrapped so a price failure doesn't kill the TA analysis
+                    try:
+                        price_data = td_client.price(symbol=td_symbol).as_json()
+                        live_price = float(price_data.get('price', 0))
+                        if live_price > 0:
+                            df.iloc[-1, df.columns.get_loc('Close')] = live_price
+                    except Exception as p_err:
+                        print(f"Twelve Data Price Tick Error: {p_err}. Using last candle close instead.")
+
             except Exception as td_err:
-                print(f"Twelve Data Error: {td_err}. Falling back to yfinance...")
+                print(f"Twelve Data TimeSeries Error: {td_err}. Falling back to yfinance...")
 
         # Fallback to yfinance if df is still empty
         if df.empty:
