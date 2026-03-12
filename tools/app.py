@@ -6,7 +6,6 @@ import os
 
 # Add the tools directory to the path so we can import predict_gold
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-import predict_gold
 
 app = Flask(__name__)
 
@@ -32,6 +31,7 @@ def home():
 @app.route('/api/predict')
 @limiter.limit("5 per minute")  # Strict limit for the expensive scraping endpoint
 def get_prediction():
+    import predict_gold
     try:
         # Fetch data using the existing script logic
         ta_data = predict_gold.get_technical_analysis()
