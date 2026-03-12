@@ -383,6 +383,21 @@
             <span id="ta-ema50">---</span></span
           >
         </div>
+        <div class="metric-row">
+          <span class="metric-label">Market Regime</span>
+          <span class="metric-value" id="ta-regime">---</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Trend Alignment (15m / 1H / 4H)</span>
+          <span class="metric-value" id="ta-alignment">---</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">ADX / ATR%</span>
+          <span class="metric-value" style="font-weight: 400"
+            ><span id="ta-adx">---</span> /
+            <span id="ta-atrpct">---</span></span
+          >
+        </div>
       </div>
       <div style="margin-bottom: 2rem">
         <div
@@ -713,6 +728,24 @@
           `${ta.rsi_14} (${ta.rsi_signal.split(" ")[0]})`;
         document.getElementById("ta-ema20").innerText = ta.ema_20;
         document.getElementById("ta-ema50").innerText = ta.ema_50;
+
+        const regime = ta.volatility_regime || {};
+        const mtf = ta.multi_timeframe || {};
+
+        const regimeEl = document.getElementById("ta-regime");
+        const regimeText = regime.market_regime || "Unknown";
+        regimeEl.innerText = regimeText;
+        regimeEl.className = `metric-value ${regimeText.includes("Trending") ? "value-bullish" : regimeText.includes("Range") ? "value-bearish" : ""}`;
+
+        const alignmentEl = document.getElementById("ta-alignment");
+        const alignmentText = mtf.alignment_label || "Mixed / Low Alignment";
+        alignmentEl.innerText = alignmentText;
+        alignmentEl.className = `metric-value ${alignmentText.includes("Bullish") ? "value-bullish" : alignmentText.includes("Bearish") ? "value-bearish" : ""}`;
+
+        document.getElementById("ta-adx").innerText =
+          regime.adx_14 !== undefined ? regime.adx_14 : "N/A";
+        document.getElementById("ta-atrpct").innerText =
+          regime.atr_percent !== undefined ? `${regime.atr_percent}%` : "N/A";
       }
 
       // Fetch on load
