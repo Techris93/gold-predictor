@@ -1,4 +1,6 @@
 from flask import Flask, jsonify, render_template
+import json
+from pathlib import Path
 from tools import predict_gold
 
 app = Flask(__name__)
@@ -13,6 +15,36 @@ def apply_security_headers(response):
 @app.route('/')
 def home():
     return render_template('index.html')
+
+
+@app.route('/api/autoresearch/latest')
+def get_autoresearch_latest():
+    report_path = Path(__file__).resolve().parent / "tools" / "reports" / "autoresearch_last.json"
+
+    if not report_path.exists():
+        return jsonify({
+            "status": "error",
+            "message": "Autoresearch report not found. Run tools/autoresearch_loop.py first."
+        }), 404
+
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        return jsonify({"status": "error", "message": f"Failed to read autoresearch report: {e}"}), 500
+
+    best = report.get("best") or {}
+    summary = best.get("summary") if isinstance(best, dict) else {}
+
+    return jsonify({
+        "status": "success",
+        "generated_at": report.get("generated_at"),
+        "promote": report.get("promote", False),
+        "promotion_reason": report.get("promotion_reason", ""),
+        "best_params": best.get("params", {}) if isinstance(best, dict) else {},
+        "median_score": best.get("median_score") if isinstance(best, dict) else None,
+        "pass_rate": best.get("pass_rate") if isinstance(best, dict) else None,
+        "summary": summary if isinstance(summary, dict) else {},
+    })
 
 @app.route('/api/predict')
 def get_prediction():
