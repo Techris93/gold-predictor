@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, render_template
+from flask import Flask, jsonify, render_template, request, send_from_directory
 from flask_socketio import SocketIO
 import json
 import os
@@ -7,8 +7,20 @@ import time
 from pathlib import Path
 from tools import predict_gold
 
+try:
+    from pywebpush import WebPushException, webpush
+except ImportError:
+    WebPushException = Exception
+    webpush = None
+
 app = Flask(__name__)
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
+socketio = SocketIO(
+    app,
+    cors_allowed_origins="*",
+    async_mode="threading",
+    ping_interval=20,
+    ping_timeout=60,
+)
 
 _monitor_lock = threading.Lock()
 _monitor_state = {
@@ -18,6 +30,139 @@ _monitor_state = {
 
 MONITOR_INTERVAL_SECONDS = max(3, int(os.getenv("INDICATOR_MONITOR_INTERVAL_SECONDS", "5")))
 NOTIFY_MIN_INTERVAL_SECONDS = max(1, int(os.getenv("INDICATOR_NOTIFY_MIN_INTERVAL_SECONDS", "6")))
+PUSH_EXCLUDED_FIELDS = {
+    "candle_pattern",
+    "rsi_14",
+    "ema_20",
+    "ema_50",
+    "adx_14",
+    "atr_percent",
+}
+
+BASE_DIR = Path(__file__).resolve().parent
+SUBSCRIPTIONS_FILE = BASE_DIR / "tools" / "reports" / "webpush_subscriptions.json"
+VAPID_PUBLIC_KEY = os.getenv("VAPID_PUBLIC_KEY", "")
+VAPID_PRIVATE_KEY = os.getenv("VAPID_PRIVATE_KEY", "")
+VAPID_CLAIMS_SUBJECT = os.getenv("VAPID_CLAIMS_SUBJECT", "mailto:alerts@example.com")
+
+
+def _load_subscriptions():
+    if not SUBSCRIPTIONS_FILE.exists():
+        return []
+    try:
+        data = json.loads(SUBSCRIPTIONS_FILE.read_text(encoding="utf-8"))
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def _save_subscriptions(subscriptions):
+    SUBSCRIPTIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    SUBSCRIPTIONS_FILE.write_text(
+        json.dumps(subscriptions, ensure_ascii=True, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _upsert_subscription(subscription):
+    if not isinstance(subscription, dict):
+        return
+    endpoint = subscription.get("endpoint")
+    keys = subscription.get("keys") if isinstance(subscription.get("keys"), dict) else {}
+    if not endpoint or not keys.get("p256dh") or not keys.get("auth"):
+        return
+
+    subscriptions = _load_subscriptions()
+    for idx, existing in enumerate(subscriptions):
+        if existing.get("endpoint") == endpoint:
+            subscriptions[idx] = subscription
+            _save_subscriptions(subscriptions)
+            return
+
+    subscriptions.append(subscription)
+    _save_subscriptions(subscriptions)
+
+
+def _remove_subscription_endpoint(endpoint):
+    if not endpoint:
+        return
+    subscriptions = _load_subscriptions()
+    filtered = [item for item in subscriptions if item.get("endpoint") != endpoint]
+    if len(filtered) != len(subscriptions):
+        _save_subscriptions(filtered)
+
+
+def _has_push_subscribers():
+    return len(_load_subscriptions()) > 0
+
+
+def _filter_notification_changes(changes):
+    """Remove fields that should not appear in push notifications."""
+    if not isinstance(changes, dict):
+        return {}
+    return {
+        key: val
+        for key, val in changes.items()
+        if key not in PUSH_EXCLUDED_FIELDS
+    }
+
+
+def _summarize_changes_for_push(changes):
+    labels = {
+        "verdict": "Verdict",
+        "confidence": "Confidence",
+        "trend": "Trend",
+        "market_structure": "Structure",
+        "candle_pattern": "Pattern",
+        "rsi_14": "RSI",
+        "market_regime": "Regime",
+        "alignment": "Alignment",
+    }
+    parts = []
+    for key, val in list(changes.items())[:3]:
+        prev = val.get("previous") if isinstance(val, dict) else None
+        cur = val.get("current") if isinstance(val, dict) else None
+        parts.append(f"{labels.get(key, key)}: {prev} -> {cur}")
+    return " | ".join(parts) if parts else "Indicators changed"
+
+
+def _send_web_push_notifications(changes, verdict, confidence):
+    if webpush is None or not VAPID_PUBLIC_KEY or not VAPID_PRIVATE_KEY:
+        return
+
+    subscriptions = _load_subscriptions()
+    if not subscriptions:
+        return
+
+    body = _summarize_changes_for_push(changes)
+    payload = {
+        "title": "XAUUSD Indicator Update",
+        "body": body,
+        "verdict": verdict,
+        "confidence": confidence,
+        "url": "/",
+        "ts": int(time.time()),
+    }
+
+    dead_endpoints = []
+    for sub in subscriptions:
+        try:
+            webpush(
+                subscription_info=sub,
+                data=json.dumps(payload, ensure_ascii=True),
+                vapid_private_key=VAPID_PRIVATE_KEY,
+                vapid_claims={"sub": VAPID_CLAIMS_SUBJECT},
+            )
+        except WebPushException as ex:
+            status = getattr(ex, "response", None)
+            code = getattr(status, "status_code", None)
+            if code in (404, 410):
+                dead_endpoints.append(sub.get("endpoint"))
+        except Exception:
+            continue
+
+    for endpoint in dead_endpoints:
+        _remove_subscription_endpoint(endpoint)
 
 
 def _is_material_change(changes):
@@ -251,8 +396,8 @@ def _indicator_monitor_loop():
 
     while True:
         try:
-            # Avoid external API calls when nobody is connected to receive pushes.
-            if _monitor_state["clients"] <= 0:
+            # Skip polling only when there are no live viewers and no background push subscribers.
+            if _monitor_state["clients"] <= 0 and not _has_push_subscribers():
                 socketio.sleep(2)
                 continue
 
@@ -261,22 +406,30 @@ def _indicator_monitor_loop():
                 current_snapshot = _extract_indicator_snapshot(payload)
                 if last_snapshot is not None:
                     changes = _diff_snapshot(last_snapshot, current_snapshot)
+                    notification_changes = _filter_notification_changes(changes)
                     now_ts = int(time.time())
                     if (
-                        changes
-                        and _is_material_change(changes)
+                        notification_changes
+                        and _is_material_change(notification_changes)
                         and (now_ts - last_emit_ts >= NOTIFY_MIN_INTERVAL_SECONDS)
                     ):
-                        socketio.emit(
-                            "indicator_change",
-                            {
-                                "message": "Indicators changed",
-                                "changes": changes,
-                                "snapshot": current_snapshot,
-                                "verdict": payload.get("verdict"),
-                                "confidence": payload.get("confidence"),
-                                "timestamp": now_ts,
-                            },
+                        if _monitor_state["clients"] > 0:
+                            socketio.emit(
+                                "indicator_change",
+                                {
+                                    "message": "Indicators changed",
+                                    "changes": notification_changes,
+                                    "snapshot": current_snapshot,
+                                    "verdict": payload.get("verdict"),
+                                    "confidence": payload.get("confidence"),
+                                    "timestamp": now_ts,
+                                },
+                            )
+
+                        _send_web_push_notifications(
+                            changes=notification_changes,
+                            verdict=payload.get("verdict"),
+                            confidence=payload.get("confidence"),
                         )
                         last_emit_ts = now_ts
                 last_snapshot = current_snapshot
@@ -311,6 +464,40 @@ def apply_security_headers(response):
 @app.route('/')
 def home():
     return render_template('index.html')
+
+
+@app.route('/sw.js')
+def service_worker():
+    return send_from_directory('static', 'sw.js', mimetype='application/javascript')
+
+
+@app.route('/api/push/public-key')
+def get_push_public_key():
+    if not VAPID_PUBLIC_KEY:
+        return jsonify({"status": "error", "message": "Push key is not configured."}), 503
+    return jsonify({"status": "success", "publicKey": VAPID_PUBLIC_KEY})
+
+
+@app.route('/api/push/subscribe', methods=['POST'])
+def subscribe_push():
+    payload = request.get_json(silent=True) or {}
+    sub = payload.get('subscription') if isinstance(payload, dict) else None
+    if not isinstance(sub, dict):
+        return jsonify({"status": "error", "message": "Invalid subscription payload."}), 400
+
+    _upsert_subscription(sub)
+    return jsonify({"status": "success"})
+
+
+@app.route('/api/push/unsubscribe', methods=['POST'])
+def unsubscribe_push():
+    payload = request.get_json(silent=True) or {}
+    endpoint = payload.get('endpoint') if isinstance(payload, dict) else None
+    if not endpoint:
+        return jsonify({"status": "error", "message": "Missing endpoint."}), 400
+
+    _remove_subscription_endpoint(endpoint)
+    return jsonify({"status": "success"})
 
 
 @app.route('/api/autoresearch/latest')

@@ -382,6 +382,7 @@
         </div>
 
         <div class="socket-state" id="socket-state">Push channel: connecting...</div>
+        <div class="socket-state" id="bg-push-state">Background push: not enabled</div>
       </div>
 
       <div style="margin-bottom: 2rem">
@@ -567,6 +568,7 @@
 
     <script>
       let indicatorSocket = null;
+      let serviceWorkerRegistration = null;
 
       function syncAlertsButton() {
         const btn = document.getElementById("enable-alerts-btn");
@@ -577,6 +579,85 @@
           supported && Notification.permission === "default" ? "block" : "none";
       }
 
+      function updateBackgroundPushState(text, isGood) {
+        const el = document.getElementById("bg-push-state");
+        if (!el) return;
+        el.innerText = text;
+        el.style.color = isGood ? "var(--bullish)" : "var(--text-muted)";
+      }
+
+      function urlBase64ToUint8Array(base64String) {
+        const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+        const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+        const rawData = atob(base64);
+        const outputArray = new Uint8Array(rawData.length);
+        for (let i = 0; i < rawData.length; ++i) {
+          outputArray[i] = rawData.charCodeAt(i);
+        }
+        return outputArray;
+      }
+
+      async function ensureServiceWorker() {
+        if (!("serviceWorker" in navigator)) {
+          updateBackgroundPushState("Background push: unsupported", false);
+          return null;
+        }
+
+        try {
+          serviceWorkerRegistration = await navigator.serviceWorker.register("/sw.js");
+          return serviceWorkerRegistration;
+        } catch (_) {
+          updateBackgroundPushState("Background push: service worker failed", false);
+          return null;
+        }
+      }
+
+      async function subscribeBackgroundPush() {
+        if (!("PushManager" in window) || !("Notification" in window)) {
+          updateBackgroundPushState("Background push: unsupported", false);
+          return;
+        }
+
+        if (Notification.permission !== "granted") {
+          updateBackgroundPushState("Background push: permission needed", false);
+          return;
+        }
+
+        const reg = await ensureServiceWorker();
+        if (!reg) return;
+
+        try {
+          const keyResp = await fetch("/api/push/public-key");
+          const keyPayload = await keyResp.json();
+          if (!keyResp.ok || keyPayload.status !== "success" || !keyPayload.publicKey) {
+            updateBackgroundPushState("Background push: server key missing", false);
+            return;
+          }
+
+          let sub = await reg.pushManager.getSubscription();
+          if (!sub) {
+            sub = await reg.pushManager.subscribe({
+              userVisibleOnly: true,
+              applicationServerKey: urlBase64ToUint8Array(keyPayload.publicKey),
+            });
+          }
+
+          const saveResp = await fetch("/api/push/subscribe", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ subscription: sub.toJSON() }),
+          });
+
+          if (saveResp.ok) {
+            updateBackgroundPushState("Background push: enabled", true);
+          } else {
+            updateBackgroundPushState("Background push: subscribe failed", false);
+          }
+        } catch (_) {
+          updateBackgroundPushState("Background push: subscribe failed", false);
+        }
+      }
+
       // Must be called synchronously from a direct tap — iOS requires this.
       function requestAlertsPermission() {
         if (!("Notification" in window)) return;
@@ -584,6 +665,9 @@
           syncAlertsButton();
           if (perm === "granted") {
             showPushToast("Alerts enabled", "You will now receive XAUUSD indicator alerts.");
+            subscribeBackgroundPush();
+          } else {
+            updateBackgroundPushState("Background push: blocked", false);
           }
         }).catch(() => {});
       }
@@ -683,7 +767,14 @@
           return;
         }
 
-        indicatorSocket = io({ transports: ["websocket", "polling"] });
+        indicatorSocket = io({
+          transports: ["websocket", "polling"],
+          reconnection: true,
+          reconnectionAttempts: Infinity,
+          reconnectionDelay: 1000,
+          reconnectionDelayMax: 5000,
+          timeout: 20000,
+        });
 
         indicatorSocket.on("connect", () => {
           updateSocketState("Push channel: live", true);
@@ -691,6 +782,14 @@
 
         indicatorSocket.on("disconnect", () => {
           updateSocketState("Push channel: disconnected", false);
+        });
+
+        indicatorSocket.on("reconnect", () => {
+          updateSocketState("Push channel: reconnected", true);
+        });
+
+        indicatorSocket.on("connect_error", () => {
+          updateSocketState("Push channel: reconnecting...", false);
         });
 
         indicatorSocket.on("indicator_change", (payload) => {
@@ -1165,9 +1264,20 @@
       // Fetch on load
       window.addEventListener("DOMContentLoaded", () => {
         syncAlertsButton();
+        ensureServiceWorker().then(() => {
+          if ("Notification" in window && Notification.permission === "granted") {
+            subscribeBackgroundPush();
+          }
+        });
         fetchPrediction();
         fetchAutoresearchSummary();
         initIndicatorSocket();
+
+        document.addEventListener("visibilitychange", () => {
+          if (!document.hidden && indicatorSocket && !indicatorSocket.connected) {
+            indicatorSocket.connect();
+          }
+        });
       });
     </script>
   </body>

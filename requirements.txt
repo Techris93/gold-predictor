@@ -7,3 +7,4 @@ requests>=2.31.0
 gunicorn>=21.0.0
 twelvedata>=1.2.0
 python-dotenv>=1.0.0
+pywebpush>=2.0.3
