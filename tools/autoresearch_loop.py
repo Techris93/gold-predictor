@@ -18,6 +18,7 @@ import argparse
 import itertools
 import json
 import math
+import os
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -360,6 +361,7 @@ def make_report(results: List[Dict[str, object]], baseline: Dict[str, object]) -
     best = ranked[0] if ranked else None
 
     promote = False
+    promotion_mode = "auto"
     reason = "No result"
     if best is not None:
         baseline_score = float(baseline["median_score"])
@@ -374,12 +376,24 @@ def make_report(results: List[Dict[str, object]], baseline: Dict[str, object]) -
                 f"pf {best['summary'].get('profit_factor', 0):.2f}."
             )
 
+        # Manual override (keeps auto logic intact for normal runs).
+        manual_promote = os.getenv("MANUAL_PROMOTE", "").strip().lower() in {"1", "true", "yes", "on"}
+        if manual_promote:
+            promote = True
+            promotion_mode = "manual"
+            manual_reason = os.getenv("MANUAL_PROMOTION_REASON", "").strip()
+            if manual_reason:
+                reason = f"Manual promote: {manual_reason}"
+            else:
+                reason = "Manual promote: operator override enabled via MANUAL_PROMOTE."
+
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "top_5": ranked[:5],
         "baseline": baseline,
         "best": best,
         "promote": promote,
+        "promotion_mode": promotion_mode,
         "promotion_reason": reason,
     }
 
