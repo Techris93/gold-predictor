@@ -71,6 +71,27 @@ def _fetch_yf_trend(ticker, interval, period):
         return {"trend": "Neutral", "data_points": 0}
 
 
+def _fetch_td_trend(symbol, interval, outputsize=200):
+    """Fetches trend from TwelveData timeframe when available."""
+    if not td_client:
+        return {"trend": "Neutral", "data_points": 0, "source": "none"}
+
+    try:
+        ts = td_client.time_series(symbol=symbol, interval=interval, outputsize=outputsize)
+        df_tf = ts.as_pandas()
+        if df_tf.empty or 'close' not in df_tf.columns:
+            return {"trend": "Neutral", "data_points": 0, "source": "twelvedata"}
+
+        close = pd.to_numeric(df_tf['close'], errors='coerce').dropna().sort_index()
+        return {
+            "trend": _calc_trend_from_close(close),
+            "data_points": int(len(close)),
+            "source": "twelvedata",
+        }
+    except Exception:
+        return {"trend": "Neutral", "data_points": 0, "source": "twelvedata"}
+
+
 def _derive_h4_trend_from_h1(ticker):
     """Builds synthetic 4H candles from 1H data to measure higher timeframe trend."""
     try:
@@ -100,6 +121,57 @@ def _derive_h4_trend_from_h1(ticker):
         }
     except Exception:
         return {"trend": "Neutral", "data_points": 0}
+
+
+def _fetch_mtf_trends(td_symbol, ticker, h1_trend):
+    """Prefer TwelveData realtime MTF; fallback to yfinance/synthetic where needed."""
+    m15 = _fetch_td_trend(symbol=td_symbol, interval="15min", outputsize=200)
+    h4 = _fetch_td_trend(symbol=td_symbol, interval="4h", outputsize=200)
+
+    if m15.get("data_points", 0) < 55:
+        fallback_m15 = _fetch_yf_trend(ticker=ticker, interval="15m", period="5d")
+        m15 = {
+            "trend": fallback_m15.get("trend", "Neutral"),
+            "data_points": fallback_m15.get("data_points", 0),
+            "source": "yfinance",
+        }
+
+    if h4.get("data_points", 0) < 55:
+        fallback_h4 = _derive_h4_trend_from_h1(ticker=ticker)
+        h4 = {
+            "trend": fallback_h4.get("trend", "Neutral"),
+            "data_points": fallback_h4.get("data_points", 0),
+            "source": "yfinance_synth",
+        }
+
+    trend_map = {"Bullish": 1, "Bearish": -1, "Neutral": 0}
+    alignment_score = (
+        trend_map.get(m15.get('trend', 'Neutral'), 0)
+        + trend_map.get(h1_trend, 0)
+        + trend_map.get(h4.get('trend', 'Neutral'), 0)
+    )
+
+    alignment_label = "Mixed / Low Alignment"
+    if alignment_score >= 2:
+        alignment_label = "Strong Bullish Alignment"
+    elif alignment_score <= -2:
+        alignment_label = "Strong Bearish Alignment"
+
+    return {
+        "m15_trend": m15.get("trend", "Neutral"),
+        "h1_trend": h1_trend,
+        "h4_trend": h4.get("trend", "Neutral"),
+        "alignment_score": alignment_score,
+        "alignment_label": alignment_label,
+        "data_points": {
+            "m15": m15.get("data_points", 0),
+            "h4": h4.get("data_points", 0),
+        },
+        "sources": {
+            "m15": m15.get("source", "unknown"),
+            "h4": h4.get("source", "unknown"),
+        },
+    }
 
 def get_technical_analysis():
     """Fetches 1H interval data for Gold and calculates RSI and EMA."""
@@ -151,6 +223,9 @@ def get_technical_analysis():
         for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce')
+
+        # Ensure oldest->newest ordering for deterministic indicator outputs.
+        df = df.sort_index()
 
         df = df.dropna(subset=['Open', 'High', 'Low', 'Close'])
         if df.empty:
@@ -277,22 +352,8 @@ def get_technical_analysis():
         elif latest['CMF_14'] < 0:
             volume_signal = "Slight Selling Bias"
 
-        # Multi-timeframe trend confirmation (15m + 1h + synthetic 4h)
-        m15 = _fetch_yf_trend(ticker=ticker, interval="15m", period="5d")
-        h4 = _derive_h4_trend_from_h1(ticker=ticker)
-        trend_map = {"Bullish": 1, "Bearish": -1, "Neutral": 0}
-
-        alignment_score = (
-            trend_map.get(m15['trend'], 0)
-            + trend_map.get(ema_trend, 0)
-            + trend_map.get(h4['trend'], 0)
-        )
-
-        alignment_label = "Mixed / Low Alignment"
-        if alignment_score >= 2:
-            alignment_label = "Strong Bullish Alignment"
-        elif alignment_score <= -2:
-            alignment_label = "Strong Bearish Alignment"
+        # Multi-timeframe trend confirmation (15m + 1h + 4h), preferring realtime feeds.
+        mtf = _fetch_mtf_trends(td_symbol=td_symbol, ticker=ticker, h1_trend=ema_trend)
 
         return {
             "data_source": data_source,
@@ -309,15 +370,16 @@ def get_technical_analysis():
                 "atr_percent": round(atr_pct, 3)
             },
             "multi_timeframe": {
-                "m15_trend": m15['trend'],
-                "h1_trend": ema_trend,
-                "h4_trend": h4['trend'],
-                "alignment_score": alignment_score,
-                "alignment_label": alignment_label,
+                "m15_trend": mtf['m15_trend'],
+                "h1_trend": mtf['h1_trend'],
+                "h4_trend": mtf['h4_trend'],
+                "alignment_score": mtf['alignment_score'],
+                "alignment_label": mtf['alignment_label'],
                 "data_points": {
-                    "m15": m15['data_points'],
-                    "h4": h4['data_points']
-                }
+                    "m15": mtf['data_points']['m15'],
+                    "h4": mtf['data_points']['h4']
+                },
+                "sources": mtf['sources']
             },
             "price_action": {
                 "structure": pa_structure,

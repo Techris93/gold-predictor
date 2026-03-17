@@ -20,6 +20,7 @@
       href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&display=swap"
       rel="stylesheet"
     />
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js" crossorigin="anonymous"></script>
     <style>
       :root {
         --bg-color: #0b0e14;
@@ -276,6 +277,46 @@
         pointer-events: none;
       }
 
+      .push-feed {
+        position: fixed;
+        right: 14px;
+        bottom: 14px;
+        width: min(360px, calc(100vw - 28px));
+        z-index: 1000;
+      }
+
+      .push-item {
+        margin-top: 8px;
+        padding: 10px 12px;
+        border-radius: 10px;
+        background: rgba(17, 23, 34, 0.92);
+        border: 1px solid rgba(255, 215, 0, 0.18);
+        box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+      }
+
+      .push-title {
+        color: var(--gold-primary);
+        font-size: 0.78rem;
+        font-weight: 700;
+        margin-bottom: 4px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+
+      .push-body {
+        color: var(--text-main);
+        font-size: 0.8rem;
+        line-height: 1.3;
+      }
+
+      .socket-state {
+        margin-top: 0.8rem;
+        text-align: center;
+        color: var(--text-muted);
+        font-size: 0.7rem;
+        letter-spacing: 0.5px;
+      }
+
       /* Responsive fixes */
       @media (max-width: 480px) {
         h1 {
@@ -327,6 +368,8 @@
             <div class="confidence-bar-fill" id="confidence-bar"></div>
           </div>
         </div>
+
+        <div class="socket-state" id="socket-state">Push channel: connecting...</div>
       </div>
 
       <div style="margin-bottom: 2rem">
@@ -498,8 +541,28 @@
       Refresh Analysis
     </button>
 
+    <div class="push-feed" id="push-feed"></div>
+
     <script>
+      let indicatorSocket = null;
+      let notificationRequested = false;
+
+      async function requestNotificationPermissionOnce() {
+        if (notificationRequested) return;
+        notificationRequested = true;
+
+        if (!("Notification" in window)) return;
+        if (Notification.permission !== "default") return;
+
+        try {
+          await Notification.requestPermission();
+        } catch (_) {
+          // Ignore permission prompt failures and continue app flow.
+        }
+      }
+
       async function fetchPrediction() {
+        requestNotificationPermissionOnce();
         const loader = document.getElementById("loading-screen");
         loader.classList.remove("hide");
 
@@ -531,6 +594,98 @@
         document.getElementById("verdict-badge").className = "badge bearish";
         document.getElementById("current-price").innerText = "---";
         alert("MARKET DATA ERROR: " + msg);
+      }
+
+      function updateSocketState(text, isGood) {
+        const el = document.getElementById("socket-state");
+        if (!el) return;
+        el.innerText = text;
+        el.style.color = isGood ? "var(--bullish)" : "var(--text-muted)";
+      }
+
+      function showPushToast(title, body) {
+        const feed = document.getElementById("push-feed");
+        if (!feed) return;
+
+        const card = document.createElement("div");
+        card.className = "push-item";
+        card.innerHTML = `
+          <div class="push-title">${title}</div>
+          <div class="push-body">${body}</div>
+        `;
+        feed.prepend(card);
+
+        while (feed.children.length > 4) {
+          feed.removeChild(feed.lastChild);
+        }
+
+        setTimeout(() => {
+          if (card.parentElement) {
+            card.remove();
+          }
+        }, 14000);
+      }
+
+      function summarizeChanges(changes) {
+        const entries = Object.entries(changes || {});
+        if (entries.length === 0) return "No indicator fields changed.";
+
+        const labels = {
+          verdict: "Verdict",
+          confidence: "Confidence",
+          trend: "Trend",
+          market_structure: "Market Structure",
+          candle_pattern: "Candle Pattern",
+          rsi_14: "RSI",
+          ema_20: "EMA 20",
+          ema_50: "EMA 50",
+          market_regime: "Market Regime",
+          alignment: "Alignment",
+          adx_14: "ADX",
+          atr_percent: "ATR%",
+        };
+
+        return entries
+          .slice(0, 4)
+          .map(([k, v]) => `${labels[k] || k}: ${v.previous} -> ${v.current}`)
+          .join(" | ");
+      }
+
+      function initIndicatorSocket() {
+        if (typeof io === "undefined") {
+          updateSocketState("Push channel: unavailable", false);
+          return;
+        }
+
+        indicatorSocket = io({ transports: ["websocket", "polling"] });
+
+        indicatorSocket.on("connect", () => {
+          updateSocketState("Push channel: live", true);
+        });
+
+        indicatorSocket.on("disconnect", () => {
+          updateSocketState("Push channel: disconnected", false);
+        });
+
+        indicatorSocket.on("indicator_change", (payload) => {
+          const changeText = summarizeChanges(payload?.changes || {});
+          const verdict = payload?.verdict || "Neutral";
+          const confidence = payload?.confidence ?? "N/A";
+
+          showPushToast(
+            "Indicator Update",
+            `${changeText} | Verdict: ${verdict} (${confidence}%)`,
+          );
+
+          if ("Notification" in window && Notification.permission === "granted") {
+            new Notification("XAUUSD Indicator Update", {
+              body: `${changeText}`,
+            });
+          }
+
+          // Keep the full dashboard in sync after a push event.
+          fetchPrediction();
+        });
       }
 
       async function fetchAutoresearchSummary() {
@@ -983,8 +1138,13 @@
 
       // Fetch on load
       window.addEventListener("DOMContentLoaded", () => {
+        if ("Notification" in window && Notification.permission === "default") {
+          Notification.requestPermission().catch(() => {});
+        }
+
         fetchPrediction();
         fetchAutoresearchSummary();
+        initIndicatorSocket();
       });
     </script>
   </body>
