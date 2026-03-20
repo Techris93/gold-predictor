@@ -17,12 +17,13 @@ from dotenv import load_dotenv
 load_dotenv()
 
 try:
+    import yfinance as yf
     import pandas as pd
     import ta
     from twelvedata import TDClient
 except ImportError:
     print(json.dumps({
-        "error": "Missing dependencies. Please run: pip install pandas ta requests twelvedata python-dotenv"
+        "error": "Missing dependencies. Please run: pip install yfinance pandas ta requests twelvedata python-dotenv"
     }))
     sys.exit(1)
 
@@ -318,12 +319,26 @@ def get_technical_analysis():
         return {"error": str(e)}
 
 def get_sentiment_analysis():
-    """Placeholder sentiment output when no dedicated news provider is configured."""
-    return [{
-        "title": "News sentiment is unavailable because the Yahoo Finance fallback was removed.",
-        "publisher": "System",
-        "link": "#"
-    }]
+    """Fetches recent gold-related news headlines for sentiment analysis using Yahoo Finance only."""
+    try:
+        gold = yf.Ticker("GLD")
+        news = gold.news
+        headlines = []
+        if news:
+            for article in news[:5]:
+                content = article.get("content", article)
+                headlines.append({
+                    "title": content.get("title", "No Title"),
+                    "publisher": content.get("provider", {}).get("displayName", "Unknown"),
+                    "link": content.get("clickThroughUrl", {}).get("url", "#")
+                })
+
+        if not headlines:
+            return [{"title": "No recent gold news found.", "publisher": "System", "link": "#"}]
+
+        return headlines
+    except Exception as e:
+        return [{"title": f"Sentiment Query Error: {str(e)}", "publisher": "Error", "link": "#"}]
 
 def main():
     ta_data = get_technical_analysis()
