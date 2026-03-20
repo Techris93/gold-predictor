@@ -1,18 +1,36 @@
+import json
+import os
 import yfinance as yf
 import pandas as pd
 import ta
 import numpy as np
 
-# SWARM_PARAM_BLOCK_START
-ACTIVE_BACKTEST_PARAMS = {
+DEFAULT_BACKTEST_PARAMS = {
     "ema_short": 20,
     "ema_long": 50,
     "rsi_window": 14,
     "rsi_overbought": 70,
     "rsi_oversold": 20,
-    "cmf_window": 14
+    "cmf_window": 14,
 }
-# SWARM_PARAM_BLOCK_END
+
+
+def _load_json_config(relative_path, fallback):
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    file_path = os.path.join(base_dir, relative_path)
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            merged = fallback.copy()
+            merged.update(data)
+            return merged
+    except Exception:
+        pass
+    return fallback.copy()
+
+
+ACTIVE_BACKTEST_PARAMS = _load_json_config("config/backtest_params.json", DEFAULT_BACKTEST_PARAMS)
 
 def generate_signals(df):
     """

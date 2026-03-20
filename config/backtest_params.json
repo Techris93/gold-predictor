@@ -1,0 +1,8 @@
+{
+  "ema_short": 20,
+  "ema_long": 50,
+  "rsi_window": 14,
+  "rsi_overbought": 70,
+  "rsi_oversold": 20,
+  "cmf_window": 14
+}

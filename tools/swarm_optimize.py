@@ -4,9 +4,15 @@ import pandas as pd
 import ta
 import itertools
 import os
-import re
 import subprocess
+from datetime import datetime, timezone
 from concurrent.futures import ProcessPoolExecutor
+
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+STRATEGY_PARAMS_FILE = os.path.join(BASE_DIR, "config", "strategy_params.json")
+BACKTEST_PARAMS_FILE = os.path.join(BASE_DIR, "config", "backtest_params.json")
+LATEST_RESULT_FILE = os.path.join(BASE_DIR, "data", "swarm", "latest_result.json")
 
 
 def generate_signals_custom(df, ema_short_win, ema_long_win, rsi_ob, rsi_os, cmf_win):
@@ -84,23 +90,11 @@ def test_params(args):
     return (p, roi)
 
 
-def _replace_param_block(file_path, var_name, params):
-    with open(file_path, 'r', encoding='utf-8') as f:
-        content = f.read()
-
-    pattern = rf"(# SWARM_PARAM_BLOCK_START\n){var_name} = \{{.*?\}}\n(# SWARM_PARAM_BLOCK_END)"
-    replacement = (
-        f"# SWARM_PARAM_BLOCK_START\n"
-        f"{var_name} = {json.dumps(params, indent=4)}\n"
-        f"# SWARM_PARAM_BLOCK_END"
-    )
-
-    updated, count = re.subn(pattern, replacement, content, flags=re.DOTALL)
-    if count != 1:
-        raise RuntimeError(f"Could not safely update parameter block in {file_path}")
-
-    with open(file_path, 'w', encoding='utf-8') as f:
-        f.write(updated)
+def _write_json(file_path, data):
+    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+    with open(file_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
 
 
 def run_swarm():
@@ -143,11 +137,6 @@ def run_swarm():
     best_roi = results[0][1]
     best_ema_s, best_ema_l, best_rsi_ob, best_rsi_os, best_cmf = best_params
 
-    print("\n⚡ AUTO-APPLYING WINNING STRATEGY TO AGENT...")
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    predict_file = os.path.join(base_dir, "predict_gold.py")
-    backtest_file = os.path.join(base_dir, "backtest.py")
-
     predict_params = {
         "ema_short": best_ema_s,
         "ema_long": best_ema_l,
@@ -174,24 +163,57 @@ def run_swarm():
         "cmf_window": best_cmf,
     }
 
+    result_payload = {
+        "status": "success",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "best_params": {
+            "ema_short": best_ema_s,
+            "ema_long": best_ema_l,
+            "rsi_overbought": best_rsi_ob,
+            "rsi_oversold": best_rsi_os,
+            "cmf_window": best_cmf,
+            "roi": round(best_roi, 2)
+        },
+        "top_results": [
+            {
+                "rank": idx + 1,
+                "ema_short": p[0],
+                "ema_long": p[1],
+                "rsi_overbought": p[2],
+                "rsi_oversold": p[3],
+                "cmf_window": p[4],
+                "roi": round(roi, 2)
+            }
+            for idx, (p, roi) in enumerate(results[:10])
+        ]
+    }
+
+    print("\n⚡ WRITING WINNING STRATEGY TO JSON CONFIG...")
+
     try:
-        _replace_param_block(predict_file, "ACTIVE_STRATEGY_PARAMS", predict_params)
-        _replace_param_block(backtest_file, "ACTIVE_BACKTEST_PARAMS", backtest_params)
+        _write_json(STRATEGY_PARAMS_FILE, predict_params)
+        _write_json(BACKTEST_PARAMS_FILE, backtest_params)
+        _write_json(LATEST_RESULT_FILE, result_payload)
 
-        print(f"✅ Successfully updated agent code with optimal parameters: EMA {best_ema_s}/{best_ema_l}, RSI {best_rsi_ob}/{best_rsi_os}, CMF {best_cmf}")
+        print(f"✅ Successfully wrote optimal parameters to JSON: EMA {best_ema_s}/{best_ema_l}, RSI {best_rsi_ob}/{best_rsi_os}, CMF {best_cmf}")
 
-        status_output = subprocess.run(["git", "status", "--porcelain"], cwd=base_dir, capture_output=True, text=True)
-        if "predict_gold.py" in status_output.stdout or "backtest.py" in status_output.stdout:
-            print("🚀 New superior strategy detected! Committing to repository...")
+        status_output = subprocess.run(["git", "status", "--porcelain"], cwd=BASE_DIR, capture_output=True, text=True)
+        tracked_targets = [
+            "config/strategy_params.json",
+            "config/backtest_params.json",
+            "data/swarm/latest_result.json",
+        ]
+        if any(target in status_output.stdout for target in tracked_targets):
+            print("🚀 New superior strategy/result detected! Committing JSON updates...")
             commit_msg = f"Auto-Evolve: New Best Strategy Found | ROI: {best_roi:.2f}% | EMA: {best_ema_s}/{best_ema_l} CMF: {best_cmf}"
-            subprocess.run(["git", "add", "predict_gold.py", "backtest.py"], cwd=base_dir, check=True)
-            subprocess.run(["git", "commit", "-m", commit_msg], cwd=base_dir, check=True)
-            print("💾 Saved! You can now run `git push` to deploy the new strategy.")
+            subprocess.run(["git", "add", "config/strategy_params.json", "config/backtest_params.json", "data/swarm/latest_result.json"], cwd=BASE_DIR, check=True)
+            subprocess.run(["git", "commit", "-m", commit_msg], cwd=BASE_DIR, check=True)
+            print("💾 Saved JSON strategy state. You can now run `git push` to deploy the new strategy.")
         else:
-            print("⚖️ The current applied strategy is still the most optimal. No changes made.")
+            print("⚖️ The current JSON strategy state is already optimal. No changes made.")
 
     except Exception as e:
-        print("⚠️ Failed to auto-apply parameters:", e)
+        print("⚠️ Failed to write JSON strategy state:", e)
 
 
 if __name__ == "__main__":

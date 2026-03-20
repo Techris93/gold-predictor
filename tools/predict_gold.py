@@ -38,8 +38,7 @@ td_client = None
 if TD_API_KEY and TD_API_KEY != "your_twelve_data_api_key_here":
     td_client = TDClient(apikey=TD_API_KEY)
 
-# SWARM_PARAM_BLOCK_START
-ACTIVE_STRATEGY_PARAMS = {
+DEFAULT_STRATEGY_PARAMS = {
     "ema_short": 20,
     "ema_long": 50,
     "rsi_window": 14,
@@ -53,13 +52,26 @@ ACTIVE_STRATEGY_PARAMS = {
     "cmf_window": 14,
     "cmf_strong_buy_threshold": 0.1,
     "cmf_strong_sell_threshold": -0.1,
-    "mtf_intervals": [
-        "15min",
-        "1h",
-        "4h"
-    ]
+    "mtf_intervals": ["15min", "1h", "4h"],
 }
-# SWARM_PARAM_BLOCK_END
+
+
+def _load_json_config(relative_path, fallback):
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    file_path = os.path.join(base_dir, relative_path)
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            merged = fallback.copy()
+            merged.update(data)
+            return merged
+    except Exception:
+        pass
+    return fallback.copy()
+
+
+ACTIVE_STRATEGY_PARAMS = _load_json_config("config/strategy_params.json", DEFAULT_STRATEGY_PARAMS)
 
 RSS_FEEDS = [
     ("Google News Gold", "https://news.google.com/rss/search?q=gold%20OR%20XAUUSD%20OR%20%22Federal%20Reserve%22%20OR%20inflation&hl=en-US&gl=US&ceid=US:en"),
