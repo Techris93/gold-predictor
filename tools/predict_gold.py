@@ -12,12 +12,16 @@ Prerequisites:
 import sys
 import json
 import os
+import re
+import xml.etree.ElementTree as ET
+from html import unescape
 from dotenv import load_dotenv
 
 # Load environment variables from .env
 load_dotenv()
 
 try:
+    import requests
     import yfinance as yf
     import pandas as pd
     import ta
@@ -33,6 +37,50 @@ TD_API_KEY = os.getenv("TWELVE_DATA_API_KEY")
 td_client = None
 if TD_API_KEY and TD_API_KEY != "your_twelve_data_api_key_here":
     td_client = TDClient(apikey=TD_API_KEY)
+
+RSS_FEEDS = [
+    ("Google News Gold", "https://news.google.com/rss/search?q=gold%20OR%20XAUUSD%20OR%20%22Federal%20Reserve%22%20OR%20inflation&hl=en-US&gl=US&ceid=US:en"),
+    ("Google News Commodities", "https://news.google.com/rss/search?q=gold%20price%20commodities%20yields%20dollar&hl=en-US&gl=US&ceid=US:en"),
+]
+
+BULLISH_TERMS = {
+    "gold rises": 2,
+    "gold rise": 2,
+    "gold gains": 2,
+    "gold gain": 2,
+    "gold jumps": 2,
+    "gold rally": 2,
+    "safe haven": 2,
+    "fed cuts": 3,
+    "rate cut": 3,
+    "dovish": 2,
+    "inflation cools": 2,
+    "weaker dollar": 2,
+    "dollar falls": 2,
+    "yields fall": 2,
+    "central bank buying": 2,
+    "buy gold": 2,
+    "bullish": 1,
+}
+
+BEARISH_TERMS = {
+    "gold falls": 2,
+    "gold fall": 2,
+    "gold drops": 2,
+    "gold drop": 2,
+    "gold slips": 2,
+    "gold declines": 2,
+    "hawkish": 2,
+    "fed hikes": 3,
+    "rate hike": 3,
+    "higher rates": 2,
+    "stronger dollar": 2,
+    "dollar rises": 2,
+    "yields rise": 2,
+    "profit-taking": 1,
+    "sell gold": 2,
+    "bearish": 1,
+}
 
 
 def _calc_trend_from_close(close_series):
@@ -319,27 +367,144 @@ def get_technical_analysis():
     except Exception as e:
         return {"error": str(e)}
 
-def get_sentiment_analysis():
-    """Fetches recent gold-related news headlines using Yahoo Finance only for sentiment context."""
+def _clean_headline(text):
+    text = unescape((text or "").strip())
+    text = re.sub(r"\s+", " ", text)
+    return text
+
+
+def _score_headline_sentiment(title):
+    title_lc = (title or "").lower()
+    bullish_score = sum(weight for term, weight in BULLISH_TERMS.items() if term in title_lc)
+    bearish_score = sum(weight for term, weight in BEARISH_TERMS.items() if term in title_lc)
+    net_score = bullish_score - bearish_score
+
+    label = "Neutral"
+    if net_score >= 2:
+        label = "Bullish"
+    elif net_score <= -2:
+        label = "Bearish"
+
+    matched_terms = [
+        term for term in list(BULLISH_TERMS.keys()) + list(BEARISH_TERMS.keys())
+        if term in title_lc
+    ][:4]
+
+    return {
+        "sentiment_label": label,
+        "sentiment_score": net_score,
+        "bullish_score": bullish_score,
+        "bearish_score": bearish_score,
+        "matched_terms": matched_terms,
+    }
+
+
+def _fetch_yahoo_sentiment_headlines(limit=5):
+    headlines = []
     try:
         gold = yf.Ticker("GLD")
         news = gold.news
-        headlines = []
         if news:
-            for article in news[:5]:
+            for article in news[:limit]:
                 content = article.get("content", article)
-                headlines.append({
-                    "title": content.get("title", "No Title"),
-                    "publisher": content.get("provider", {}).get("displayName", "Unknown"),
-                    "link": content.get("clickThroughUrl", {}).get("url", "#")
-                })
+                title = _clean_headline(content.get("title", "No Title"))
+                if not title:
+                    continue
+                entry = {
+                    "title": title,
+                    "publisher": content.get("provider", {}).get("displayName", "Yahoo Finance"),
+                    "link": content.get("clickThroughUrl", {}).get("url", "#"),
+                    "source_type": "yahoo_finance",
+                }
+                entry.update(_score_headline_sentiment(title))
+                headlines.append(entry)
+    except Exception:
+        pass
+    return headlines
 
-        if not headlines:
-            return [{"title": "No recent gold news found.", "publisher": "System", "link": "#"}]
 
-        return headlines
+def _fetch_rss_sentiment_headlines(limit_per_feed=4):
+    headlines = []
+    headers = {"User-Agent": "gold-predictor/1.0 (+rss sentiment fetch)"}
+
+    for feed_name, feed_url in RSS_FEEDS:
+        try:
+            response = requests.get(feed_url, headers=headers, timeout=10)
+            response.raise_for_status()
+            root = ET.fromstring(response.content)
+            items = root.findall(".//item")[:limit_per_feed]
+
+            for item in items:
+                title = _clean_headline(item.findtext("title", default=""))
+                link = item.findtext("link", default="#") or "#"
+                publisher = item.findtext("source", default=feed_name) or feed_name
+                if not title:
+                    continue
+                entry = {
+                    "title": title,
+                    "publisher": publisher,
+                    "link": link,
+                    "source_type": "rss",
+                    "feed": feed_name,
+                }
+                entry.update(_score_headline_sentiment(title))
+                headlines.append(entry)
+        except Exception:
+            continue
+
+    return headlines
+
+
+def _dedupe_sentiment_headlines(headlines, limit=10):
+    deduped = []
+    seen = set()
+
+    for item in headlines:
+        title_key = re.sub(r"[^a-z0-9]+", " ", (item.get("title") or "").lower()).strip()
+        if not title_key or title_key in seen:
+            continue
+        seen.add(title_key)
+        deduped.append(item)
+        if len(deduped) >= limit:
+            break
+
+    return deduped
+
+
+def get_sentiment_analysis():
+    """Fetches Yahoo + RSS headlines and applies simple local sentiment scoring."""
+    try:
+        yahoo_headlines = _fetch_yahoo_sentiment_headlines(limit=5)
+        rss_headlines = _fetch_rss_sentiment_headlines(limit_per_feed=4)
+        combined = yahoo_headlines + rss_headlines
+        deduped = _dedupe_sentiment_headlines(combined, limit=10)
+
+        if not deduped:
+            return [{
+                "title": "No recent gold news found.",
+                "publisher": "System",
+                "link": "#",
+                "source_type": "system",
+                "sentiment_label": "Neutral",
+                "sentiment_score": 0,
+                "bullish_score": 0,
+                "bearish_score": 0,
+                "matched_terms": [],
+            }]
+
+        return deduped
     except Exception as e:
-        return [{"title": f"Sentiment Query Error: {str(e)}", "publisher": "Error", "link": "#"}]
+        return [{
+            "title": f"Sentiment Query Error: {str(e)}",
+            "publisher": "Error",
+            "link": "#",
+            "source_type": "system",
+            "sentiment_label": "Neutral",
+            "sentiment_score": 0,
+            "bullish_score": 0,
+            "bearish_score": 0,
+            "matched_terms": [],
+        }]
 
 def main():
     ta_data = get_technical_analysis()
