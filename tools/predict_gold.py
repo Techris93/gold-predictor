@@ -2,10 +2,11 @@
 """
 predict_gold.py
 Helper tool for the XAUUSD Prediction Agent.
-Fetches 1H XAU/USD data using Twelve Data, calculates EMA and RSI.
+Uses Twelve Data for price/technical analysis and Yahoo Finance only for
+news headlines used in sentiment analysis.
 
 Prerequisites:
-    pip install pandas ta requests twelvedata python-dotenv
+    pip install yfinance pandas ta requests twelvedata python-dotenv
 """
 
 import sys
@@ -27,7 +28,7 @@ except ImportError:
     }))
     sys.exit(1)
 
-# Initialize Twelve Data Client
+# Initialize Twelve Data client for all market/technical data.
 TD_API_KEY = os.getenv("TWELVE_DATA_API_KEY")
 td_client = None
 if TD_API_KEY and TD_API_KEY != "your_twelve_data_api_key_here":
@@ -56,7 +57,7 @@ def _calc_trend_from_close(close_series):
 
 
 def _fetch_td_trend(symbol, interval, outputsize=200):
-    """Fetches trend from TwelveData timeframe when available."""
+    """Fetches trend from Twelve Data timeframe data only."""
     if not td_client:
         return {"trend": "Neutral", "data_points": 0, "source": "none"}
 
@@ -111,8 +112,8 @@ def _fetch_mtf_trends(td_symbol, h1_trend):
     }
 
 def get_technical_analysis():
-    """Fetches 1H interval data for Gold and calculates RSI and EMA using Twelve Data only."""
-    td_symbol = "XAU/USD"  # Twelve Data Symbol
+    """Fetches gold price/technical data from Twelve Data only."""
+    td_symbol = "XAU/USD"  # Twelve Data symbol for all technical/price calculations
 
     if not td_client:
         return {"error": "TWELVE_DATA_API_KEY is missing or invalid. Twelve Data is required."}
@@ -319,7 +320,7 @@ def get_technical_analysis():
         return {"error": str(e)}
 
 def get_sentiment_analysis():
-    """Fetches recent gold-related news headlines for sentiment analysis using Yahoo Finance only."""
+    """Fetches recent gold-related news headlines using Yahoo Finance only for sentiment context."""
     try:
         gold = yf.Ticker("GLD")
         news = gold.news
@@ -345,7 +346,9 @@ def main():
     sa_data = get_sentiment_analysis()
     
     output = {
+        # TechnicalAnalysis comes from Twelve Data market data.
         "TechnicalAnalysis": ta_data,
+        # SentimentalAnalysis is populated from Yahoo Finance headlines only.
         "SentimentalAnalysis": sa_data,
         "FundamentalAnalysis": {
             "note": "For FA (Inflation, Fed Rates, DXY), the agent should ideally query FRED or analyze the news headlines provided."
