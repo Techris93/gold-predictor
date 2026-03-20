@@ -975,23 +975,21 @@
         };
 
         newsList.forEach((news) => {
-          const title = ((news && news.title) || "").toLowerCase();
-          weightedSignals.forEach((signalGroup) => {
-            signalGroup.terms.forEach((term) => {
-              if (title.includes(term)) {
-                if (signalGroup.side === "bull")
-                  bullishScore += signalGroup.weight;
-                else bearishScore += signalGroup.weight;
-                registerDriver(term);
-              }
-            });
-          });
+          const headlineBull = Number(news?.bullish_score || 0);
+          const headlineBear = Number(news?.bearish_score || 0);
+          bullishScore += headlineBull;
+          bearishScore += headlineBear;
+
+          const matchedTerms = Array.isArray(news?.matched_terms)
+            ? news.matched_terms
+            : [];
+          matchedTerms.forEach(registerDriver);
         });
 
         const netScore = bullishScore - bearishScore;
         let label = "Neutral";
-        if (netScore >= 2) label = "Bullish";
-        else if (netScore <= -1) label = "Bearish";
+        if (netScore >= 4) label = "Bullish";
+        else if (netScore <= -3) label = "Bearish";
 
         const intensity = Math.abs(netScore);
         let confidenceBand = "Low";
