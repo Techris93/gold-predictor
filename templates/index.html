@@ -996,6 +996,68 @@
         return `Model view: ${sentiment.label} | net ${sentiment.netScore} (bull ${sentiment.bullishScore} vs bear ${sentiment.bearishScore}) from ${sourcesAnalyzed} source(s). Top drivers: ${drivers}.`;
       }
 
+      function getSentimentBadgeClass(label) {
+        if (label === "Bullish") return "value-bullish";
+        if (label === "Bearish") return "value-bearish";
+        return "";
+      }
+
+      function renderSentimentDebugList(newsList) {
+        if (!Array.isArray(newsList) || newsList.length === 0) {
+          return `
+            <div class="metric-row">
+              <span class="metric-label">Headline Debug</span>
+              <span class="metric-value" style="font-size: 0.8rem; text-align: right; max-width: 56%;">No sentiment headlines available</span>
+            </div>
+          `;
+        }
+
+        const rows = newsList
+          .map((item, index) => {
+            const label = item?.sentiment_label || "Neutral";
+            const labelClass = getSentimentBadgeClass(label);
+            const score = Number(item?.sentiment_score || 0);
+            const matchedTerms = Array.isArray(item?.matched_terms)
+              ? item.matched_terms
+              : [];
+            const source = item?.source_type || "unknown";
+            const publisher = item?.publisher || "Unknown";
+            const title = item?.title || "Untitled headline";
+            const termsText = matchedTerms.length
+              ? matchedTerms.join(", ")
+              : "none";
+
+            return `
+              <div style="margin-top: 0.9rem; padding-top: 0.9rem; border-top: 1px solid rgba(255,255,255,0.06);">
+                <div class="metric-row">
+                  <span class="metric-label">Headline ${index + 1}</span>
+                  <span class="metric-value ${labelClass}">${label} (${score > 0 ? "+" : ""}${score})</span>
+                </div>
+                <div class="metric-row">
+                  <span class="metric-label">Source</span>
+                  <span class="metric-value" style="font-size: 0.75rem; text-align: right; max-width: 56%;">${publisher} · ${source}</span>
+                </div>
+                <div class="metric-row">
+                  <span class="metric-label">Matched Terms</span>
+                  <span class="metric-value" style="font-size: 0.75rem; text-align: right; max-width: 56%;">${termsText}</span>
+                </div>
+                <div class="metric-row" style="align-items: flex-start; gap: 0.75rem;">
+                  <span class="metric-label">Title</span>
+                  <span class="metric-value" style="font-size: 0.75rem; text-align: right; max-width: 56%; line-height: 1.5; white-space: normal;">${title}</span>
+                </div>
+              </div>
+            `;
+          })
+          .join("");
+
+        return `
+          <div style="margin-top: 1rem; padding-top: 0.8rem; border-top: 1px solid rgba(255,215,0,0.12);">
+            <div style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 0.25rem;">Sentiment Debug</div>
+            ${rows}
+          </div>
+        `;
+      }
+
       function getGuidanceLevel(score) {
         if (score >= 6) return "Strong";
         if (score >= 4) return "Watch";
@@ -1145,12 +1207,9 @@
         if (saContainer) {
           saContainer.innerHTML = "";
 
-          const sentimentClass =
-            sentiment.label === "Bullish"
-              ? "value-bullish"
-              : sentiment.label === "Bearish"
-                ? "value-bearish"
-                : "";
+          const sentimentClass = getSentimentBadgeClass(sentiment.label);
+
+          const debugHtml = renderSentimentDebugList(newsList);
 
           saContainer.innerHTML = `
             <div class="metric-row">
@@ -1175,6 +1234,7 @@
                 ${sentiment.topDrivers.length ? sentiment.topDrivers.join(", ") : "No strong drivers"}
               </span>
             </div>
+            ${debugHtml}
           `;
 
           const sentimentValueEl = document.getElementById("sentiment-value");
