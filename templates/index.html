@@ -463,9 +463,21 @@
             font-weight: 600;
             text-transform: uppercase;
             letter-spacing: 1px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.75rem;
           "
         >
-          Market Sentiment
+          <span>Market Sentiment</span>
+          <button
+            id="sentiment-debug-toggle"
+            type="button"
+            style="background: rgba(255,215,0,0.08); color: var(--gold-primary); border: 1px solid rgba(255,215,0,0.25); border-radius: 999px; padding: 0.3rem 0.65rem; font-size: 0.68rem; letter-spacing: 0.6px; text-transform: uppercase; cursor: pointer;"
+            onclick="window.toggleSentimentDebug && window.toggleSentimentDebug()"
+          >
+            Show Debug
+          </button>
         </div>
         <div id="sa-headlines">
           <!-- Sentiment summary loaded via JS -->
@@ -996,11 +1008,28 @@
         return `Model view: ${sentiment.label} | net ${sentiment.netScore} (bull ${sentiment.bullishScore} vs bear ${sentiment.bearishScore}) from ${sourcesAnalyzed} source(s). Top drivers: ${drivers}.`;
       }
 
+      let sentimentDebugVisible = false;
+
       function getSentimentBadgeClass(label) {
         if (label === "Bullish") return "value-bullish";
         if (label === "Bearish") return "value-bearish";
         return "";
       }
+
+      function updateSentimentDebugToggleLabel() {
+        const btn = document.getElementById("sentiment-debug-toggle");
+        if (!btn) return;
+        btn.textContent = sentimentDebugVisible ? "Hide Debug" : "Show Debug";
+      }
+
+      window.toggleSentimentDebug = function toggleSentimentDebug() {
+        sentimentDebugVisible = !sentimentDebugVisible;
+        updateSentimentDebugToggleLabel();
+        const debugEl = document.getElementById("sentiment-debug-panel");
+        if (debugEl) {
+          debugEl.style.display = sentimentDebugVisible ? "block" : "none";
+        }
+      };
 
       function renderSentimentDebugList(newsList) {
         if (!Array.isArray(newsList) || newsList.length === 0) {
@@ -1051,7 +1080,7 @@
           .join("");
 
         return `
-          <div style="margin-top: 1rem; padding-top: 0.8rem; border-top: 1px solid rgba(255,215,0,0.12);">
+          <div id="sentiment-debug-panel" style="display: ${sentimentDebugVisible ? "block" : "none"}; margin-top: 1rem; padding-top: 0.8rem; border-top: 1px solid rgba(255,215,0,0.12);">
             <div style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 0.25rem;">Sentiment Debug</div>
             ${rows}
           </div>
@@ -1242,6 +1271,8 @@
             sentimentValueEl.title = sentimentTooltip;
             sentimentValueEl.style.cursor = "help";
           }
+
+          updateSentimentDebugToggleLabel();
         }
 
         // Update Verdict Badge
