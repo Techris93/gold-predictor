@@ -453,6 +453,10 @@
             <span id="ta-atrpct">---</span></span
           >
         </div>
+        <div class="metric-row" style="align-items: flex-start; gap: 0.75rem;">
+          <span class="metric-label">Active Params</span>
+          <span class="metric-value" id="ta-active-params" style="font-size: 0.78rem; text-align: right; max-width: 56%; line-height: 1.5; white-space: normal;">---</span>
+        </div>
       </div>
       <div style="margin-bottom: 2rem">
         <div
@@ -1313,6 +1317,7 @@
 
         const regime = ta.volatility_regime || {};
         const mtf = ta.multi_timeframe || {};
+        const activeParams = ta.active_strategy_params || {};
 
         const regimeEl = document.getElementById("ta-regime");
         const regimeText = regime.market_regime || "Unknown";

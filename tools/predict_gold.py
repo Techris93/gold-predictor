@@ -38,6 +38,23 @@ td_client = None
 if TD_API_KEY and TD_API_KEY != "your_twelve_data_api_key_here":
     td_client = TDClient(apikey=TD_API_KEY)
 
+ACTIVE_STRATEGY_PARAMS = {
+    "ema_short": 20,
+    "ema_long": 50,
+    "rsi_window": 14,
+    "rsi_overbought": 70,
+    "rsi_oversold": 20,
+    "adx_window": 14,
+    "adx_trending_threshold": 22,
+    "adx_weak_trend_threshold": 18,
+    "atr_window": 14,
+    "atr_trending_percent_threshold": 0.25,
+    "cmf_window": 14,
+    "cmf_strong_buy_threshold": 0.10,
+    "cmf_strong_sell_threshold": -0.10,
+    "mtf_intervals": ["15min", "1h", "4h"],
+}
+
 RSS_FEEDS = [
     ("Google News Gold", "https://news.google.com/rss/search?q=gold%20OR%20XAUUSD%20OR%20%22Federal%20Reserve%22%20OR%20inflation&hl=en-US&gl=US&ceid=US:en"),
     ("Google News Commodities", "https://news.google.com/rss/search?q=gold%20price%20commodities%20yields%20dollar&hl=en-US&gl=US&ceid=US:en"),
