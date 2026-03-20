@@ -38,6 +38,7 @@ td_client = None
 if TD_API_KEY and TD_API_KEY != "your_twelve_data_api_key_here":
     td_client = TDClient(apikey=TD_API_KEY)
 
+# SWARM_PARAM_BLOCK_START
 ACTIVE_STRATEGY_PARAMS = {
     "ema_short": 20,
     "ema_long": 50,
@@ -50,10 +51,15 @@ ACTIVE_STRATEGY_PARAMS = {
     "atr_window": 14,
     "atr_trending_percent_threshold": 0.25,
     "cmf_window": 14,
-    "cmf_strong_buy_threshold": 0.10,
-    "cmf_strong_sell_threshold": -0.10,
-    "mtf_intervals": ["15min", "1h", "4h"],
+    "cmf_strong_buy_threshold": 0.1,
+    "cmf_strong_sell_threshold": -0.1,
+    "mtf_intervals": [
+        "15min",
+        "1h",
+        "4h"
+    ]
 }
+# SWARM_PARAM_BLOCK_END
 
 RSS_FEEDS = [
     ("Google News Gold", "https://news.google.com/rss/search?q=gold%20OR%20XAUUSD%20OR%20%22Federal%20Reserve%22%20OR%20inflation&hl=en-US&gl=US&ceid=US:en"),
@@ -120,12 +126,14 @@ BEARISH_TERMS = {
 
 
 def _calc_trend_from_close(close_series):
-    """Returns bullish/bearish/neutral trend from EMA stack."""
+    """Returns bullish/bearish/neutral trend from configured EMA stack."""
     if close_series is None or len(close_series) < 55:
         return "Neutral"
 
-    ema_20 = ta.trend.EMAIndicator(close_series, window=20).ema_indicator()
-    ema_50 = ta.trend.EMAIndicator(close_series, window=50).ema_indicator()
+    ema_short = int(ACTIVE_STRATEGY_PARAMS.get("ema_short", 20))
+    ema_long = int(ACTIVE_STRATEGY_PARAMS.get("ema_long", 50))
+    ema_20 = ta.trend.EMAIndicator(close_series, window=ema_short).ema_indicator()
+    ema_50 = ta.trend.EMAIndicator(close_series, window=ema_long).ema_indicator()
     latest_close = close_series.iloc[-1]
     latest_ema20 = ema_20.iloc[-1]
     latest_ema50 = ema_50.iloc[-1]
@@ -163,8 +171,11 @@ def _fetch_td_trend(symbol, interval, outputsize=200):
 
 def _fetch_mtf_trends(td_symbol, h1_trend):
     """Fetches multi-timeframe trends strictly from Twelve Data."""
-    m15 = _fetch_td_trend(symbol=td_symbol, interval="15min", outputsize=200)
-    h4 = _fetch_td_trend(symbol=td_symbol, interval="4h", outputsize=200)
+    mtf_intervals = ACTIVE_STRATEGY_PARAMS.get("mtf_intervals", ["15min", "1h", "4h"])
+    m15_interval = mtf_intervals[0] if len(mtf_intervals) > 0 else "15min"
+    h4_interval = mtf_intervals[2] if len(mtf_intervals) > 2 else "4h"
+    m15 = _fetch_td_trend(symbol=td_symbol, interval=m15_interval, outputsize=200)
+    h4 = _fetch_td_trend(symbol=td_symbol, interval=h4_interval, outputsize=200)
 
     trend_map = {"Bullish": 1, "Bearish": -1, "Neutral": 0}
     alignment_score = (
@@ -239,12 +250,19 @@ def get_technical_analysis():
         if df.empty:
             return {"error": "Price data is malformed after cleanup."}
 
+        ema_short = int(ACTIVE_STRATEGY_PARAMS.get("ema_short", 20))
+        ema_long = int(ACTIVE_STRATEGY_PARAMS.get("ema_long", 50))
+        rsi_window = int(ACTIVE_STRATEGY_PARAMS.get("rsi_window", 14))
+        atr_window = int(ACTIVE_STRATEGY_PARAMS.get("atr_window", 14))
+        adx_window = int(ACTIVE_STRATEGY_PARAMS.get("adx_window", 14))
+        cmf_window = int(ACTIVE_STRATEGY_PARAMS.get("cmf_window", 14))
+
         # Calculate price indicators
-        df['EMA_20'] = ta.trend.EMAIndicator(df['Close'], window=20).ema_indicator()
-        df['EMA_50'] = ta.trend.EMAIndicator(df['Close'], window=50).ema_indicator()
-        df['RSI_14'] = ta.momentum.RSIIndicator(df['Close'], window=14).rsi()
-        df['ATR_14'] = ta.volatility.AverageTrueRange(df['High'], df['Low'], df['Close'], window=14).average_true_range()
-        df['ADX_14'] = ta.trend.ADXIndicator(df['High'], df['Low'], df['Close'], window=14).adx()
+        df['EMA_20'] = ta.trend.EMAIndicator(df['Close'], window=ema_short).ema_indicator()
+        df['EMA_50'] = ta.trend.EMAIndicator(df['Close'], window=ema_long).ema_indicator()
+        df['RSI_14'] = ta.momentum.RSIIndicator(df['Close'], window=rsi_window).rsi()
+        df['ATR_14'] = ta.volatility.AverageTrueRange(df['High'], df['Low'], df['Close'], window=atr_window).average_true_range()
+        df['ADX_14'] = ta.trend.ADXIndicator(df['High'], df['Low'], df['Close'], window=adx_window).adx()
         
         # Calculate volume/orderflow proxies if volume data is available
         has_volume = 'Volume' in df.columns and not df['Volume'].empty and (df['Volume'] > 0).any()
@@ -253,7 +271,7 @@ def get_technical_analysis():
             # On-Balance Volume (OBV) measures cumulative buying vs selling pressure
             df['OBV'] = ta.volume.OnBalanceVolumeIndicator(df['Close'], df['Volume']).on_balance_volume()
             # Chaikin Money Flow (CMF) measures accumulation vs distribution over 14 periods
-            df['CMF_14'] = ta.volume.ChaikinMoneyFlowIndicator(df['High'], df['Low'], df['Close'], df['Volume'], window=14).chaikin_money_flow()
+            df['CMF_14'] = ta.volume.ChaikinMoneyFlowIndicator(df['High'], df['Low'], df['Close'], df['Volume'], window=cmf_window).chaikin_money_flow()
         else:
             df['OBV'] = 0
             df['CMF_14'] = 0
@@ -273,10 +291,14 @@ def get_technical_analysis():
         atr_14 = float(latest['ATR_14']) if not pd.isna(latest['ATR_14']) else 0.0
         atr_pct = (atr_14 / latest['Close'] * 100) if latest['Close'] else 0.0
 
+        adx_trending_threshold = float(ACTIVE_STRATEGY_PARAMS.get("adx_trending_threshold", 22))
+        adx_weak_trend_threshold = float(ACTIVE_STRATEGY_PARAMS.get("adx_weak_trend_threshold", 18))
+        atr_trending_pct_threshold = float(ACTIVE_STRATEGY_PARAMS.get("atr_trending_percent_threshold", 0.25))
+
         market_regime = "Range-Bound"
-        if adx_14 >= 22 and atr_pct >= 0.25:
+        if adx_14 >= adx_trending_threshold and atr_pct >= atr_trending_pct_threshold:
             market_regime = "Trending"
-        elif adx_14 >= 18:
+        elif adx_14 >= adx_weak_trend_threshold:
             market_regime = "Weak Trend"
 
         # Price Action: Breakout + swing structure checks
@@ -342,18 +364,22 @@ def get_technical_analysis():
             elif upper_wick / candle_range > 0.55 and lower_wick / candle_range < 0.2 and latest['Close'] <= latest['Open']:
                 candle_pattern = "Bearish Shooting Star"
 
+        rsi_overbought = float(ACTIVE_STRATEGY_PARAMS.get("rsi_overbought", 70))
+        rsi_oversold = float(ACTIVE_STRATEGY_PARAMS.get("rsi_oversold", 20))
         rsi_signal = "Neutral"
-        if latest['RSI_14'] > 70:
+        if latest['RSI_14'] > rsi_overbought:
             rsi_signal = "Overbought (Bearish bias)"
-        elif latest['RSI_14'] < 20:
+        elif latest['RSI_14'] < rsi_oversold:
             rsi_signal = "Oversold (Bullish bias)"
             
         # Determine volume/orderflow signal
+        cmf_strong_buy_threshold = float(ACTIVE_STRATEGY_PARAMS.get("cmf_strong_buy_threshold", 0.10))
+        cmf_strong_sell_threshold = float(ACTIVE_STRATEGY_PARAMS.get("cmf_strong_sell_threshold", -0.10))
         volume_signal = "Neutral"
         obv_rising = latest['OBV'] > prev['OBV']
-        if latest['CMF_14'] > 0.1 and obv_rising:
+        if latest['CMF_14'] > cmf_strong_buy_threshold and obv_rising:
             volume_signal = "Strong Buying Pressure (Accumulation)"
-        elif latest['CMF_14'] < -0.1 and not obv_rising:
+        elif latest['CMF_14'] < cmf_strong_sell_threshold and not obv_rising:
             volume_signal = "Strong Selling Pressure (Distribution)"
         elif latest['CMF_14'] > 0:
             volume_signal = "Slight Buying Bias"
