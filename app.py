@@ -117,6 +117,9 @@ def _summarize_changes_for_push(changes):
         "rsi_14": "RSI",
         "market_regime": "Regime",
         "alignment": "Alignment",
+        "trade_sell_setup": "Sell Setup",
+        "trade_buy_setup": "Buy Setup",
+        "trade_exit_warning": "Exit Warning",
     }
     parts = []
     for key, val in list(changes.items())[:3]:
@@ -207,12 +210,105 @@ def _is_material_change(changes):
     return False
 
 
+def _compute_trade_guidance(ta_data, confidence):
+    """Mirror the UI trade guidance so backend notifications can track it."""
+    if not isinstance(ta_data, dict):
+        return {
+            "sellLevel": "Watch",
+            "buyLevel": "Watch",
+            "exitLevel": "Low",
+            "summary": "Trade guidance unavailable.",
+        }
+
+    trend = ta_data.get("ema_trend", "Neutral")
+    rsi = float(ta_data.get("rsi_14", 50) or 50)
+    regime = (ta_data.get("volatility_regime") or {}).get("market_regime", "Range-Bound")
+    alignment = (ta_data.get("multi_timeframe") or {}).get("alignment_label", "Mixed / Low Alignment")
+    volume_signal = (ta_data.get("volume_analysis") or {}).get("overall_volume_signal", "Neutral")
+    structure = (ta_data.get("price_action") or {}).get("structure", "Consolidating")
+    pattern = (ta_data.get("price_action") or {}).get("latest_candle_pattern", "None")
+
+    sell_score = 0
+    buy_score = 0
+    exit_score = 0
+
+    if trend == "Bearish":
+        sell_score += 2
+    elif trend == "Bullish":
+        buy_score += 2
+
+    if "Bearish" in alignment:
+        sell_score += 2
+    elif "Bullish" in alignment:
+        buy_score += 2
+
+    if "Distribution" in volume_signal or "Selling" in volume_signal:
+        sell_score += 1
+        exit_score += 1
+    elif "Accumulation" in volume_signal or "Buying" in volume_signal:
+        buy_score += 1
+
+    if "Bearish" in structure or "Bearish" in pattern:
+        sell_score += 1
+        exit_score += 1
+    elif "Bullish" in structure or "Bullish" in pattern:
+        buy_score += 1
+
+    if rsi > 70:
+        sell_score += 1
+        exit_score += 2
+    elif rsi < 30:
+        buy_score += 1
+
+    if regime == "Trending":
+        if trend == "Bearish":
+            sell_score += 1
+        elif trend == "Bullish":
+            buy_score += 1
+    elif regime == "Range-Bound":
+        sell_score -= 1
+        buy_score -= 1
+
+    if confidence >= 75:
+        if trend == "Bearish":
+            sell_score += 1
+        elif trend == "Bullish":
+            buy_score += 1
+    elif confidence < 60:
+        sell_score -= 1
+        buy_score -= 1
+
+    def level(score, mode):
+        if score >= 5:
+            return "Strong"
+        if score >= 3:
+            return "Ready"
+        if score >= 1:
+            return "Watch" if mode == "sell" else "Weak"
+        return "Weak" if mode == "sell" else "Watch"
+
+    if exit_score >= 3:
+        exit_level = "High"
+    elif exit_score >= 1:
+        exit_level = "Medium"
+    else:
+        exit_level = "Low"
+
+    return {
+        "sellLevel": level(sell_score, "sell"),
+        "buyLevel": level(buy_score, "buy"),
+        "exitLevel": exit_level,
+        "summary": f"Sell Setup {level(sell_score, 'sell')} · Buy Setup {level(buy_score, 'buy')} · Exit Warning {exit_level}",
+    }
+
+
 def _extract_indicator_snapshot(payload):
     """Build a compact snapshot used to detect indicator changes."""
     ta_data = payload.get("TechnicalAnalysis", {}) if isinstance(payload, dict) else {}
     pa = ta_data.get("price_action", {}) if isinstance(ta_data, dict) else {}
     regime = ta_data.get("volatility_regime", {}) if isinstance(ta_data, dict) else {}
     mtf = ta_data.get("multi_timeframe", {}) if isinstance(ta_data, dict) else {}
+    trade_guidance = _compute_trade_guidance(ta_data, payload.get("confidence", 0))
 
     return {
         "verdict": payload.get("verdict"),
@@ -227,6 +323,9 @@ def _extract_indicator_snapshot(payload):
         "alignment": mtf.get("alignment_label"),
         "adx_14": regime.get("adx_14"),
         "atr_percent": regime.get("atr_percent"),
+        "trade_sell_setup": trade_guidance.get("sellLevel"),
+        "trade_buy_setup": trade_guidance.get("buyLevel"),
+        "trade_exit_warning": trade_guidance.get("exitLevel"),
     }
 
 
