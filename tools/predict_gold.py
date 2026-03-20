@@ -240,7 +240,7 @@ def get_technical_analysis():
             return {"error": "Price data is malformed after cleanup."}
 
         # Calculate price indicators
-        df['EMA_20'] = ta.trend.EMAIndicator(df['Close'], window=20).ema_indicator()
+        df['EMA_20'] = ta.trend.EMAIndicator(df['Close'], window=50).ema_indicator()
         df['EMA_50'] = ta.trend.EMAIndicator(df['Close'], window=50).ema_indicator()
         df['RSI_14'] = ta.momentum.RSIIndicator(df['Close'], window=14).rsi()
         df['ATR_14'] = ta.volatility.AverageTrueRange(df['High'], df['Low'], df['Close'], window=14).average_true_range()
