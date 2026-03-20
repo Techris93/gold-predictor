@@ -2,11 +2,10 @@
 """
 predict_gold.py
 Helper tool for the XAUUSD Prediction Agent.
-Fetches 1H XAUUSD=X data using yfinance (no API key required for TA!), calculates EMA and RSI.
-Also fetches recent news headlines for sentiment analysis.
+Fetches 1H XAU/USD data using Twelve Data, calculates EMA and RSI.
 
 Prerequisites:
-    pip install yfinance pandas ta requests
+    pip install pandas ta requests twelvedata python-dotenv
 """
 
 import sys
@@ -18,13 +17,12 @@ from dotenv import load_dotenv
 load_dotenv()
 
 try:
-    import yfinance as yf
     import pandas as pd
     import ta
     from twelvedata import TDClient
 except ImportError:
     print(json.dumps({
-        "error": "Missing dependencies. Please run: pip install yfinance pandas ta requests twelvedata python-dotenv"
+        "error": "Missing dependencies. Please run: pip install pandas ta requests twelvedata python-dotenv"
     }))
     sys.exit(1)
 
@@ -56,21 +54,6 @@ def _calc_trend_from_close(close_series):
     return "Neutral"
 
 
-def _fetch_yf_trend(ticker, interval, period):
-    """Fetches a timeframe and returns trend plus datapoints."""
-    try:
-        df_tf = yf.Ticker(ticker).history(period=period, interval=interval)
-        if df_tf.empty or 'Close' not in df_tf.columns:
-            return {"trend": "Neutral", "data_points": 0}
-        close = pd.to_numeric(df_tf['Close'], errors='coerce').dropna()
-        return {
-            "trend": _calc_trend_from_close(close),
-            "data_points": int(len(close))
-        }
-    except Exception:
-        return {"trend": "Neutral", "data_points": 0}
-
-
 def _fetch_td_trend(symbol, interval, outputsize=200):
     """Fetches trend from TwelveData timeframe when available."""
     if not td_client:
@@ -92,57 +75,10 @@ def _fetch_td_trend(symbol, interval, outputsize=200):
         return {"trend": "Neutral", "data_points": 0, "source": "twelvedata"}
 
 
-def _derive_h4_trend_from_h1(ticker):
-    """Builds synthetic 4H candles from 1H data to measure higher timeframe trend."""
-    try:
-        df_h1 = yf.Ticker(ticker).history(period="60d", interval="1h")
-        if df_h1.empty:
-            return {"trend": "Neutral", "data_points": 0}
-
-        cols = ['Open', 'High', 'Low', 'Close']
-        for col in cols:
-            if col not in df_h1.columns:
-                return {"trend": "Neutral", "data_points": 0}
-            df_h1[col] = pd.to_numeric(df_h1[col], errors='coerce')
-
-        h4 = pd.DataFrame()
-        h4['Open'] = df_h1['Open'].resample('4h').first()
-        h4['High'] = df_h1['High'].resample('4h').max()
-        h4['Low'] = df_h1['Low'].resample('4h').min()
-        h4['Close'] = df_h1['Close'].resample('4h').last()
-        h4 = h4.dropna()
-
-        if h4.empty:
-            return {"trend": "Neutral", "data_points": 0}
-
-        return {
-            "trend": _calc_trend_from_close(h4['Close']),
-            "data_points": int(len(h4))
-        }
-    except Exception:
-        return {"trend": "Neutral", "data_points": 0}
-
-
-def _fetch_mtf_trends(td_symbol, ticker, h1_trend):
-    """Prefer TwelveData realtime MTF; fallback to yfinance/synthetic where needed."""
+def _fetch_mtf_trends(td_symbol, h1_trend):
+    """Fetches multi-timeframe trends strictly from Twelve Data."""
     m15 = _fetch_td_trend(symbol=td_symbol, interval="15min", outputsize=200)
     h4 = _fetch_td_trend(symbol=td_symbol, interval="4h", outputsize=200)
-
-    if m15.get("data_points", 0) < 55:
-        fallback_m15 = _fetch_yf_trend(ticker=ticker, interval="15m", period="5d")
-        m15 = {
-            "trend": fallback_m15.get("trend", "Neutral"),
-            "data_points": fallback_m15.get("data_points", 0),
-            "source": "yfinance",
-        }
-
-    if h4.get("data_points", 0) < 55:
-        fallback_h4 = _derive_h4_trend_from_h1(ticker=ticker)
-        h4 = {
-            "trend": fallback_h4.get("trend", "Neutral"),
-            "data_points": fallback_h4.get("data_points", 0),
-            "source": "yfinance_synth",
-        }
 
     trend_map = {"Bullish": 1, "Bearish": -1, "Neutral": 0}
     alignment_score = (
@@ -174,50 +110,36 @@ def _fetch_mtf_trends(td_symbol, ticker, h1_trend):
     }
 
 def get_technical_analysis():
-    """Fetches 1H interval data for Gold and calculates RSI and EMA."""
-    ticker = "GC=F" # Yahoo Ticker
-    td_symbol = "XAU/USD" # Twelve Data Symbol
-    
+    """Fetches 1H interval data for Gold and calculates RSI and EMA using Twelve Data only."""
+    td_symbol = "XAU/USD"  # Twelve Data Symbol
+
+    if not td_client:
+        return {"error": "TWELVE_DATA_API_KEY is missing or invalid. Twelve Data is required."}
+
     df = pd.DataFrame()
-    data_source = "yfinance (Delayed)"
-    
+    data_source = "Twelve Data"
+
     try:
-        # Try Twelve Data first if client is available
-        if td_client:
-            try:
-                # 1. Fetch TimeSeries for indicators
-                ts = td_client.time_series(symbol=td_symbol, interval="1h", outputsize=100)
-                df = ts.as_pandas()
-                
-                if not df.empty:
-                    data_source = "Twelve Data (Real-Time)"
-                    # Rename TD columns immediately to prevent KeyErrors later
-                    df.columns = [col.capitalize() for col in df.columns]
-                    
-                    # 2. Separately fetch Real-Time Price for the dashboard tick
-                    # This is wrapped so a price failure doesn't kill the TA analysis
-                    try:
-                        price_data = td_client.price(symbol=td_symbol).as_json()
-                        live_price = float(price_data.get('price', 0))
-                        if live_price > 0:
-                            df.iloc[-1, df.columns.get_loc('Close')] = live_price
-                    except Exception as p_err:
-                        print(f"Twelve Data Price Tick Error: {p_err}. Using last candle close instead.")
+        try:
+            ts = td_client.time_series(symbol=td_symbol, interval="1h", outputsize=100)
+            df = ts.as_pandas()
 
-            except Exception as td_err:
-                print(f"Twelve Data TimeSeries Error: {td_err}. Falling back to yfinance...")
+            if not df.empty:
+                data_source = "Twelve Data (Real-Time)"
+                df.columns = [col.capitalize() for col in df.columns]
 
-        # Fallback to yfinance if df is still empty
-        if df.empty:
-            gold = yf.Ticker(ticker)
-            df = gold.history(period="5d", interval="1h")
-            
-            if df.empty:
-                # Last resort: daily data
-                df = gold.history(period="1mo", interval="1d")
+                try:
+                    price_data = td_client.price(symbol=td_symbol).as_json()
+                    live_price = float(price_data.get('price', 0))
+                    if live_price > 0:
+                        df.iloc[-1, df.columns.get_loc('Close')] = live_price
+                except Exception as p_err:
+                    print(f"Twelve Data Price Tick Error: {p_err}. Using last candle close instead.")
+        except Exception as td_err:
+            return {"error": f"Twelve Data TimeSeries Error: {td_err}"}
 
         if df.empty:
-            return {"error": "Failed to fetch price data."}
+            return {"error": "Failed to fetch price data from Twelve Data."}
 
         # Normalize core OHLCV columns to numeric for stable indicator math
         for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
@@ -352,8 +274,8 @@ def get_technical_analysis():
         elif latest['CMF_14'] < 0:
             volume_signal = "Slight Selling Bias"
 
-        # Multi-timeframe trend confirmation (15m + 1h + 4h), preferring realtime feeds.
-        mtf = _fetch_mtf_trends(td_symbol=td_symbol, ticker=ticker, h1_trend=ema_trend)
+        # Multi-timeframe trend confirmation (15m + 1h + 4h) from Twelve Data only.
+        mtf = _fetch_mtf_trends(td_symbol=td_symbol, h1_trend=ema_trend)
 
         return {
             "data_source": data_source,
@@ -396,28 +318,12 @@ def get_technical_analysis():
         return {"error": str(e)}
 
 def get_sentiment_analysis():
-    """Fetches recent news headlines related to gold for sentiment analysis."""
-    # GLD is a highly tracked ETF and provides much better news coverage than specific futures tickers
-    try:
-        gold = yf.Ticker("GLD")
-        news = gold.news
-        headlines = []
-        if news:
-            for article in news[:5]:
-                # yfinance news structure changed to nest data under 'content'
-                content = article.get("content", article) 
-                headlines.append({
-                    "title": content.get("title", "No Title"),
-                    "publisher": content.get("provider", {}).get("displayName", "Unknown"),
-                    "link": content.get("clickThroughUrl", {}).get("url", "#")
-                })
-        
-        if not headlines:
-            return [{"title": "No recent gold news found.", "publisher": "System", "link": "#"}]
-            
-        return headlines
-    except Exception as e:
-        return [{"title": f"Sentiment Query Error: {str(e)}", "publisher": "Error", "link": "#"}]
+    """Placeholder sentiment output when no dedicated news provider is configured."""
+    return [{
+        "title": "News sentiment is unavailable because the Yahoo Finance fallback was removed.",
+        "publisher": "System",
+        "link": "#"
+    }]
 
 def main():
     ta_data = get_technical_analysis()
