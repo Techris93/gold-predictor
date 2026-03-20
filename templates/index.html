@@ -545,19 +545,19 @@
             <span class="metric-value" id="ar-status">Pending</span>
           </div>
           <div class="metric-row">
-            <span class="metric-label">Median Score</span>
+            <span class="metric-label">Top ROI</span>
             <span class="metric-value" id="ar-score">---</span>
           </div>
           <div class="metric-row">
-            <span class="metric-label">Pass Rate</span>
-            <span class="metric-value" id="ar-pass-rate">---</span>
+            <span class="metric-label">Winning Params</span>
+            <span class="metric-value" id="ar-pass-rate" style="font-size: 0.8rem; text-align: right; max-width: 56%">---</span>
           </div>
           <div class="metric-row">
             <span class="metric-label">Promotion Gate</span>
             <span class="metric-value" id="ar-promote">---</span>
           </div>
           <div class="metric-row">
-            <span class="metric-label">Updated</span>
+            <span class="metric-label">Last Swarm Run</span>
             <span class="metric-value" id="ar-updated" style="font-size: 0.8rem"
               >---</span
             >
@@ -863,18 +863,27 @@
         }
         if (scoreEl) {
           scoreEl.innerText =
-            data.median_score !== null && data.median_score !== undefined
-              ? Number(data.median_score).toFixed(3)
-              : "N/A";
+            data.summary?.roi !== null && data.summary?.roi !== undefined
+              ? `${Number(data.summary.roi).toFixed(2)}%`
+              : data.median_score !== null && data.median_score !== undefined
+                ? `${Number(data.median_score).toFixed(2)}%`
+                : "N/A";
         }
         if (passRateEl) {
-          passRateEl.innerText =
-            data.pass_rate !== null && data.pass_rate !== undefined
-              ? `${(Number(data.pass_rate) * 100).toFixed(1)}%`
-              : "N/A";
+          const best = data.best_params || {};
+          const emaText = best.ema_short !== undefined && best.ema_long !== undefined
+            ? `EMA ${best.ema_short}/${best.ema_long}`
+            : "EMA -/-";
+          const rsiText = best.rsi_overbought !== undefined && best.rsi_oversold !== undefined
+            ? `RSI ${best.rsi_overbought}/${best.rsi_oversold}`
+            : "RSI -/-";
+          const cmfText = best.cmf_window !== undefined
+            ? `CMF ${best.cmf_window}`
+            : "CMF -";
+          passRateEl.innerText = `${emaText} · ${rsiText} · ${cmfText}`;
         }
         if (promoteEl) {
-          promoteEl.innerText = data.promote ? "Pass" : "Hold";
+          promoteEl.innerText = data.promote ? "Promoted" : "Hold";
           promoteEl.className = `metric-value ${data.promote ? "value-bullish" : "value-bearish"}`;
           promoteEl.title = data.promotion_reason || "";
         }
