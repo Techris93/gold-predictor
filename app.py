@@ -502,18 +502,50 @@ def unsubscribe_push():
 
 @app.route('/api/autoresearch/latest')
 def get_autoresearch_latest():
-    report_path = Path(__file__).resolve().parent / "tools" / "reports" / "autoresearch_last.json"
+    base_dir = Path(__file__).resolve().parent
+    swarm_report_path = base_dir / "data" / "swarm" / "latest_result.json"
+    legacy_report_path = base_dir / "tools" / "reports" / "autoresearch_last.json"
 
-    if not report_path.exists():
+    if swarm_report_path.exists():
+        try:
+            report = json.loads(swarm_report_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            return jsonify({"status": "error", "message": f"Failed to read swarm report: {e}"}), 500
+
+        best = report.get("best_params") or {}
+        top_results = report.get("top_results") or []
+        top_result = top_results[0] if isinstance(top_results, list) and top_results else {}
+        roi = best.get("roi")
+        promote = report.get("status") == "success" and bool(best)
+
+        return jsonify({
+            "status": "success" if report.get("status") != "not_run" else "idle",
+            "generated_at": report.get("generated_at"),
+            "promote": promote,
+            "promotion_reason": "Loaded from swarm latest_result.json" if promote else "Swarm has not produced a fresh result yet.",
+            "best_params": best,
+            "median_score": roi,
+            "pass_rate": 1.0 if promote else None,
+            "summary": {
+                "roi": roi,
+                "top_ranked_candidates": len(top_results),
+                "winning_ema": f"{best.get('ema_short', '-')}/{best.get('ema_long', '-')}",
+                "winning_rsi": f"{best.get('rsi_overbought', '-')}/{best.get('rsi_oversold', '-')}",
+                "winning_cmf": best.get("cmf_window"),
+                "top_candidate_roi": top_result.get("roi") if isinstance(top_result, dict) else None,
+            },
+        })
+
+    if not legacy_report_path.exists():
         return jsonify({
             "status": "error",
-            "message": "Autoresearch report not found. Run tools/autoresearch_loop.py first."
+            "message": "Autoresearch report not found. Run tools/swarm_optimize.py first."
         }), 404
 
     try:
-        report = json.loads(report_path.read_text(encoding="utf-8"))
+        report = json.loads(legacy_report_path.read_text(encoding="utf-8"))
     except Exception as e:
-        return jsonify({"status": "error", "message": f"Failed to read autoresearch report: {e}"}), 500
+        return jsonify({"status": "error", "message": f"Failed to read legacy autoresearch report: {e}"}), 500
 
     best = report.get("best") or {}
     summary = best.get("summary") if isinstance(best, dict) else {}
