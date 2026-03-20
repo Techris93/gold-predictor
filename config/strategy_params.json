@@ -12,5 +12,9 @@
   "cmf_window": 14,
   "cmf_strong_buy_threshold": 0.1,
   "cmf_strong_sell_threshold": -0.1,
-  "mtf_intervals": ["15min", "1h", "4h"]
+  "mtf_intervals": [
+    "15min",
+    "1h",
+    "4h"
+  ]
 }

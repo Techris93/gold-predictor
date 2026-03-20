@@ -1,6 +1,104 @@
 {
-  "status": "not_run",
-  "generated_at": null,
-  "best_params": {},
-  "top_results": []
+  "status": "success",
+  "generated_at": "2026-03-20T04:20:28.040396+00:00",
+  "best_params": {
+    "ema_short": 20,
+    "ema_long": 50,
+    "rsi_overbought": 70,
+    "rsi_oversold": 20,
+    "cmf_window": 14,
+    "roi": 132.91
+  },
+  "top_results": [
+    {
+      "rank": 1,
+      "ema_short": 20,
+      "ema_long": 50,
+      "rsi_overbought": 70,
+      "rsi_oversold": 20,
+      "cmf_window": 14,
+      "roi": 132.91
+    },
+    {
+      "rank": 2,
+      "ema_short": 20,
+      "ema_long": 50,
+      "rsi_overbought": 70,
+      "rsi_oversold": 25,
+      "cmf_window": 14,
+      "roi": 132.91
+    },
+    {
+      "rank": 3,
+      "ema_short": 20,
+      "ema_long": 50,
+      "rsi_overbought": 70,
+      "rsi_oversold": 30,
+      "cmf_window": 14,
+      "roi": 132.91
+    },
+    {
+      "rank": 4,
+      "ema_short": 20,
+      "ema_long": 50,
+      "rsi_overbought": 75,
+      "rsi_oversold": 20,
+      "cmf_window": 14,
+      "roi": 132.91
+    },
+    {
+      "rank": 5,
+      "ema_short": 20,
+      "ema_long": 50,
+      "rsi_overbought": 75,
+      "rsi_oversold": 25,
+      "cmf_window": 14,
+      "roi": 132.91
+    },
+    {
+      "rank": 6,
+      "ema_short": 20,
+      "ema_long": 50,
+      "rsi_overbought": 75,
+      "rsi_oversold": 30,
+      "cmf_window": 14,
+      "roi": 132.91
+    },
+    {
+      "rank": 7,
+      "ema_short": 20,
+      "ema_long": 50,
+      "rsi_overbought": 80,
+      "rsi_oversold": 20,
+      "cmf_window": 14,
+      "roi": 132.91
+    },
+    {
+      "rank": 8,
+      "ema_short": 20,
+      "ema_long": 50,
+      "rsi_overbought": 80,
+      "rsi_oversold": 25,
+      "cmf_window": 14,
+      "roi": 132.91
+    },
+    {
+      "rank": 9,
+      "ema_short": 20,
+      "ema_long": 50,
+      "rsi_overbought": 80,
+      "rsi_oversold": 30,
+      "cmf_window": 14,
+      "roi": 132.91
+    },
+    {
+      "rank": 10,
+      "ema_short": 9,
+      "ema_long": 50,
+      "rsi_overbought": 70,
+      "rsi_oversold": 20,
+      "cmf_window": 14,
+      "roi": 108.16
+    }
+  ]
 }
