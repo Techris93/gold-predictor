@@ -602,29 +602,47 @@ def unsubscribe_push():
 @app.route('/api/autoresearch/latest')
 def get_autoresearch_latest():
     base_dir = Path(__file__).resolve().parent
+    promoted_report_path = base_dir / "data" / "swarm" / "promoted_result.json"
     swarm_report_path = base_dir / "data" / "swarm" / "latest_result.json"
+    decision_report_path = base_dir / "data" / "swarm" / "promotion_decision.json"
     legacy_report_path = base_dir / "tools" / "reports" / "autoresearch_last.json"
 
-    if swarm_report_path.exists():
+    def _read_report(path):
         try:
-            report = json.loads(swarm_report_path.read_text(encoding="utf-8"))
+            return json.loads(path.read_text(encoding="utf-8"))
         except Exception as e:
-            return jsonify({"status": "error", "message": f"Failed to read swarm report: {e}"}), 500
+            raise RuntimeError(f"Failed to read {path.name}: {e}") from e
 
-        best = report.get("best_params") or {}
-        top_results = report.get("top_results") or []
+    if promoted_report_path.exists() or swarm_report_path.exists():
+        try:
+            promoted_report = _read_report(promoted_report_path) if promoted_report_path.exists() else None
+            latest_report = _read_report(swarm_report_path) if swarm_report_path.exists() else None
+            decision_report = _read_report(decision_report_path) if decision_report_path.exists() else None
+        except RuntimeError as e:
+            return jsonify({"status": "error", "message": str(e)}), 500
+
+        display_report = promoted_report or latest_report or {}
+        best = display_report.get("best_params") or {}
+        latest_best = (latest_report or {}).get("best_params") or {}
+        latest_summary = (latest_report or {}).get("summary") or {}
+        display_summary = display_report.get("summary") or {}
+        top_results = (latest_report or {}).get("top_results") or display_report.get("top_results") or []
         top_result = top_results[0] if isinstance(top_results, list) and top_results else {}
-        roi = best.get("roi")
-        promote = report.get("status") == "success" and bool(best)
+        roi = best.get("roi") or display_summary.get("roi")
+        latest_generated_at = (latest_report or {}).get("generated_at")
+        promote = bool(promoted_report or display_report.get("promote")) and bool(best)
+        decision_reason = (decision_report or {}).get("promotion_reason") or (latest_report or {}).get("promotion_reason")
 
         return jsonify({
-            "status": "success" if report.get("status") != "not_run" else "idle",
-            "generated_at": report.get("generated_at"),
+            "status": "success" if display_report else "idle",
+            "generated_at": display_report.get("generated_at"),
+            "latest_generated_at": latest_generated_at,
             "promote": promote,
-            "promotion_reason": "Loaded from swarm latest_result.json" if promote else "Swarm has not produced a fresh result yet.",
+            "promotion_reason": decision_reason or ("Loaded from promoted_result.json" if promote else "Swarm has not produced a fresh result yet."),
             "best_params": best,
+            "latest_best_params": latest_best,
             "median_score": roi,
-            "pass_rate": 1.0 if promote else None,
+            "pass_rate": display_summary.get("pass_rate"),
             "summary": {
                 "roi": roi,
                 "top_ranked_candidates": len(top_results),
@@ -632,7 +650,14 @@ def get_autoresearch_latest():
                 "winning_rsi": f"{best.get('rsi_overbought', '-')}/{best.get('rsi_oversold', '-')}",
                 "winning_cmf": best.get("cmf_window"),
                 "top_candidate_roi": top_result.get("roi") if isinstance(top_result, dict) else None,
+                "trades": display_summary.get("trades"),
+                "max_drawdown": display_summary.get("max_drawdown"),
+                "profit_factor": display_summary.get("profit_factor"),
+                "expectancy": display_summary.get("expectancy"),
+                "latest_run_roi": latest_summary.get("roi"),
+                "latest_run_promote": (latest_report or {}).get("promote"),
             },
+            "checks": (decision_report or {}).get("checks") or (latest_report or {}).get("checks") or {},
         })
 
     if not legacy_report_path.exists():
