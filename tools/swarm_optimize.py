@@ -17,6 +17,13 @@ LATEST_RESULT_FILE = os.path.join(BASE_DIR, "data", "swarm", "latest_result.json
 PROMOTED_RESULT_FILE = os.path.join(BASE_DIR, "data", "swarm", "promoted_result.json")
 PROMOTION_DECISION_FILE = os.path.join(BASE_DIR, "data", "swarm", "promotion_decision.json")
 
+NOTIFY_WHATSAPP_TARGET = os.environ.get("GOLD_PREDICTOR_NOTIFY_WHATSAPP", "+905528493671")
+NOTIFY_TELEGRAM_TARGET = os.environ.get("GOLD_PREDICTOR_NOTIFY_TELEGRAM", "623118122")
+NOTIFY_CHANNELS = [
+    ("whatsapp", NOTIFY_WHATSAPP_TARGET),
+    ("telegram", NOTIFY_TELEGRAM_TARGET),
+]
+
 MIN_ROI_IMPROVEMENT = 1.5
 MIN_PASS_RATE = 0.60
 MAX_PASS_RATE_DROP = 0.03
@@ -177,6 +184,34 @@ def _write_json(file_path, data):
         f.write("\n")
 
 
+def _notify_user(message):
+    for channel, target in NOTIFY_CHANNELS:
+        if not target:
+            continue
+        try:
+            subprocess.run(
+                [
+                    "openclaw",
+                    "message",
+                    "send",
+                    "--channel",
+                    channel,
+                    "--target",
+                    target,
+                    "--message",
+                    message,
+                ],
+                cwd=BASE_DIR,
+                check=True,
+                timeout=60,
+                capture_output=True,
+                text=True,
+            )
+            print(f"📣 Sent {channel} notification to {target}")
+        except Exception as e:
+            print(f"⚠️ Failed to send {channel} notification to {target}: {e}")
+
+
 def _read_json(file_path):
     try:
         with open(file_path, "r", encoding="utf-8") as f:
@@ -329,7 +364,9 @@ def run_swarm():
 
     df = yf.Ticker("GC=F").history(period="730d", interval="1h")
     if df.empty:
+        message = "Gold predictor swarm run failed: historical data fetch returned no data, so no optimization or promotion decision was made."
         print("Failed to fetch historical data.")
+        _notify_user(message)
         return
 
     ema_shorts = [9, 12, 20]
@@ -399,6 +436,15 @@ def run_swarm():
     if not promotion_decision["promote"]:
         print(f"⚖️ Promotion gate rejected candidate. {promotion_decision['promotion_reason']}")
         print("📦 Updated latest run artifacts only. Active promoted strategy remains unchanged.")
+        candidate = best_result["params"]
+        candidate_summary = best_result["summary"]
+        rejection_message = (
+            "Gold predictor swarm completed with no promotion. "
+            f"Best candidate was EMA {candidate['ema_short']}/{candidate['ema_long']}, "
+            f"RSI {candidate['rsi_overbought']}/{candidate['rsi_oversold']}, CMF {candidate['cmf_window']}, "
+            f"ROI {candidate_summary['roi']:.2f}%. {promotion_decision['promotion_reason']}"
+        )
+        _notify_user(rejection_message)
         return
 
     print("\n⚡ Promotion gate passed. Updating active strategy JSON...")
@@ -429,6 +475,7 @@ def run_swarm():
             "data/swarm/promoted_result.json",
             "data/swarm/promotion_decision.json",
         ]
+        commit_hash = None
         if any(target in status_output.stdout for target in tracked_targets):
             commit_msg = (
                 f"Auto-Evolve: New Best Strategy Found | ROI: {best_result['summary']['roi']:.2f}% | "
@@ -437,12 +484,30 @@ def run_swarm():
             )
             subprocess.run(["git", "add", *tracked_targets], cwd=BASE_DIR, check=True)
             subprocess.run(["git", "commit", "-m", commit_msg], cwd=BASE_DIR, check=True)
+            commit_hash = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=BASE_DIR, check=True, capture_output=True, text=True).stdout.strip()
             print("💾 Saved promoted strategy state. You can now run `git push` to deploy the new strategy.")
         else:
             print("⚖️ Promotion passed but tracked artifacts are unchanged. No commit needed.")
+
+        promoted_message = (
+            "Gold predictor promoted a new strategy. "
+            f"EMA {best_result['params']['ema_short']}/{best_result['params']['ema_long']}, "
+            f"RSI {best_result['params']['rsi_overbought']}/{best_result['params']['rsi_oversold']}, "
+            f"CMF {best_result['params']['cmf_window']}, ROI {best_result['summary']['roi']:.2f}%."
+        )
+        if commit_hash:
+            promoted_message += f" Commit {commit_hash}."
+        _notify_user(promoted_message)
     except Exception as e:
+        failure_message = f"Gold predictor swarm run failed while updating promoted strategy state: {e}"
         print("⚠️ Failed to update promoted strategy state:", e)
+        _notify_user(failure_message)
 
 
 if __name__ == "__main__":
-    run_swarm()
+    try:
+        run_swarm()
+    except Exception as e:
+        print(f"❌ Unhandled swarm failure: {e}")
+        _notify_user(f"Gold predictor swarm run failed with an unhandled error: {e}")
+        raise
