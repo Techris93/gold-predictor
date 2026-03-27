@@ -745,7 +745,7 @@
         loader.classList.remove("hide");
 
         try {
-          const response = await fetch("/api/predict");
+          const response = await fetch("/api/predict", { cache: "no-store" });
           if (!response.ok) {
             throw new Error(`Server Error: ${response.status}`);
           }

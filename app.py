@@ -7,6 +7,10 @@ import time
 from pathlib import Path
 from tools import predict_gold
 
+CACHE_DIR = Path(__file__).resolve().parent / "data" / "cache"
+PREDICTION_CACHE_FILE = CACHE_DIR / "prediction_response.json"
+PREDICTION_CACHE_TTL_SECONDS = max(15, int(os.getenv("PREDICTION_CACHE_TTL_SECONDS", "60")))
+
 try:
     from pywebpush import WebPushException, webpush
 except ImportError:
@@ -210,6 +214,56 @@ def _is_material_change(changes):
     return False
 
 
+def _load_prediction_cache():
+    try:
+        data = json.loads(PREDICTION_CACHE_FILE.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
+    return None
+
+
+
+def _save_prediction_cache(payload, status_code):
+    if not isinstance(payload, dict) or int(status_code) != 200:
+        return
+    try:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        PREDICTION_CACHE_FILE.write_text(
+            json.dumps(
+                {
+                    "cached_at": int(time.time()),
+                    "status_code": int(status_code),
+                    "payload": payload,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
+
+def _get_fresh_cached_prediction(max_age_seconds=PREDICTION_CACHE_TTL_SECONDS):
+    cache = _load_prediction_cache()
+    if not cache:
+        return None
+    cached_at = int(cache.get("cached_at") or 0)
+    if cached_at <= 0:
+        return None
+    if int(time.time()) - cached_at > int(max_age_seconds):
+        return None
+    payload = cache.get("payload")
+    status_code = int(cache.get("status_code") or 200)
+    if isinstance(payload, dict):
+        return payload, status_code, cached_at
+    return None
+
+
+
 def _compute_trade_guidance(ta_data, confidence):
     """Mirror the UI trade guidance so backend notifications can track it."""
     if not isinstance(ta_data, dict):
@@ -342,8 +396,17 @@ def _diff_snapshot(prev_snapshot, cur_snapshot):
     return changed
 
 
-def _build_prediction_response():
+def _build_prediction_response(force_refresh=False):
     """Central prediction builder used by both HTTP and websocket monitor."""
+    if not force_refresh:
+        cached = _get_fresh_cached_prediction()
+        if cached:
+            payload, status_code, cached_at = cached
+            payload = dict(payload)
+            payload["served_from_cache"] = True
+            payload["cache_age_seconds"] = max(0, int(time.time()) - int(cached_at))
+            return payload, status_code
+
     # Fetch data using the existing script logic
     ta_data = predict_gold.get_technical_analysis()
     sa_data = predict_gold.get_sentiment_analysis()
@@ -355,6 +418,19 @@ def _build_prediction_response():
         sa_data = []
 
     if ta_data.get("error"):
+        stale = _load_prediction_cache()
+        if stale and isinstance(stale.get("payload"), dict):
+            payload = dict(stale["payload"])
+            cached_at = int(stale.get("cached_at") or 0)
+            payload.update({
+                "status": "success",
+                "served_from_cache": True,
+                "cache_stale": True,
+                "cache_age_seconds": max(0, int(time.time()) - cached_at) if cached_at else None,
+                "warning": ta_data["error"],
+            })
+            return payload, 200
+
         return {
             "status": "error",
             "message": ta_data["error"],
@@ -362,6 +438,7 @@ def _build_prediction_response():
             "confidence": 50,
             "TechnicalAnalysis": ta_data,
             "SentimentalAnalysis": sa_data,
+            "served_from_cache": False,
         }, 502
 
     # Calculate verdict using trend + multi-timeframe + regime + price action
@@ -479,13 +556,16 @@ def _build_prediction_response():
     # Ensure it stays within reasonable bounds
     confidence = round(min(max(confidence, 50), 95))
 
-    return {
+    payload = {
         "status": "success",
         "verdict": verdict,
         "confidence": confidence,
         "TechnicalAnalysis": ta_data,
         "SentimentalAnalysis": sa_data,
-    }, 200
+        "served_from_cache": False,
+    }
+    _save_prediction_cache(payload, 200)
+    return payload, 200
 
 
 def _indicator_monitor_loop():
@@ -563,6 +643,17 @@ def apply_security_headers(response):
 @app.route('/')
 def home():
     return render_template('index.html')
+
+
+@app.route('/healthz')
+def healthz():
+    cache = _load_prediction_cache()
+    return jsonify({
+        "status": "ok",
+        "cache_present": bool(cache),
+        "cache_ttl_seconds": PREDICTION_CACHE_TTL_SECONDS,
+        "provider": "twelvedata",
+    }), 200
 
 
 @app.route('/sw.js')
