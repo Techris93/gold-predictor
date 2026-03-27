@@ -749,12 +749,19 @@
         }).catch(() => {});
       }
 
+      let hideLoaderTimer = null;
+      let priceFlashTimer = null;
+
       async function fetchPrediction() {
         const loader = document.getElementById("loading-screen");
+        if (hideLoaderTimer) {
+          clearTimeout(hideLoaderTimer);
+          hideLoaderTimer = null;
+        }
         loader.classList.remove("hide");
 
         try {
-          const response = await fetch("/api/predict");
+          const response = await fetch("/api/predict", { cache: "no-store" });
           if (!response.ok) {
             throw new Error(`Server Error: ${response.status}`);
           }
@@ -770,9 +777,10 @@
           showInlineError("Check your internet connection or API key.");
         } finally {
           // Force loader to hide even if JS crashed
-          setTimeout(() => {
+          hideLoaderTimer = setTimeout(() => {
             loader.classList.add("hide");
-          }, 800);
+            hideLoaderTimer = null;
+          }, 250);
         }
       }
 
@@ -780,7 +788,18 @@
         document.getElementById("verdict-badge").innerText = "ERROR";
         document.getElementById("verdict-badge").className = "badge bearish";
         document.getElementById("current-price").innerText = "---";
-        alert("MARKET DATA ERROR: " + msg);
+
+        let sourceEl = document.getElementById("price-source");
+        if (!sourceEl) {
+          sourceEl = document.createElement("div");
+          sourceEl.id = "price-source";
+          sourceEl.style.fontSize = "0.7rem";
+          sourceEl.style.marginTop = "-0.5rem";
+          sourceEl.style.marginBottom = "1rem";
+          document.getElementById("current-price").after(sourceEl);
+        }
+        sourceEl.innerText = `Market data unavailable: ${msg}`;
+        sourceEl.style.color = "var(--bearish)";
       }
 
       function updateSocketState(text, isGood) {
@@ -1298,13 +1317,23 @@
         priceEl.innerText = `$${newPrice.toFixed(2)}`;
 
         // Highlight price change
+        if (priceFlashTimer) {
+          clearTimeout(priceFlashTimer);
+          priceFlashTimer = null;
+        }
         if (oldPrice > 0) {
           if (newPrice > oldPrice) {
             priceEl.style.color = "var(--bullish)";
-            setTimeout(() => (priceEl.style.color = "white"), 1000);
+            priceFlashTimer = setTimeout(() => {
+              priceEl.style.color = "white";
+              priceFlashTimer = null;
+            }, 700);
           } else if (newPrice < oldPrice) {
             priceEl.style.color = "var(--bearish)";
-            setTimeout(() => (priceEl.style.color = "white"), 1000);
+            priceFlashTimer = setTimeout(() => {
+              priceEl.style.color = "white";
+              priceFlashTimer = null;
+            }, 700);
           }
         }
 
