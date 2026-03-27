@@ -203,6 +203,58 @@
         border-radius: 12px;
       }
 
+      .accordion-section {
+        margin-bottom: 0.5rem;
+      }
+
+      .accordion-toggle {
+        width: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+        background: transparent;
+        border: none;
+        padding: 0;
+        margin-bottom: 1rem;
+        color: var(--gold-primary);
+        cursor: pointer;
+      }
+
+      .accordion-toggle-label {
+        color: var(--gold-primary);
+        font-size: 0.8rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+      }
+
+      .accordion-icon {
+        width: 18px;
+        height: 18px;
+        flex-shrink: 0;
+        color: var(--gold-primary);
+        transition: transform 0.25s ease;
+      }
+
+      .accordion-toggle[aria-expanded="true"] .accordion-icon {
+        transform: rotate(180deg);
+      }
+
+      .accordion-content {
+        display: grid;
+        grid-template-rows: 0fr;
+        transition: grid-template-rows 0.25s ease;
+      }
+
+      .accordion-content.open {
+        grid-template-rows: 1fr;
+      }
+
+      .accordion-content-inner {
+        overflow: hidden;
+      }
+
       .metric-label {
         color: var(--text-muted);
         font-size: 0.85rem;
@@ -526,41 +578,41 @@
         </div>
       </div>
 
-      <div style="margin-bottom: 0.5rem">
-        <div
-          style="
-            margin-bottom: 1rem;
-            color: var(--gold-primary);
-            font-size: 0.8rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-          "
+      <div class="accordion-section">
+        <button
+          type="button"
+          class="accordion-toggle"
+          id="ar-toggle"
+          aria-expanded="false"
+          aria-controls="ar-summary"
         >
-          Autoresearch
-        </div>
-        <div id="ar-summary">
-          <div class="metric-row">
-            <span class="metric-label">Status</span>
-            <span class="metric-value" id="ar-status">Pending</span>
-          </div>
-          <div class="metric-row">
-            <span class="metric-label">Top ROI</span>
-            <span class="metric-value" id="ar-score">---</span>
-          </div>
-          <div class="metric-row">
-            <span class="metric-label">Winning Params</span>
-            <span class="metric-value" id="ar-pass-rate" style="font-size: 0.8rem; text-align: right; max-width: 56%">---</span>
-          </div>
-          <div class="metric-row">
-            <span class="metric-label">Promotion Gate</span>
-            <span class="metric-value" id="ar-promote">---</span>
-          </div>
-          <div class="metric-row">
-            <span class="metric-label">Last Swarm Run</span>
-            <span class="metric-value" id="ar-updated" style="font-size: 0.8rem"
-              >---</span
-            >
+          <span class="accordion-toggle-label">Autoresearch</span>
+          <svg class="accordion-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+        <div id="ar-summary" class="accordion-content" hidden>
+          <div class="accordion-content-inner">
+            <div class="metric-row">
+              <span class="metric-label">Status</span>
+              <span class="metric-value" id="ar-status">Pending</span>
+            </div>
+            <div class="metric-row">
+              <span class="metric-label">Top ROI</span>
+              <span class="metric-value" id="ar-score">---</span>
+            </div>
+            <div class="metric-row">
+              <span class="metric-label">Winning Params</span>
+              <span class="metric-value" id="ar-pass-rate" style="font-size: 0.8rem; text-align: right; max-width: 56%">---</span>
+            </div>
+            <div class="metric-row">
+              <span class="metric-label">Promotion Gate</span>
+              <span class="metric-value" id="ar-promote">---</span>
+            </div>
+            <div class="metric-row">
+              <span class="metric-label">Last Swarm Run</span>
+              <span class="metric-value" id="ar-updated" style="font-size: 0.8rem">---</span>
+            </div>
           </div>
         </div>
       </div>
@@ -826,6 +878,37 @@
 
           // Keep the full dashboard in sync after a push event.
           fetchPrediction();
+        });
+      }
+
+      function setAccordionOpen(contentEl, toggleEl, isOpen) {
+        if (!contentEl || !toggleEl) return;
+        toggleEl.setAttribute("aria-expanded", String(isOpen));
+        if (isOpen) {
+          contentEl.hidden = false;
+          requestAnimationFrame(() => {
+            contentEl.classList.add("open");
+          });
+        } else {
+          contentEl.classList.remove("open");
+          window.setTimeout(() => {
+            if (toggleEl.getAttribute("aria-expanded") === "false") {
+              contentEl.hidden = true;
+            }
+          }, 250);
+        }
+      }
+
+      function initAutoresearchAccordion() {
+        const toggleEl = document.getElementById("ar-toggle");
+        const contentEl = document.getElementById("ar-summary");
+        if (!toggleEl || !contentEl) return;
+
+        setAccordionOpen(contentEl, toggleEl, false);
+
+        toggleEl.addEventListener("click", () => {
+          const isOpen = toggleEl.getAttribute("aria-expanded") === "true";
+          setAccordionOpen(contentEl, toggleEl, !isOpen);
         });
       }
 
@@ -1367,6 +1450,7 @@
       // Fetch on load
       window.addEventListener("DOMContentLoaded", () => {
         syncAlertsButton();
+        initAutoresearchAccordion();
         ensureServiceWorker().then(() => {
           if ("Notification" in window && Notification.permission === "granted") {
             subscribeBackgroundPush();
