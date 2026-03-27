@@ -203,6 +203,64 @@
         border-radius: 12px;
       }
 
+      .ar-card {
+        margin-bottom: 0.5rem;
+      }
+
+      .ar-toggle {
+        width: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+        margin-bottom: 0.75rem;
+        padding: 0;
+        background: transparent;
+        border: 0;
+        color: inherit;
+        cursor: pointer;
+      }
+
+      .ar-toggle:focus-visible {
+        outline: 2px solid rgba(255, 215, 0, 0.45);
+        outline-offset: 6px;
+        border-radius: 10px;
+      }
+
+      .ar-heading {
+        color: var(--gold-primary);
+        font-size: 0.8rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+      }
+
+      .ar-toggle-meta {
+        display: flex;
+        align-items: center;
+        gap: 0.6rem;
+        margin-left: auto;
+        color: var(--text-muted);
+        font-size: 0.78rem;
+      }
+
+      .ar-toggle-badge {
+        color: var(--gold-primary);
+        font-weight: 600;
+      }
+
+      .ar-chevron {
+        width: 16px;
+        height: 16px;
+        flex-shrink: 0;
+        transition: transform 0.18s ease;
+        color: var(--gold-primary);
+      }
+
+      .ar-toggle[aria-expanded="false"] .ar-chevron {
+        transform: rotate(-90deg);
+      }
+
       .metric-label {
         color: var(--text-muted);
         font-size: 0.85rem;
@@ -526,20 +584,23 @@
         </div>
       </div>
 
-      <div style="margin-bottom: 0.5rem">
-        <div
-          style="
-            margin-bottom: 1rem;
-            color: var(--gold-primary);
-            font-size: 0.8rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-          "
+      <div class="ar-card">
+        <button
+          type="button"
+          class="ar-toggle"
+          id="ar-toggle"
+          aria-expanded="false"
+          aria-controls="ar-summary"
         >
-          Autoresearch
-        </div>
-        <div id="ar-summary">
+          <span class="ar-heading">Autoresearch</span>
+          <span class="ar-toggle-meta">
+            <span class="ar-toggle-badge" id="ar-toggle-status">Pending</span>
+            <svg class="ar-chevron" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+            </svg>
+          </span>
+        </button>
+        <div id="ar-summary" hidden>
           <div class="metric-row">
             <span class="metric-label">Status</span>
             <span class="metric-value" id="ar-status">Pending</span>
@@ -829,6 +890,24 @@
         });
       }
 
+      function setAutoresearchExpanded(expanded) {
+        const toggle = document.getElementById("ar-toggle");
+        const panel = document.getElementById("ar-summary");
+        if (!toggle || !panel) return;
+        toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
+        panel.hidden = !expanded;
+      }
+
+      function initAutoresearchToggle() {
+        const toggle = document.getElementById("ar-toggle");
+        if (!toggle || toggle.dataset.bound === "1") return;
+        toggle.dataset.bound = "1";
+        toggle.addEventListener("click", () => {
+          const expanded = toggle.getAttribute("aria-expanded") === "true";
+          setAutoresearchExpanded(!expanded);
+        });
+      }
+
       async function fetchAutoresearchSummary() {
         try {
           const response = await fetch("/api/autoresearch/latest");
@@ -839,9 +918,13 @@
           updateAutoresearchUI(data);
         } catch (error) {
           const statusEl = document.getElementById("ar-status");
+          const toggleStatusEl = document.getElementById("ar-toggle-status");
           if (statusEl) {
             statusEl.innerText = "No report";
             statusEl.className = "metric-value value-bearish";
+          }
+          if (toggleStatusEl) {
+            toggleStatusEl.innerText = "No report";
           }
         }
       }
@@ -852,6 +935,7 @@
         }
 
         const statusEl = document.getElementById("ar-status");
+        const toggleStatusEl = document.getElementById("ar-toggle-status");
         const scoreEl = document.getElementById("ar-score");
         const passRateEl = document.getElementById("ar-pass-rate");
         const promoteEl = document.getElementById("ar-promote");
@@ -860,6 +944,9 @@
         if (statusEl) {
           statusEl.innerText = "Loaded";
           statusEl.className = "metric-value value-bullish";
+        }
+        if (toggleStatusEl) {
+          toggleStatusEl.innerText = data.promote ? "Promoted" : "Loaded";
         }
         if (scoreEl) {
           scoreEl.innerText =
@@ -1368,6 +1455,8 @@
 
       // Fetch on load
       window.addEventListener("DOMContentLoaded", () => {
+        initAutoresearchToggle();
+        setAutoresearchExpanded(false);
         syncAlertsButton();
         ensureServiceWorker().then(() => {
           if ("Notification" in window && Notification.permission === "granted") {
