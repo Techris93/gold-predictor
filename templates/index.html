@@ -530,32 +530,26 @@
           <span class="metric-value" id="ta-active-params" style="font-size: 0.78rem; text-align: right; max-width: 56%; line-height: 1.5; white-space: normal;">---</span>
         </div>
       </div>
-      <div style="margin-bottom: 2rem">
-        <div
-          style="
-            margin-bottom: 1rem;
-            color: var(--gold-primary);
-            font-size: 0.8rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 0.75rem;
-          "
+      <div class="ar-card" style="margin-bottom: 2rem">
+        <button
+          type="button"
+          class="ar-toggle"
+          id="sentiment-toggle"
+          aria-expanded="false"
+          aria-controls="sa-headlines"
         >
-          <span>Market Sentiment</span>
-          <button
-            id="sentiment-debug-toggle"
-            type="button"
-            style="background: rgba(255,215,0,0.08); color: var(--gold-primary); border: 1px solid rgba(255,215,0,0.25); border-radius: 999px; padding: 0.3rem 0.65rem; font-size: 0.68rem; letter-spacing: 0.6px; text-transform: uppercase; cursor: pointer;"
-            onclick="window.toggleSentimentDebug && window.toggleSentimentDebug()"
-          >
-            Show Debug
-          </button>
-        </div>
-        <div id="sa-headlines">
+          <span class="ar-heading-wrap">
+            <span class="ar-heading">Market Sentiment</span>
+            <span class="ar-subtext">Tap to expand sentiment details</span>
+          </span>
+          <span class="ar-toggle-meta">
+            <span class="ar-toggle-badge" id="sentiment-toggle-status">Hidden</span>
+            <svg class="ar-chevron" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+            </svg>
+          </span>
+        </button>
+        <div id="sa-headlines" hidden>
           <!-- Sentiment summary loaded via JS -->
         </div>
       </div>
@@ -944,6 +938,28 @@
         });
       }
 
+      function setSentimentExpanded(expanded) {
+        const toggle = document.getElementById("sentiment-toggle");
+        const panel = document.getElementById("sa-headlines");
+        const status = document.getElementById("sentiment-toggle-status");
+        if (!toggle || !panel) return;
+        toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
+        panel.hidden = !expanded;
+        if (status) {
+          status.innerText = expanded ? "Visible" : "Hidden";
+        }
+      }
+
+      function initSentimentToggle() {
+        const toggle = document.getElementById("sentiment-toggle");
+        if (!toggle || toggle.dataset.bound === "1") return;
+        toggle.dataset.bound = "1";
+        toggle.addEventListener("click", () => {
+          const expanded = toggle.getAttribute("aria-expanded") === "true";
+          setSentimentExpanded(!expanded);
+        });
+      }
+
       async function fetchAutoresearchSummary() {
         try {
           const response = await fetch("/api/autoresearch/latest");
@@ -1165,6 +1181,9 @@
         if (debugEl) {
           debugEl.style.display = sentimentDebugVisible ? "block" : "none";
         }
+        if (sentimentDebugVisible) {
+          setSentimentExpanded(true);
+        }
       };
 
       function renderSentimentDebugList(newsList) {
@@ -1383,6 +1402,11 @@
           saContainer.innerHTML = "";
 
           const sentimentClass = getSentimentBadgeClass(sentiment.label);
+          const sentimentToggleStatusEl = document.getElementById("sentiment-toggle-status");
+          if (sentimentToggleStatusEl) {
+            sentimentToggleStatusEl.innerText = sentiment.label;
+            sentimentToggleStatusEl.className = `ar-toggle-badge ${sentimentClass}`;
+          }
 
           const debugHtml = renderSentimentDebugList(newsList);
 
@@ -1503,6 +1527,8 @@
       window.addEventListener("DOMContentLoaded", () => {
         initAutoresearchToggle();
         setAutoresearchExpanded(false);
+        initSentimentToggle();
+        setSentimentExpanded(false);
         syncAlertsButton();
         ensureServiceWorker().then(() => {
           if ("Notification" in window && Notification.permission === "granted") {
