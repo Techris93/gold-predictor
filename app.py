@@ -47,6 +47,7 @@ VAPID_CLAIMS_SUBJECT = os.getenv("VAPID_CLAIMS_SUBJECT", "mailto:alerts@example.
 CHANGE_SUMMARY_ORDER = [
     "verdict",
     "confidence",
+    "sentiment_label",
     "trend",
     "market_structure",
     "candle_pattern",
@@ -197,6 +198,7 @@ def _summarize_changes_for_push(changes):
         "verdict": "Verdict",
         "confidence": "Confidence",
         "trend": "Trend",
+        "sentiment_label": "Sentiment",
         "market_structure": "Structure",
         "candle_pattern": "Pattern",
         "rsi_14": "RSI",
@@ -318,14 +320,18 @@ def _is_material_change(changes):
 
     always_material = {
         "verdict",
+        "confidence",
+        "sentiment_label",
         "trend",
         "market_structure",
         "candle_pattern",
         "market_regime",
         "alignment",
+        "trade_sell_setup",
+        "trade_buy_setup",
+        "trade_exit_warning",
     }
     numeric_thresholds = {
-        "confidence": 2.0,
         "rsi_14": 0.6,
         "ema_20": 0.25,
         "ema_50": 0.25,
@@ -462,10 +468,12 @@ def _extract_indicator_snapshot(payload):
     regime = ta_data.get("volatility_regime", {}) if isinstance(ta_data, dict) else {}
     mtf = ta_data.get("multi_timeframe", {}) if isinstance(ta_data, dict) else {}
     trade_guidance = payload.get("TradeGuidance", {}) if isinstance(payload, dict) else {}
+    sentiment_summary = payload.get("SentimentSummary", {}) if isinstance(payload, dict) else {}
 
     return {
         "verdict": payload.get("verdict"),
         "confidence": payload.get("confidence"),
+        "sentiment_label": sentiment_summary.get("label"),
         "trend": ta_data.get("ema_trend"),
         "market_structure": pa.get("structure"),
         "candle_pattern": pa.get("latest_candle_pattern"),
