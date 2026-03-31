@@ -1,9 +1,20 @@
 import json
 import os
+import sys
 import yfinance as yf
 import pandas as pd
-import ta
 import numpy as np
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+
+from tools.signal_engine import (
+    build_ta_payload_from_row,
+    compute_prediction_from_ta,
+    normalize_strategy_params,
+    prepare_historical_features,
+)
 
 DEFAULT_BACKTEST_PARAMS = {
     "ema_short": 20,
@@ -11,7 +22,36 @@ DEFAULT_BACKTEST_PARAMS = {
     "rsi_window": 14,
     "rsi_overbought": 70,
     "rsi_oversold": 20,
+    "adx_window": 14,
+    "adx_trending_threshold": 22,
+    "adx_weak_trend_threshold": 18,
+    "atr_window": 14,
+    "atr_trending_percent_threshold": 0.25,
     "cmf_window": 14,
+    "cmf_strong_buy_threshold": 0.1,
+    "cmf_strong_sell_threshold": -0.1,
+    "trend_base_weight": 2.5,
+    "alignment_weight": 1.2,
+    "trend_regime_bonus": 1.0,
+    "weak_trend_bonus": 0.4,
+    "strong_volume_weight": 2.0,
+    "bias_volume_weight": 1.0,
+    "breakout_weight": 2.0,
+    "structure_weight": 1.0,
+    "engulfing_weight": 1.0,
+    "reversal_candle_weight": 0.6,
+    "rsi_extreme_weight": 1.5,
+    "rsi_warning_weight": 0.6,
+    "rsi_warning_band": 10,
+    "verdict_margin_threshold": 1.2,
+    "confidence_margin_multiplier": 8.0,
+    "confidence_evidence_multiplier": 1.4,
+    "rangebound_penalty": 8.0,
+    "weak_trend_penalty": 3.0,
+    "volume_unavailable_penalty": 5.0,
+    "mixed_alignment_penalty": 6.0,
+    "neutral_confidence_cap": 63,
+    "mtf_intervals": ["15min", "1h", "4h"],
 }
 
 
@@ -33,49 +73,17 @@ def _load_json_config(relative_path, fallback):
 ACTIVE_BACKTEST_PARAMS = _load_json_config("config/backtest_params.json", DEFAULT_BACKTEST_PARAMS)
 
 def generate_signals(df):
-    """
-    Simulates the agent's logic across historical data to generate Buy/Sell signals.
-    Strategy:
-    - Bullish if EMA short > EMA long AND CMF > 0 AND OBV is rising AND (Price Action is Bullish Structure OR Bullish Engulfing OR RSI < oversold)
-    - Bearish if EMA short < EMA long AND CMF < 0 AND OBV is falling AND (Price Action is Bearish Structure OR Bearish Engulfing OR RSI > overbought)
-    """
-    ema_short = int(ACTIVE_BACKTEST_PARAMS.get("ema_short", 20))
-    ema_long = int(ACTIVE_BACKTEST_PARAMS.get("ema_long", 50))
-    rsi_window = int(ACTIVE_BACKTEST_PARAMS.get("rsi_window", 14))
-    rsi_overbought = float(ACTIVE_BACKTEST_PARAMS.get("rsi_overbought", 70))
-    rsi_oversold = float(ACTIVE_BACKTEST_PARAMS.get("rsi_oversold", 20))
-    cmf_window = int(ACTIVE_BACKTEST_PARAMS.get("cmf_window", 14))
+    params = normalize_strategy_params(ACTIVE_BACKTEST_PARAMS)
+    enriched = prepare_historical_features(df, params)
+    signals = pd.Series('Neutral', index=enriched.index)
+    sentiment_summary = {"label": "Neutral"}
 
-    df = df.copy()
-    df['EMA_20'] = ta.trend.EMAIndicator(df['Close'], window=ema_short).ema_indicator()
-    df['EMA_50'] = ta.trend.EMAIndicator(df['Close'], window=ema_long).ema_indicator()
-    df['RSI_14'] = ta.momentum.RSIIndicator(df['Close'], window=rsi_window).rsi()
-    df['OBV'] = ta.volume.OnBalanceVolumeIndicator(df['Close'], df['Volume']).on_balance_volume()
-    df['CMF_14'] = ta.volume.ChaikinMoneyFlowIndicator(df['High'], df['Low'], df['Close'], df['Volume'], window=cmf_window).chaikin_money_flow()
-
-    signals = pd.Series('Neutral', index=df.index)
-
-    for i in range(2, len(df)):
-        current = df.iloc[i]
-        prev = df.iloc[i-1]
-        prev2 = df.iloc[i-2]
-
-        bull_trend = current['Close'] > current['EMA_20'] > current['EMA_50']
-        bear_trend = current['Close'] < current['EMA_20'] < current['EMA_50']
-
-        obv_rising = current['OBV'] > prev['OBV']
-        cmf_bull = current['CMF_14'] > 0
-        cmf_bear = current['CMF_14'] < 0
-
-        pa_bull_struct = current['High'] > prev['High'] > prev2['High'] and current['Low'] > prev['Low'] > prev2['Low']
-        pa_bear_struct = current['High'] < prev['High'] < prev2['High'] and current['Low'] < prev['Low'] < prev2['Low']
-
-        bull_engulfing = current['Close'] > current['Open'] and prev['Close'] < prev['Open'] and current['Close'] > prev['Open'] and current['Open'] < prev['Close']
-        bear_engulfing = current['Close'] < current['Open'] and prev['Close'] > prev['Open'] and current['Close'] < prev['Open'] and current['Open'] > prev['Close']
-
-        if bull_trend and obv_rising and cmf_bull and (pa_bull_struct or bull_engulfing or current['RSI_14'] < rsi_oversold):
+    for i in range(len(enriched)):
+        ta_payload = build_ta_payload_from_row(enriched.iloc[i], params)
+        verdict = compute_prediction_from_ta(ta_payload, sentiment_summary)["verdict"]
+        if verdict == 'Bullish':
             signals.iloc[i] = 'Buy'
-        elif bear_trend and not obv_rising and cmf_bear and (pa_bear_struct or bear_engulfing or current['RSI_14'] > rsi_overbought):
+        elif verdict == 'Bearish':
             signals.iloc[i] = 'Sell'
 
     return signals

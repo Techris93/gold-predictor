@@ -1,16 +1,24 @@
 import itertools
 import json
 import os
+import sys
 import subprocess
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timezone
 
 import pandas as pd
-import ta
 import yfinance as yf
 
-
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+
+from tools.signal_engine import (
+    build_ta_payload_from_row,
+    compute_prediction_from_ta,
+    normalize_strategy_params,
+    prepare_historical_features,
+)
 STRATEGY_PARAMS_FILE = os.path.join(BASE_DIR, "config", "strategy_params.json")
 BACKTEST_PARAMS_FILE = os.path.join(BASE_DIR, "config", "backtest_params.json")
 LATEST_RESULT_FILE = os.path.join(BASE_DIR, "data", "swarm", "latest_result.json")
@@ -33,41 +41,19 @@ MIN_PROFIT_FACTOR = 1.2
 MIN_EXPECTANCY = 0.0
 
 
-def generate_signals_custom(df, ema_short_win, ema_long_win, rsi_ob, rsi_os, cmf_win):
-    """Generates signals using custom parameters for the swarm optimization."""
-    df = df.copy()
+def generate_signals_custom(df, params):
+    """Generates signals using the live predictor scoring engine."""
+    params = normalize_strategy_params(params)
+    enriched = prepare_historical_features(df, params)
+    signals = pd.Series("Neutral", index=enriched.index)
+    sentiment_summary = {"label": "Neutral"}
 
-    df["EMA_S"] = ta.trend.EMAIndicator(df["Close"], window=ema_short_win).ema_indicator()
-    df["EMA_L"] = ta.trend.EMAIndicator(df["Close"], window=ema_long_win).ema_indicator()
-    df["RSI"] = ta.momentum.RSIIndicator(df["Close"], window=14).rsi()
-    df["OBV"] = ta.volume.OnBalanceVolumeIndicator(df["Close"], df["Volume"]).on_balance_volume()
-    df["CMF"] = ta.volume.ChaikinMoneyFlowIndicator(
-        df["High"], df["Low"], df["Close"], df["Volume"], window=cmf_win
-    ).chaikin_money_flow()
-
-    signals = pd.Series("Neutral", index=df.index)
-
-    for i in range(2, len(df)):
-        current = df.iloc[i]
-        prev = df.iloc[i - 1]
-        prev2 = df.iloc[i - 2]
-
-        bull_trend = current["Close"] > current["EMA_S"] > current["EMA_L"]
-        bear_trend = current["Close"] < current["EMA_S"] < current["EMA_L"]
-
-        obv_rising = current["OBV"] > prev["OBV"]
-        cmf_bull = current["CMF"] > 0
-        cmf_bear = current["CMF"] < 0
-
-        pa_bull = current["High"] > prev["High"] > prev2["High"] and current["Low"] > prev["Low"] > prev2["Low"]
-        pa_bear = current["High"] < prev["High"] < prev2["High"] and current["Low"] < prev["Low"] < prev2["Low"]
-
-        rsi_oversold = current["RSI"] < rsi_os
-        rsi_overbought = current["RSI"] > rsi_ob
-
-        if bull_trend and obv_rising and cmf_bull and (pa_bull or rsi_oversold):
+    for i in range(len(enriched)):
+        ta_payload = build_ta_payload_from_row(enriched.iloc[i], params)
+        verdict = compute_prediction_from_ta(ta_payload, sentiment_summary)["verdict"]
+        if verdict == "Bullish":
             signals.iloc[i] = "Buy"
-        elif bear_trend and (not obv_rising) and cmf_bear and (pa_bear or rsi_overbought):
+        elif verdict == "Bearish":
             signals.iloc[i] = "Sell"
 
     return signals
@@ -79,22 +65,10 @@ def _safe_round(value, digits=4):
     return None
 
 
-def _params_dict(ema_s, ema_l, rsi_ob, rsi_os, cmf_w):
-    return {
-        "ema_short": ema_s,
-        "ema_long": ema_l,
-        "rsi_overbought": rsi_ob,
-        "rsi_oversold": rsi_os,
-        "cmf_window": cmf_w,
-    }
-
-
 def test_params(args):
     """Worker function to test a specific parameter set."""
-    df, p = args
-    ema_s, ema_l, rsi_ob, rsi_os, cmf_w = p
-
-    signals = generate_signals_custom(df, ema_s, ema_l, rsi_ob, rsi_os, cmf_w)
+    df, params = args
+    signals = generate_signals_custom(df, params)
 
     capital = 10000.0
     peak_capital = capital
@@ -164,7 +138,7 @@ def test_params(args):
     profit_factor = gross_profit / gross_loss if gross_loss > 0 else (999.0 if gross_profit > 0 else 0.0)
 
     return {
-        "params": _params_dict(ema_s, ema_l, rsi_ob, rsi_os, cmf_w),
+        "params": params,
         "summary": {
             "roi": _safe_round(roi, 2),
             "trades": len(trade_pnls),
@@ -235,6 +209,12 @@ def _build_predict_params(params):
         "cmf_window": params["cmf_window"],
         "cmf_strong_buy_threshold": 0.10,
         "cmf_strong_sell_threshold": -0.10,
+        "alignment_weight": params["alignment_weight"],
+        "strong_volume_weight": params["strong_volume_weight"],
+        "verdict_margin_threshold": params["verdict_margin_threshold"],
+        "confidence_margin_multiplier": params["confidence_margin_multiplier"],
+        "rangebound_penalty": params["rangebound_penalty"],
+        "mixed_alignment_penalty": params["mixed_alignment_penalty"],
         "mtf_intervals": ["15min", "1h", "4h"],
     }
 
@@ -246,18 +226,40 @@ def _build_backtest_params(params):
         "rsi_window": 14,
         "rsi_overbought": params["rsi_overbought"],
         "rsi_oversold": params["rsi_oversold"],
+        "adx_window": 14,
+        "adx_trending_threshold": 22,
+        "adx_weak_trend_threshold": 18,
+        "atr_window": 14,
+        "atr_trending_percent_threshold": 0.25,
         "cmf_window": params["cmf_window"],
+        "cmf_strong_buy_threshold": 0.10,
+        "cmf_strong_sell_threshold": -0.10,
+        "alignment_weight": params["alignment_weight"],
+        "strong_volume_weight": params["strong_volume_weight"],
+        "verdict_margin_threshold": params["verdict_margin_threshold"],
+        "confidence_margin_multiplier": params["confidence_margin_multiplier"],
+        "rangebound_penalty": params["rangebound_penalty"],
+        "mixed_alignment_penalty": params["mixed_alignment_penalty"],
+        "mtf_intervals": ["15min", "1h", "4h"],
     }
 
 
 def _evaluate_baseline(df):
-    strategy_params = _read_json(STRATEGY_PARAMS_FILE) or {}
-    ema_s = int(strategy_params.get("ema_short", 20))
-    ema_l = int(strategy_params.get("ema_long", 50))
-    rsi_ob = int(strategy_params.get("rsi_overbought", 70))
-    rsi_os = int(strategy_params.get("rsi_oversold", 20))
-    cmf_w = int(strategy_params.get("cmf_window", 14))
-    return test_params((df, (ema_s, ema_l, rsi_ob, rsi_os, cmf_w)))
+    strategy_params = normalize_strategy_params(_read_json(STRATEGY_PARAMS_FILE) or {})
+    baseline_params = {
+        "ema_short": int(strategy_params.get("ema_short", 20)),
+        "ema_long": int(strategy_params.get("ema_long", 50)),
+        "rsi_overbought": int(strategy_params.get("rsi_overbought", 70)),
+        "rsi_oversold": int(strategy_params.get("rsi_oversold", 20)),
+        "cmf_window": int(strategy_params.get("cmf_window", 14)),
+        "alignment_weight": float(strategy_params.get("alignment_weight", 1.2)),
+        "strong_volume_weight": float(strategy_params.get("strong_volume_weight", 2.0)),
+        "verdict_margin_threshold": float(strategy_params.get("verdict_margin_threshold", 1.2)),
+        "confidence_margin_multiplier": float(strategy_params.get("confidence_margin_multiplier", 8.0)),
+        "rangebound_penalty": float(strategy_params.get("rangebound_penalty", 8.0)),
+        "mixed_alignment_penalty": float(strategy_params.get("mixed_alignment_penalty", 6.0)),
+    }
+    return test_params((df, baseline_params))
 
 
 def _metric(summary, name, default=None):
@@ -374,9 +376,55 @@ def run_swarm():
     rsi_obs = [70, 75, 80]
     rsi_oss = [20, 25, 30]
     cmf_wins = [14, 20]
+    alignment_weights = [1.0, 1.2]
+    strong_volume_weights = [1.5, 2.0]
+    verdict_margin_thresholds = [1.0, 1.2]
+    confidence_margin_multipliers = [7.0, 8.0]
+    rangebound_penalties = [6.0, 8.0]
+    mixed_alignment_penalties = [4.0, 6.0]
 
-    param_combinations = list(itertools.product(ema_shorts, ema_longs, rsi_obs, rsi_oss, cmf_wins))
-    valid_params = [p for p in param_combinations if p[0] < p[1]]
+    param_combinations = itertools.product(
+        ema_shorts,
+        ema_longs,
+        rsi_obs,
+        rsi_oss,
+        cmf_wins,
+        alignment_weights,
+        strong_volume_weights,
+        verdict_margin_thresholds,
+        confidence_margin_multipliers,
+        rangebound_penalties,
+        mixed_alignment_penalties,
+    )
+    valid_params = [
+        {
+            "ema_short": ema_s,
+            "ema_long": ema_l,
+            "rsi_overbought": rsi_ob,
+            "rsi_oversold": rsi_os,
+            "cmf_window": cmf_w,
+            "alignment_weight": alignment_w,
+            "strong_volume_weight": volume_w,
+            "verdict_margin_threshold": verdict_margin,
+            "confidence_margin_multiplier": conf_margin,
+            "rangebound_penalty": range_penalty,
+            "mixed_alignment_penalty": align_penalty,
+        }
+        for (
+            ema_s,
+            ema_l,
+            rsi_ob,
+            rsi_os,
+            cmf_w,
+            alignment_w,
+            volume_w,
+            verdict_margin,
+            conf_margin,
+            range_penalty,
+            align_penalty,
+        ) in param_combinations
+        if ema_s < ema_l
+    ]
 
     print(f"🧬 Generated {len(valid_params)} unique strategy genetic combinations.")
     print("Simulating trading strategies across 13,000+ historical hours. Please wait...\n")
@@ -390,14 +438,17 @@ def run_swarm():
     results.sort(key=lambda item: item["summary"]["roi"], reverse=True)
 
     print("🏆 SWARM OPTIMIZATION LEADERBOARD (Top 5 Strategies)\n")
-    print(f"{'Rank':<5} | {'EMA Short':<10} | {'EMA Long':<9} | {'RSI OB':<7} | {'RSI OS':<7} | {'CMF Win':<8} | {'ROI':<10}")
-    print("-" * 75)
+    print(f"{'Rank':<5} | {'EMA':<9} | {'RSI':<9} | {'CMF':<5} | {'AlignW':<6} | {'VolW':<5} | {'Margin':<6} | {'ROI':<8}")
+    print("-" * 96)
     for i, result in enumerate(results[:5]):
         params = result["params"]
         summary = result["summary"]
         print(
-            f"#{i+1:<4} | {params['ema_short']:<10} | {params['ema_long']:<9} | {params['rsi_overbought']:<7} | "
-            f"{params['rsi_oversold']:<7} | {params['cmf_window']:<8} | {summary['roi']:>6.2f}%"
+            f"#{i+1:<4} | {params['ema_short']}/{params['ema_long']:<6} | "
+            f"{params['rsi_overbought']}/{params['rsi_oversold']:<6} | "
+            f"{params['cmf_window']:<5} | {params['alignment_weight']:<6} | "
+            f"{params['strong_volume_weight']:<5} | {params['verdict_margin_threshold']:<6} | "
+            f"{summary['roi']:>6.2f}%"
         )
 
     best_result = results[0]

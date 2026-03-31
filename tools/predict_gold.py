@@ -52,6 +52,27 @@ DEFAULT_STRATEGY_PARAMS = {
     "cmf_window": 14,
     "cmf_strong_buy_threshold": 0.1,
     "cmf_strong_sell_threshold": -0.1,
+    "trend_base_weight": 2.5,
+    "alignment_weight": 1.2,
+    "trend_regime_bonus": 1.0,
+    "weak_trend_bonus": 0.4,
+    "strong_volume_weight": 2.0,
+    "bias_volume_weight": 1.0,
+    "breakout_weight": 2.0,
+    "structure_weight": 1.0,
+    "engulfing_weight": 1.0,
+    "reversal_candle_weight": 0.6,
+    "rsi_extreme_weight": 1.5,
+    "rsi_warning_weight": 0.6,
+    "rsi_warning_band": 10,
+    "verdict_margin_threshold": 1.2,
+    "confidence_margin_multiplier": 8.0,
+    "confidence_evidence_multiplier": 1.4,
+    "rangebound_penalty": 8.0,
+    "weak_trend_penalty": 3.0,
+    "volume_unavailable_penalty": 5.0,
+    "mixed_alignment_penalty": 6.0,
+    "neutral_confidence_cap": 63,
     "mtf_intervals": ["15min", "1h", "4h"],
 }
 
@@ -450,7 +471,8 @@ def get_technical_analysis():
                 "obv_trend": ("Rising" if obv_rising else "Falling") if has_volume else "N/A",
                 "overall_volume_signal": volume_signal if has_volume else "N/A (Volume data not available for Spot Gold)"
             },
-            "data_points_analyzed": len(df)
+            "data_points_analyzed": len(df),
+            "active_strategy_params": ACTIVE_STRATEGY_PARAMS.copy(),
         }
     except Exception as e:
         return {"error": str(e)}

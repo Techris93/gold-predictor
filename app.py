@@ -6,6 +6,11 @@ import threading
 import time
 from pathlib import Path
 from tools import predict_gold
+from tools.signal_engine import (
+    classify_market_sentiment as shared_classify_market_sentiment,
+    compute_prediction_from_ta,
+    compute_trade_guidance as shared_compute_trade_guidance,
+)
 
 try:
     from pywebpush import WebPushException, webpush
@@ -220,50 +225,7 @@ def _summarize_changes_for_push(changes):
 
 
 def _classify_market_sentiment(news_list):
-    if not isinstance(news_list, list):
-        news_list = []
-
-    bullish_score = 0
-    bearish_score = 0
-    driver_counts = {}
-
-    for news in news_list:
-        title = str((news or {}).get("title", "")).lower()
-        for signal_group in SENTIMENT_WEIGHTED_SIGNALS:
-            for term in signal_group["terms"]:
-                if term in title:
-                    if signal_group["side"] == "bull":
-                        bullish_score += signal_group["weight"]
-                    else:
-                        bearish_score += signal_group["weight"]
-                    driver_counts[term] = driver_counts.get(term, 0) + 1
-
-    net_score = bullish_score - bearish_score
-    label = "Neutral"
-    if net_score >= 2:
-        label = "Bullish"
-    elif net_score <= -1:
-        label = "Bearish"
-
-    intensity = abs(net_score)
-    confidence_band = "Low"
-    if intensity >= 6:
-        confidence_band = "High"
-    elif intensity >= 3:
-        confidence_band = "Medium"
-
-    top_drivers = [
-        term for term, _count in sorted(driver_counts.items(), key=lambda item: item[1], reverse=True)[:3]
-    ]
-
-    return {
-        "label": label,
-        "confidenceBand": confidence_band,
-        "bullishScore": bullish_score,
-        "bearishScore": bearish_score,
-        "netScore": net_score,
-        "topDrivers": top_drivers,
-    }
+    return shared_classify_market_sentiment(news_list)
 
 
 def _send_web_push_notifications(changes, verdict, confidence, trade_guidance):
@@ -360,105 +322,7 @@ def _is_material_change(changes):
 
 
 def _compute_trade_guidance(ta_data, sentiment_label, confidence):
-    """Canonical trade guidance shared by API responses and notifications."""
-    if not isinstance(ta_data, dict):
-        return {
-            "sellLevel": "Weak",
-            "buyLevel": "Weak",
-            "exitLevel": "Low",
-            "summary": "Trade guidance unavailable.",
-        }
-
-    trend = ta_data.get("ema_trend", "Neutral")
-    rsi = float(ta_data.get("rsi_14", 50) or 50)
-    regime = (ta_data.get("volatility_regime") or {}).get("market_regime", "Range-Bound")
-    alignment = (ta_data.get("multi_timeframe") or {}).get("alignment_label", "Mixed / Low Alignment")
-    structure = (ta_data.get("price_action") or {}).get("structure", "Consolidating")
-    pattern = (ta_data.get("price_action") or {}).get("latest_candle_pattern", "None")
-
-    sell_score = 0
-    buy_score = 0
-    exit_score = 0
-
-    if trend == "Bearish":
-        sell_score += 2
-    elif trend == "Bullish":
-        buy_score += 2
-
-    if "Bearish" in alignment:
-        sell_score += 2
-    elif "Bullish" in alignment:
-        buy_score += 2
-
-    if regime == "Trending":
-        sell_score += 1 if trend == "Bearish" else 0
-        buy_score += 1 if trend == "Bullish" else 0
-
-    if "Bearish" in structure:
-        sell_score += 2
-    elif "Bullish" in structure:
-        buy_score += 2
-
-    if "Bearish" in pattern:
-        sell_score += 1
-    if "Bullish" in pattern:
-        buy_score += 1
-
-    if rsi < 45:
-        sell_score += 1
-    elif rsi > 55:
-        buy_score += 1
-
-    if sentiment_label == "Bearish":
-        sell_score += 1
-    elif sentiment_label == "Bullish":
-        buy_score += 1
-
-    if confidence >= 75:
-        if sell_score > buy_score:
-            sell_score += 1
-        elif buy_score > sell_score:
-            buy_score += 1
-
-    if trend == "Bearish" and ("Bullish" in structure or "Bullish" in pattern):
-        exit_score += 2
-    if trend == "Bullish" and ("Bearish" in structure or "Bearish" in pattern):
-        exit_score += 2
-    if "Mixed" in alignment:
-        exit_score += 1
-    if confidence < 65:
-        exit_score += 1
-
-    def level(score):
-        if score >= 6:
-            return "Strong"
-        if score >= 4:
-            return "Watch"
-        return "Weak"
-
-    if exit_score >= 3:
-        exit_level = "High"
-    elif exit_score >= 2:
-        exit_level = "Medium"
-    else:
-        exit_level = "Low"
-
-    sell_level = level(sell_score)
-    buy_level = level(buy_score)
-    summary = "Wait for cleaner confirmation."
-    if sell_score >= 6 and sell_score > buy_score + 1:
-        summary = "Sell bias is favored; wait for bearish continuation or rejection confirmation."
-    elif buy_score >= 6 and buy_score > sell_score + 1:
-        summary = "Buy bias is favored; wait for bullish continuation or breakout confirmation."
-    elif exit_score >= 3:
-        summary = "Existing position should be monitored closely for exit or risk reduction."
-
-    return {
-        "sellLevel": sell_level,
-        "buyLevel": buy_level,
-        "exitLevel": exit_level,
-        "summary": summary,
-    }
+    return shared_compute_trade_guidance(ta_data, sentiment_label, confidence)
 
 
 def _extract_indicator_snapshot(payload):
@@ -505,7 +369,6 @@ def _diff_snapshot(prev_snapshot, cur_snapshot):
 
 def _build_prediction_response():
     """Central prediction builder used by both HTTP and websocket monitor."""
-    # Fetch data using the existing script logic
     ta_data = predict_gold.get_technical_analysis()
     sa_data = predict_gold.get_sentiment_analysis()
 
@@ -527,134 +390,16 @@ def _build_prediction_response():
             "SentimentalAnalysis": sa_data,
         }, 502
 
-    # Calculate verdict using trend + multi-timeframe + regime + price action
-    verdict = "Neutral"
-    confidence = 50
-
-    trend = ta_data.get("ema_trend", "Neutral")
-    volume = ta_data.get("volume_analysis", {}).get("overall_volume_signal", "Neutral")
-    regime = ta_data.get("volatility_regime", {}).get("market_regime", "Range-Bound")
-    adx_14 = ta_data.get("volatility_regime", {}).get("adx_14", 0)
-    mtf = ta_data.get("multi_timeframe", {})
-    alignment_score = mtf.get("alignment_score", 0)
-    alignment_label = mtf.get("alignment_label", "Mixed / Low Alignment")
-    pa_struct = ta_data.get("price_action", {}).get("structure", "Consolidating")
-    pa_pattern = ta_data.get("price_action", {}).get("latest_candle_pattern", "None")
-
-    bull_score = 0.0
-    bear_score = 0.0
-
-    # 1. 1H trend baseline
-    if trend == "Bullish":
-        bull_score += 2.5
-    elif trend == "Bearish":
-        bear_score += 2.5
-
-    # 2. Multi-timeframe alignment
-    if alignment_score > 0:
-        bull_score += min(alignment_score, 3) * 1.2
-    elif alignment_score < 0:
-        bear_score += min(abs(alignment_score), 3) * 1.2
-
-    # 3. Regime filter (trending environments should have more confidence)
-    if regime == "Trending" and adx_14 >= 22:
-        if trend == "Bullish":
-            bull_score += 1.0
-        elif trend == "Bearish":
-            bear_score += 1.0
-    elif regime == "Weak Trend":
-        if trend == "Bullish":
-            bull_score += 0.4
-        elif trend == "Bearish":
-            bear_score += 0.4
-
-    # 4. Volume & orderflow (if available)
-    if "Accumulation" in volume:
-        bull_score += 2.0
-    elif "Buying Bias" in volume:
-        bull_score += 1.0
-    if "Distribution" in volume:
-        bear_score += 2.0
-    elif "Selling Bias" in volume:
-        bear_score += 1.0
-
-    # 5. Price action
-    if "Bullish Breakout" in pa_struct:
-        bull_score += 2.0
-    elif "Bearish Breakdown" in pa_struct:
-        bear_score += 2.0
-    elif "Bullish Structure" in pa_struct or "Bullish Drift" in pa_struct or "Bullish Pressure" in pa_struct:
-        bull_score += 1.0
-    elif "Bearish Structure" in pa_struct or "Bearish Drift" in pa_struct or "Bearish Pressure" in pa_struct:
-        bear_score += 1.0
-
-    if "Bullish Engulfing" in pa_pattern:
-        bull_score += 1.0
-    elif "Bearish Engulfing" in pa_pattern:
-        bear_score += 1.0
-    elif "Bullish Hammer" in pa_pattern:
-        bull_score += 0.6
-    elif "Bearish Shooting Star" in pa_pattern:
-        bear_score += 0.6
-
-    # 6. RSI momentum
-    rsi = ta_data.get("rsi_14", 50)
-    if rsi < 30:
-        bull_score += 1.5
-    elif rsi < 40:
-        bull_score += 0.6
-    if rsi > 70:
-        bear_score += 1.5
-    elif rsi > 60:
-        bear_score += 0.6
-
-    # Verdict decision using directional margin
-    score_diff = bull_score - bear_score
-    score_margin = abs(score_diff)
-    evidence_total = bull_score + bear_score
-
-    if score_diff >= 1.2:
-        verdict = "Bullish"
-    elif score_diff <= -1.2:
-        verdict = "Bearish"
-    else:
-        verdict = "Neutral"
-
-    # Confidence calibration with penalties for lower-quality contexts
-    base_conf = 50 + (score_margin * 8.0) + (evidence_total * 1.4)
-    penalty = 0.0
-
-    if regime == "Range-Bound":
-        penalty += 8.0
-    elif regime == "Weak Trend":
-        penalty += 3.0
-
-    if "N/A" in volume:
-        penalty += 5.0
-
-    if alignment_label == "Mixed / Low Alignment":
-        penalty += 6.0
-
-    confidence = base_conf - penalty
-    if verdict == "Neutral":
-        confidence = min(confidence, 63)
-
-    # Ensure it stays within reasonable bounds
-    confidence = round(min(max(confidence, 50), 95))
-    trade_guidance = _compute_trade_guidance(
-        ta_data,
-        sentiment_summary.get("label", "Neutral"),
-        confidence,
-    )
+    prediction = compute_prediction_from_ta(ta_data, sentiment_summary)
 
     return {
         "status": "success",
-        "verdict": verdict,
-        "confidence": confidence,
+        "verdict": prediction["verdict"],
+        "confidence": prediction["confidence"],
         "TechnicalAnalysis": ta_data,
         "SentimentalAnalysis": sa_data,
         "SentimentSummary": sentiment_summary,
-        "TradeGuidance": trade_guidance,
+        "TradeGuidance": prediction["TradeGuidance"],
     }, 200
 
 
