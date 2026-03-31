@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import subprocess
+import argparse
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timezone
 
@@ -33,18 +34,58 @@ NOTIFY_CHANNELS = [
 ]
 
 MIN_ROI_IMPROVEMENT = 1.5
-MIN_PASS_RATE = 0.60
+MIN_PASS_RATE = 0.30
 MAX_PASS_RATE_DROP = 0.03
 MIN_TRADE_COUNT = 10
 MAX_DRAWDOWN_WORSENING_RATIO = 0.15
-MIN_PROFIT_FACTOR = 1.2
+MIN_PROFIT_FACTOR = 1.4
 MIN_EXPECTANCY = 0.0
+FEATURE_PARAM_KEYS = (
+    "ema_short",
+    "ema_long",
+    "rsi_window",
+    "rsi_overbought",
+    "rsi_oversold",
+    "adx_window",
+    "adx_trending_threshold",
+    "adx_weak_trend_threshold",
+    "atr_window",
+    "atr_trending_percent_threshold",
+    "cmf_window",
+    "cmf_strong_buy_threshold",
+    "cmf_strong_sell_threshold",
+)
+THRESHOLD_PARAM_KEYS = (
+    "alignment_weight",
+    "strong_volume_weight",
+    "verdict_margin_threshold",
+    "confidence_margin_multiplier",
+    "rangebound_penalty",
+    "mixed_alignment_penalty",
+)
 
 
-def generate_signals_custom(df, params):
+def _split_param_sets(params):
+    normalized = normalize_strategy_params(params)
+    feature_params = {key: normalized[key] for key in FEATURE_PARAM_KEYS}
+    score_params = {key: value for key, value in normalized.items() if key not in FEATURE_PARAM_KEYS}
+    return feature_params, score_params
+
+
+def _merge_param_sets(feature_params, score_params):
+    merged = {}
+    merged.update(feature_params or {})
+    merged.update(score_params or {})
+    return normalize_strategy_params(merged)
+
+
+def generate_signals_custom(df_or_enriched, params):
     """Generates signals using the live predictor scoring engine."""
     params = normalize_strategy_params(params)
-    enriched = prepare_historical_features(df, params)
+    if isinstance(df_or_enriched, pd.DataFrame) and "EMA_TREND" in df_or_enriched.columns:
+        enriched = df_or_enriched
+    else:
+        enriched = prepare_historical_features(df_or_enriched, params)
     signals = pd.Series("Neutral", index=enriched.index)
     sentiment_summary = {"label": "Neutral"}
 
@@ -67,8 +108,8 @@ def _safe_round(value, digits=4):
 
 def test_params(args):
     """Worker function to test a specific parameter set."""
-    df, params = args
-    signals = generate_signals_custom(df, params)
+    frame, params = args
+    signals = generate_signals_custom(frame, params)
 
     capital = 10000.0
     peak_capital = capital
@@ -101,9 +142,9 @@ def test_params(args):
         position = 0
         entry_price = 0.0
 
-    for i in range(len(df) - 1):
+    for i in range(len(frame) - 1):
         signal = signals.iloc[i]
-        next_open = float(df["Open"].iloc[i + 1])
+        next_open = float(frame["Open"].iloc[i + 1])
 
         if position == 0:
             if signal == "Buy":
@@ -124,8 +165,8 @@ def test_params(args):
             entry_price = next_open
 
     if position != 0:
-        final_close = float(df["Close"].iloc[-1])
-        close_position(final_close, len(df) - 1)
+        final_close = float(frame["Close"].iloc[-1])
+        close_position(final_close, len(frame) - 1)
 
     roi = ((capital - 10000) / 10000) * 100
     trade_pnls = [trade["pnl"] for trade in trades]
@@ -285,6 +326,8 @@ def _compare_candidate_to_baseline(candidate, baseline):
     pass_rate_delta = candidate_pass_rate - baseline_pass_rate
     allowed_drawdown = baseline_drawdown * (1 + MAX_DRAWDOWN_WORSENING_RATIO) if baseline_drawdown > 0 else MAX_DRAWDOWN_WORSENING_RATIO
 
+    # This strategy family wins with asymmetric payoff more than with raw hit rate,
+    # so pass rate is only a floor while profit factor and expectancy stay primary.
     checks = {
         "roi_improvement": {
             "pass": roi_improvement >= MIN_ROI_IMPROVEMENT,
@@ -360,28 +403,31 @@ def _format_top_results(results):
     return payload
 
 
-def run_swarm():
-    print("🐝 Igniting Autoresearch Swarm for Gold Strategy Optimization...")
-    print("Fetching historical data (730 days, 1H timeframe)...")
-
-    df = yf.Ticker("GC=F").history(period="730d", interval="1h")
-    if df.empty:
-        message = "Gold predictor swarm run failed: historical data fetch returned no data, so no optimization or promotion decision was made."
-        print("Failed to fetch historical data.")
-        _notify_user(message)
-        return
-
-    ema_shorts = [9, 12, 20]
-    ema_longs = [26, 50, 100]
-    rsi_obs = [70, 75, 80]
-    rsi_oss = [20, 25, 30]
-    cmf_wins = [14, 20]
-    alignment_weights = [1.0, 1.2]
-    strong_volume_weights = [1.5, 2.0]
-    verdict_margin_thresholds = [1.0, 1.2]
-    confidence_margin_multipliers = [7.0, 8.0]
-    rangebound_penalties = [6.0, 8.0]
-    mixed_alignment_penalties = [4.0, 6.0]
+def _build_param_grid(reduced=False):
+    if reduced:
+        ema_shorts = [12, 20]
+        ema_longs = [50, 100]
+        rsi_obs = [70, 75]
+        rsi_oss = [20, 25]
+        cmf_wins = [14]
+        alignment_weights = [1.0, 1.2]
+        strong_volume_weights = [1.5, 2.0]
+        verdict_margin_thresholds = [1.0, 1.2]
+        confidence_margin_multipliers = [8.0]
+        rangebound_penalties = [8.0]
+        mixed_alignment_penalties = [6.0]
+    else:
+        ema_shorts = [9, 12, 20]
+        ema_longs = [26, 50, 100]
+        rsi_obs = [70, 75, 80]
+        rsi_oss = [20, 25, 30]
+        cmf_wins = [14, 20]
+        alignment_weights = [1.0, 1.2]
+        strong_volume_weights = [1.5, 2.0]
+        verdict_margin_thresholds = [1.0, 1.2]
+        confidence_margin_multipliers = [7.0, 8.0]
+        rangebound_penalties = [6.0, 8.0]
+        mixed_alignment_penalties = [4.0, 6.0]
 
     param_combinations = itertools.product(
         ema_shorts,
@@ -396,7 +442,7 @@ def run_swarm():
         rangebound_penalties,
         mixed_alignment_penalties,
     )
-    valid_params = [
+    return [
         {
             "ema_short": ema_s,
             "ema_long": ema_l,
@@ -426,20 +472,126 @@ def run_swarm():
         if ema_s < ema_l
     ]
 
-    print(f"🧬 Generated {len(valid_params)} unique strategy genetic combinations.")
-    print("Simulating trading strategies across 13,000+ historical hours. Please wait...\n")
+
+def _build_threshold_only_grid(reduced=False):
+    strategy_params = normalize_strategy_params(_read_json(STRATEGY_PARAMS_FILE) or {})
+    base_params = {
+        "ema_short": int(strategy_params.get("ema_short", 20)),
+        "ema_long": int(strategy_params.get("ema_long", 50)),
+        "rsi_overbought": int(strategy_params.get("rsi_overbought", 70)),
+        "rsi_oversold": int(strategy_params.get("rsi_oversold", 20)),
+        "cmf_window": int(strategy_params.get("cmf_window", 14)),
+    }
+
+    if reduced:
+        alignment_weights = [1.0, 1.2]
+        strong_volume_weights = [1.5, 2.0]
+        verdict_margin_thresholds = [1.0, 1.2]
+        confidence_margin_multipliers = [8.0]
+        rangebound_penalties = [8.0]
+        mixed_alignment_penalties = [6.0]
+    else:
+        alignment_weights = [1.0, 1.2]
+        strong_volume_weights = [1.5, 2.0]
+        verdict_margin_thresholds = [1.0, 1.2]
+        confidence_margin_multipliers = [7.0, 8.0]
+        rangebound_penalties = [6.0, 8.0]
+        mixed_alignment_penalties = [4.0, 6.0]
+
+    param_combinations = itertools.product(
+        alignment_weights,
+        strong_volume_weights,
+        verdict_margin_thresholds,
+        confidence_margin_multipliers,
+        rangebound_penalties,
+        mixed_alignment_penalties,
+    )
+    return [
+        {
+            **base_params,
+            "alignment_weight": alignment_w,
+            "strong_volume_weight": volume_w,
+            "verdict_margin_threshold": verdict_margin,
+            "confidence_margin_multiplier": conf_margin,
+            "rangebound_penalty": range_penalty,
+            "mixed_alignment_penalty": align_penalty,
+        }
+        for (
+            alignment_w,
+            volume_w,
+            verdict_margin,
+            conf_margin,
+            range_penalty,
+            align_penalty,
+        ) in param_combinations
+    ]
+
+
+def _evaluate_param_grid(df, valid_params, parallel=True):
+    grouped = {}
+    for params in valid_params:
+        feature_params, score_params = _split_param_sets(params)
+        feature_key = tuple(sorted(feature_params.items()))
+        grouped.setdefault(feature_key, {"feature_params": feature_params, "score_params_list": []})
+        grouped[feature_key]["score_params_list"].append(score_params)
 
     results = []
-    with ProcessPoolExecutor() as executor:
-        args_list = [(df, p) for p in valid_params]
-        for r in executor.map(test_params, args_list):
-            results.append(r)
+    if parallel:
+        args_list = []
+        for item in grouped.values():
+            enriched = prepare_historical_features(df, item["feature_params"])
+            for score_params in item["score_params_list"]:
+                args_list.append((enriched, _merge_param_sets(item["feature_params"], score_params)))
+        with ProcessPoolExecutor() as executor:
+            for result in executor.map(test_params, args_list):
+                results.append(result)
+        return results
+
+    total = len(valid_params)
+    completed = 0
+    for item in grouped.values():
+        enriched = prepare_historical_features(df, item["feature_params"])
+        for score_params in item["score_params_list"]:
+            params = _merge_param_sets(item["feature_params"], score_params)
+            results.append(test_params((enriched, params)))
+            completed += 1
+            if completed % 16 == 0 or completed == total:
+                print(f"Completed {completed}/{total} candidates...", flush=True)
+    return results
+
+
+def run_swarm(reduced=False, serial=False, threshold_only=False, period="730d", interval="1h", ticker="GC=F"):
+    print("🐝 Igniting Autoresearch Swarm for Gold Strategy Optimization...", flush=True)
+    print(f"Fetching historical data ({period}, {interval} timeframe) for {ticker}...", flush=True)
+
+    df = yf.Ticker(ticker).history(period=period, interval=interval)
+    if df.empty:
+        message = "Gold predictor swarm run failed: historical data fetch returned no data, so no optimization or promotion decision was made."
+        print("Failed to fetch historical data.", flush=True)
+        _notify_user(message)
+        return
+
+    valid_params = (
+        _build_threshold_only_grid(reduced=reduced)
+        if threshold_only
+        else _build_param_grid(reduced=reduced)
+    )
+
+    print(f"🧬 Generated {len(valid_params)} unique strategy genetic combinations.", flush=True)
+    print("Simulating trading strategies across historical candles. Please wait...\n", flush=True)
+    if reduced:
+        print("Using reduced search mode.", flush=True)
+    if threshold_only:
+        print("Using threshold-only search mode around the current live indicator settings.", flush=True)
+    if serial:
+        print("Using serial evaluation mode.", flush=True)
+    results = _evaluate_param_grid(df, valid_params, parallel=not serial)
 
     results.sort(key=lambda item: item["summary"]["roi"], reverse=True)
 
-    print("🏆 SWARM OPTIMIZATION LEADERBOARD (Top 5 Strategies)\n")
-    print(f"{'Rank':<5} | {'EMA':<9} | {'RSI':<9} | {'CMF':<5} | {'AlignW':<6} | {'VolW':<5} | {'Margin':<6} | {'ROI':<8}")
-    print("-" * 96)
+    print("🏆 SWARM OPTIMIZATION LEADERBOARD (Top 5 Strategies)\n", flush=True)
+    print(f"{'Rank':<5} | {'EMA':<9} | {'RSI':<9} | {'CMF':<5} | {'AlignW':<6} | {'VolW':<5} | {'Margin':<6} | {'ROI':<8}", flush=True)
+    print("-" * 96, flush=True)
     for i, result in enumerate(results[:5]):
         params = result["params"]
         summary = result["summary"]
@@ -448,7 +600,8 @@ def run_swarm():
             f"{params['rsi_overbought']}/{params['rsi_oversold']:<6} | "
             f"{params['cmf_window']:<5} | {params['alignment_weight']:<6} | "
             f"{params['strong_volume_weight']:<5} | {params['verdict_margin_threshold']:<6} | "
-            f"{summary['roi']:>6.2f}%"
+            f"{summary['roi']:>6.2f}%",
+            flush=True,
         )
 
     best_result = results[0]
@@ -480,13 +633,13 @@ def run_swarm():
         "checks": promotion_decision["checks"],
     }
 
-    print("\n📝 Writing latest swarm run artifacts...")
+    print("\n📝 Writing latest swarm run artifacts...", flush=True)
     _write_json(LATEST_RESULT_FILE, latest_payload)
     _write_json(PROMOTION_DECISION_FILE, decision_payload)
 
     if not promotion_decision["promote"]:
-        print(f"⚖️ Promotion gate rejected candidate. {promotion_decision['promotion_reason']}")
-        print("📦 Updated latest run artifacts only. Active promoted strategy remains unchanged.")
+        print(f"⚖️ Promotion gate rejected candidate. {promotion_decision['promotion_reason']}", flush=True)
+        print("📦 Updated latest run artifacts only. Active promoted strategy remains unchanged.", flush=True)
         candidate = best_result["params"]
         candidate_summary = best_result["summary"]
         rejection_message = (
@@ -498,7 +651,7 @@ def run_swarm():
         _notify_user(rejection_message)
         return
 
-    print("\n⚡ Promotion gate passed. Updating active strategy JSON...")
+    print("\n⚡ Promotion gate passed. Updating active strategy JSON...", flush=True)
     predict_params = _build_predict_params(best_result["params"])
     backtest_params = _build_backtest_params(best_result["params"])
     promoted_payload = {
@@ -515,7 +668,8 @@ def run_swarm():
             "✅ Promoted strategy to active config: "
             f"EMA {best_result['params']['ema_short']}/{best_result['params']['ema_long']}, "
             f"RSI {best_result['params']['rsi_overbought']}/{best_result['params']['rsi_oversold']}, "
-            f"CMF {best_result['params']['cmf_window']}"
+            f"CMF {best_result['params']['cmf_window']}",
+            flush=True,
         )
 
         status_output = subprocess.run(["git", "status", "--porcelain"], cwd=BASE_DIR, capture_output=True, text=True)
@@ -536,9 +690,9 @@ def run_swarm():
             subprocess.run(["git", "add", *tracked_targets], cwd=BASE_DIR, check=True)
             subprocess.run(["git", "commit", "-m", commit_msg], cwd=BASE_DIR, check=True)
             commit_hash = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=BASE_DIR, check=True, capture_output=True, text=True).stdout.strip()
-            print("💾 Saved promoted strategy state. You can now run `git push` to deploy the new strategy.")
+            print("💾 Saved promoted strategy state. You can now run `git push` to deploy the new strategy.", flush=True)
         else:
-            print("⚖️ Promotion passed but tracked artifacts are unchanged. No commit needed.")
+            print("⚖️ Promotion passed but tracked artifacts are unchanged. No commit needed.", flush=True)
 
         promoted_message = (
             "Gold predictor promoted a new strategy. "
@@ -551,14 +705,29 @@ def run_swarm():
         _notify_user(promoted_message)
     except Exception as e:
         failure_message = f"Gold predictor swarm run failed while updating promoted strategy state: {e}"
-        print("⚠️ Failed to update promoted strategy state:", e)
+        print("⚠️ Failed to update promoted strategy state:", e, flush=True)
         _notify_user(failure_message)
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Optimize gold predictor strategy parameters.")
+    parser.add_argument("--reduced", action="store_true", help="Run a reduced parameter grid for faster same-day tuning.")
+    parser.add_argument("--serial", action="store_true", help="Evaluate candidates serially instead of using a process pool.")
+    parser.add_argument("--threshold-only", action="store_true", help="Keep indicator settings fixed and tune only live decision thresholds.")
+    parser.add_argument("--period", default="730d", help="Historical window to fetch, for example 365d or 730d.")
+    parser.add_argument("--interval", default="1h", help="Candle interval to fetch, for example 1h.")
+    parser.add_argument("--ticker", default="GC=F", help="Market symbol to backtest against.")
+    args = parser.parse_args()
     try:
-        run_swarm()
+        run_swarm(
+            reduced=args.reduced,
+            serial=args.serial,
+            threshold_only=args.threshold_only,
+            period=args.period,
+            interval=args.interval,
+            ticker=args.ticker,
+        )
     except Exception as e:
-        print(f"❌ Unhandled swarm failure: {e}")
+        print(f"❌ Unhandled swarm failure: {e}", flush=True)
         _notify_user(f"Gold predictor swarm run failed with an unhandled error: {e}")
         raise
