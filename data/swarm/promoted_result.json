@@ -1,5 +1,5 @@
 {
-  "status": "success",
+  "status": "promoted",
   "generated_at": "2026-03-31T03:13:52.590844+00:00",
   "promote": true,
   "promotion_reason": "Promoted: candidate cleared ROI, robustness, and risk gates.",
