@@ -861,8 +861,29 @@
           adx_14: "ADX",
           atr_percent: "ATR%",
         };
+        const preferredOrder = [
+          "verdict",
+          "confidence",
+          "trend",
+          "market_structure",
+          "candle_pattern",
+          "market_regime",
+          "alignment",
+          "trade_sell_setup",
+          "trade_buy_setup",
+          "trade_exit_warning",
+          "rsi_14",
+          "adx_14",
+          "atr_percent",
+        ];
+        const orderedEntries = preferredOrder
+          .filter((key) => key in (changes || {}))
+          .map((key) => [key, changes[key]]);
+        entries.forEach(([key, value]) => {
+          if (!preferredOrder.includes(key)) orderedEntries.push([key, value]);
+        });
 
-        return entries
+        return orderedEntries
           .slice(0, 4)
           .map(([k, v]) => `${labels[k] || k}: ${v.previous} -> ${v.current}`)
           .join(" | ");
@@ -911,7 +932,7 @@
 
           if ("Notification" in window && Notification.permission === "granted") {
             new Notification("XAUUSD Indicator Update", {
-              body: `${changeText}`,
+              body: `${changeText} | Verdict: ${verdict} (${confidence}%)`,
             });
           }
 
@@ -1392,7 +1413,10 @@
         const newsList = Array.isArray(data.SentimentalAnalysis)
           ? data.SentimentalAnalysis
           : [];
-        const sentiment = classifyMarketSentiment(newsList);
+        const sentiment =
+          data.SentimentSummary && typeof data.SentimentSummary === "object"
+            ? data.SentimentSummary
+            : classifyMarketSentiment(newsList);
         const sentimentTooltip = buildSentimentTooltip(
           sentiment,
           newsList.length,
@@ -1500,11 +1524,14 @@
         document.getElementById("ta-atrpct").innerText =
           regime.atr_percent !== undefined ? `${regime.atr_percent}%` : "N/A";
 
-        const tradeGuidance = computeTradeGuidance(
-          ta,
-          sentiment.label,
-          Number(data.confidence || 0),
-        );
+        const tradeGuidance =
+          data.TradeGuidance && typeof data.TradeGuidance === "object"
+            ? data.TradeGuidance
+            : computeTradeGuidance(
+                ta,
+                sentiment.label,
+                Number(data.confidence || 0),
+              );
 
         const sellEl = document.getElementById("tg-sell");
         const buyEl = document.getElementById("tg-buy");

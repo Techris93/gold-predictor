@@ -44,6 +44,91 @@ SUBSCRIPTIONS_FILE = BASE_DIR / "tools" / "reports" / "webpush_subscriptions.jso
 VAPID_PUBLIC_KEY = os.getenv("VAPID_PUBLIC_KEY", "")
 VAPID_PRIVATE_KEY = os.getenv("VAPID_PRIVATE_KEY", "")
 VAPID_CLAIMS_SUBJECT = os.getenv("VAPID_CLAIMS_SUBJECT", "mailto:alerts@example.com")
+CHANGE_SUMMARY_ORDER = [
+    "verdict",
+    "confidence",
+    "trend",
+    "market_structure",
+    "candle_pattern",
+    "market_regime",
+    "alignment",
+    "trade_sell_setup",
+    "trade_buy_setup",
+    "trade_exit_warning",
+    "rsi_14",
+    "adx_14",
+    "atr_percent",
+]
+SENTIMENT_WEIGHTED_SIGNALS = [
+    {
+        "terms": [
+            "safe haven",
+            "geopolitical",
+            "war",
+            "conflict",
+            "middle east tension",
+            "risk-off",
+        ],
+        "weight": 2,
+        "side": "bull",
+    },
+    {
+        "terms": [
+            "gold rises",
+            "gold rise",
+            "higher",
+            "rebound",
+            "gains",
+            "surges",
+            "bullish",
+            "buy",
+            "demand",
+            "record high",
+            "inflows",
+            "strong demand",
+        ],
+        "weight": 1,
+        "side": "bull",
+    },
+    {
+        "terms": [
+            "dollar rises",
+            "dollar rise",
+            "stronger dollar",
+            "dollar strength",
+            "dollar index rises",
+            "dxy rises",
+            "yields rise",
+            "yield rises",
+            "treasury yields rise",
+            "real yields rise",
+            "hawkish fed",
+            "hawkish",
+            "rate hike",
+            "rates stay high",
+            "higher rates",
+        ],
+        "weight": 2,
+        "side": "bear",
+    },
+    {
+        "terms": [
+            "gold lower",
+            "gold falls",
+            "gold fall",
+            "drops",
+            "drop",
+            "slips",
+            "bearish",
+            "sell",
+            "outflows",
+            "profit-taking",
+            "weaker",
+        ],
+        "weight": 1,
+        "side": "bear",
+    },
+]
 
 
 def _load_subscriptions():
@@ -121,15 +206,65 @@ def _summarize_changes_for_push(changes):
         "trade_buy_setup": "Buy Setup",
         "trade_exit_warning": "Exit Warning",
     }
+    ordered_keys = [key for key in CHANGE_SUMMARY_ORDER if key in changes]
+    ordered_keys.extend(key for key in changes if key not in ordered_keys)
     parts = []
-    for key, val in list(changes.items())[:3]:
+    for key in ordered_keys[:3]:
+        val = changes.get(key, {})
         prev = val.get("previous") if isinstance(val, dict) else None
         cur = val.get("current") if isinstance(val, dict) else None
         parts.append(f"{labels.get(key, key)}: {prev} -> {cur}")
     return " | ".join(parts) if parts else "Indicators changed"
 
 
-def _send_web_push_notifications(changes, verdict, confidence):
+def _classify_market_sentiment(news_list):
+    if not isinstance(news_list, list):
+        news_list = []
+
+    bullish_score = 0
+    bearish_score = 0
+    driver_counts = {}
+
+    for news in news_list:
+        title = str((news or {}).get("title", "")).lower()
+        for signal_group in SENTIMENT_WEIGHTED_SIGNALS:
+            for term in signal_group["terms"]:
+                if term in title:
+                    if signal_group["side"] == "bull":
+                        bullish_score += signal_group["weight"]
+                    else:
+                        bearish_score += signal_group["weight"]
+                    driver_counts[term] = driver_counts.get(term, 0) + 1
+
+    net_score = bullish_score - bearish_score
+    label = "Neutral"
+    if net_score >= 2:
+        label = "Bullish"
+    elif net_score <= -1:
+        label = "Bearish"
+
+    intensity = abs(net_score)
+    confidence_band = "Low"
+    if intensity >= 6:
+        confidence_band = "High"
+    elif intensity >= 3:
+        confidence_band = "Medium"
+
+    top_drivers = [
+        term for term, _count in sorted(driver_counts.items(), key=lambda item: item[1], reverse=True)[:3]
+    ]
+
+    return {
+        "label": label,
+        "confidenceBand": confidence_band,
+        "bullishScore": bullish_score,
+        "bearishScore": bearish_score,
+        "netScore": net_score,
+        "topDrivers": top_drivers,
+    }
+
+
+def _send_web_push_notifications(changes, verdict, confidence, trade_guidance):
     if webpush is None or not VAPID_PUBLIC_KEY or not VAPID_PRIVATE_KEY:
         return
 
@@ -137,12 +272,20 @@ def _send_web_push_notifications(changes, verdict, confidence):
     if not subscriptions:
         return
 
-    body = _summarize_changes_for_push(changes)
+    change_summary = _summarize_changes_for_push(changes)
+    trade_summary = ""
+    if isinstance(trade_guidance, dict):
+        trade_summary = trade_guidance.get("summary") or ""
+    body_parts = [change_summary, f"Verdict: {verdict} ({confidence}%)"]
+    if trade_summary:
+        body_parts.append(trade_summary)
+    body = " | ".join(part for part in body_parts if part)
     payload = {
         "title": "XAUUSD Indicator Update",
         "body": body,
         "verdict": verdict,
         "confidence": confidence,
+        "trade_guidance": trade_guidance,
         "url": "/",
         "ts": int(time.time()),
     }
@@ -210,12 +353,12 @@ def _is_material_change(changes):
     return False
 
 
-def _compute_trade_guidance(ta_data, confidence):
-    """Mirror the UI trade guidance so backend notifications can track it."""
+def _compute_trade_guidance(ta_data, sentiment_label, confidence):
+    """Canonical trade guidance shared by API responses and notifications."""
     if not isinstance(ta_data, dict):
         return {
-            "sellLevel": "Watch",
-            "buyLevel": "Watch",
+            "sellLevel": "Weak",
+            "buyLevel": "Weak",
             "exitLevel": "Low",
             "summary": "Trade guidance unavailable.",
         }
@@ -224,7 +367,6 @@ def _compute_trade_guidance(ta_data, confidence):
     rsi = float(ta_data.get("rsi_14", 50) or 50)
     regime = (ta_data.get("volatility_regime") or {}).get("market_regime", "Range-Bound")
     alignment = (ta_data.get("multi_timeframe") or {}).get("alignment_label", "Mixed / Low Alignment")
-    volume_signal = (ta_data.get("volume_analysis") or {}).get("overall_volume_signal", "Neutral")
     structure = (ta_data.get("price_action") or {}).get("structure", "Consolidating")
     pattern = (ta_data.get("price_action") or {}).get("latest_candle_pattern", "None")
 
@@ -242,63 +384,74 @@ def _compute_trade_guidance(ta_data, confidence):
     elif "Bullish" in alignment:
         buy_score += 2
 
-    if "Distribution" in volume_signal or "Selling" in volume_signal:
-        sell_score += 1
-        exit_score += 1
-    elif "Accumulation" in volume_signal or "Buying" in volume_signal:
-        buy_score += 1
-
-    if "Bearish" in structure or "Bearish" in pattern:
-        sell_score += 1
-        exit_score += 1
-    elif "Bullish" in structure or "Bullish" in pattern:
-        buy_score += 1
-
-    if rsi > 70:
-        sell_score += 1
-        exit_score += 2
-    elif rsi < 30:
-        buy_score += 1
-
     if regime == "Trending":
-        if trend == "Bearish":
-            sell_score += 1
-        elif trend == "Bullish":
-            buy_score += 1
-    elif regime == "Range-Bound":
-        sell_score -= 1
-        buy_score -= 1
+        sell_score += 1 if trend == "Bearish" else 0
+        buy_score += 1 if trend == "Bullish" else 0
+
+    if "Bearish" in structure:
+        sell_score += 2
+    elif "Bullish" in structure:
+        buy_score += 2
+
+    if "Bearish" in pattern:
+        sell_score += 1
+    if "Bullish" in pattern:
+        buy_score += 1
+
+    if rsi < 45:
+        sell_score += 1
+    elif rsi > 55:
+        buy_score += 1
+
+    if sentiment_label == "Bearish":
+        sell_score += 1
+    elif sentiment_label == "Bullish":
+        buy_score += 1
 
     if confidence >= 75:
-        if trend == "Bearish":
+        if sell_score > buy_score:
             sell_score += 1
-        elif trend == "Bullish":
+        elif buy_score > sell_score:
             buy_score += 1
-    elif confidence < 60:
-        sell_score -= 1
-        buy_score -= 1
 
-    def level(score, mode):
-        if score >= 5:
+    if trend == "Bearish" and ("Bullish" in structure or "Bullish" in pattern):
+        exit_score += 2
+    if trend == "Bullish" and ("Bearish" in structure or "Bearish" in pattern):
+        exit_score += 2
+    if "Mixed" in alignment:
+        exit_score += 1
+    if confidence < 65:
+        exit_score += 1
+
+    def level(score):
+        if score >= 6:
             return "Strong"
-        if score >= 3:
-            return "Ready"
-        if score >= 1:
-            return "Watch" if mode == "sell" else "Weak"
-        return "Weak" if mode == "sell" else "Watch"
+        if score >= 4:
+            return "Watch"
+        return "Weak"
 
     if exit_score >= 3:
         exit_level = "High"
-    elif exit_score >= 1:
+    elif exit_score >= 2:
         exit_level = "Medium"
     else:
         exit_level = "Low"
 
+    sell_level = level(sell_score)
+    buy_level = level(buy_score)
+    summary = "Wait for cleaner confirmation."
+    if sell_score >= 6 and sell_score > buy_score + 1:
+        summary = "Sell bias is favored; wait for bearish continuation or rejection confirmation."
+    elif buy_score >= 6 and buy_score > sell_score + 1:
+        summary = "Buy bias is favored; wait for bullish continuation or breakout confirmation."
+    elif exit_score >= 3:
+        summary = "Existing position should be monitored closely for exit or risk reduction."
+
     return {
-        "sellLevel": level(sell_score, "sell"),
-        "buyLevel": level(buy_score, "buy"),
+        "sellLevel": sell_level,
+        "buyLevel": buy_level,
         "exitLevel": exit_level,
-        "summary": f"Sell Setup {level(sell_score, 'sell')} · Buy Setup {level(buy_score, 'buy')} · Exit Warning {exit_level}",
+        "summary": summary,
     }
 
 
@@ -308,7 +461,7 @@ def _extract_indicator_snapshot(payload):
     pa = ta_data.get("price_action", {}) if isinstance(ta_data, dict) else {}
     regime = ta_data.get("volatility_regime", {}) if isinstance(ta_data, dict) else {}
     mtf = ta_data.get("multi_timeframe", {}) if isinstance(ta_data, dict) else {}
-    trade_guidance = _compute_trade_guidance(ta_data, payload.get("confidence", 0))
+    trade_guidance = payload.get("TradeGuidance", {}) if isinstance(payload, dict) else {}
 
     return {
         "verdict": payload.get("verdict"),
@@ -353,6 +506,8 @@ def _build_prediction_response():
 
     if not isinstance(sa_data, list):
         sa_data = []
+
+    sentiment_summary = _classify_market_sentiment(sa_data)
 
     if ta_data.get("error"):
         return {
@@ -478,6 +633,11 @@ def _build_prediction_response():
 
     # Ensure it stays within reasonable bounds
     confidence = round(min(max(confidence, 50), 95))
+    trade_guidance = _compute_trade_guidance(
+        ta_data,
+        sentiment_summary.get("label", "Neutral"),
+        confidence,
+    )
 
     return {
         "status": "success",
@@ -485,6 +645,8 @@ def _build_prediction_response():
         "confidence": confidence,
         "TechnicalAnalysis": ta_data,
         "SentimentalAnalysis": sa_data,
+        "SentimentSummary": sentiment_summary,
+        "TradeGuidance": trade_guidance,
     }, 200
 
 
@@ -529,6 +691,7 @@ def _indicator_monitor_loop():
                             changes=notification_changes,
                             verdict=payload.get("verdict"),
                             confidence=payload.get("confidence"),
+                            trade_guidance=payload.get("TradeGuidance"),
                         )
                         last_emit_ts = now_ts
                 last_snapshot = current_snapshot
