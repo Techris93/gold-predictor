@@ -33,8 +33,18 @@ _monitor_state = {
     "clients": 0,
 }
 
-MONITOR_INTERVAL_SECONDS = max(3, int(os.getenv("INDICATOR_MONITOR_INTERVAL_SECONDS", "5")))
-NOTIFY_MIN_INTERVAL_SECONDS = max(1, int(os.getenv("INDICATOR_NOTIFY_MIN_INTERVAL_SECONDS", "6")))
+
+def _read_int_env(name, default, minimum):
+    raw = os.getenv(name, str(default))
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, value)
+
+
+MONITOR_INTERVAL_SECONDS = _read_int_env("INDICATOR_MONITOR_INTERVAL_SECONDS", 5, 3)
+NOTIFY_MIN_INTERVAL_SECONDS = _read_int_env("INDICATOR_NOTIFY_MIN_INTERVAL_SECONDS", 6, 1)
 PUSH_EXCLUDED_FIELDS = {
     "candle_pattern",
     "rsi_14",
@@ -455,13 +465,19 @@ def _indicator_monitor_loop():
         socketio.sleep(MONITOR_INTERVAL_SECONDS)
 
 
+def _ensure_monitor_started():
+    with _monitor_lock:
+        if _monitor_state["started"]:
+            return
+        socketio.start_background_task(_indicator_monitor_loop)
+        _monitor_state["started"] = True
+
+
 @socketio.on("connect")
 def _on_socket_connect():
     with _monitor_lock:
         _monitor_state["clients"] += 1
-        if not _monitor_state["started"]:
-            socketio.start_background_task(_indicator_monitor_loop)
-            _monitor_state["started"] = True
+    _ensure_monitor_started()
 
 
 @socketio.on("disconnect")
@@ -501,6 +517,7 @@ def subscribe_push():
         return jsonify({"status": "error", "message": "Invalid subscription payload."}), 400
 
     _upsert_subscription(sub)
+    _ensure_monitor_started()
     return jsonify({"status": "success"})
 
 
@@ -608,6 +625,9 @@ def get_prediction():
         return jsonify(payload), status_code
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
+
+
+_ensure_monitor_started()
 
 if __name__ == '__main__':
     # Run on 0.0.0.0 to allow access from other devices on the local network (like your phone)
