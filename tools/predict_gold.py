@@ -13,6 +13,7 @@ import sys
 import json
 import os
 import re
+import time
 import xml.etree.ElementTree as ET
 from html import unescape
 from dotenv import load_dotenv
@@ -93,6 +94,7 @@ def _load_json_config(relative_path, fallback):
 
 
 ACTIVE_STRATEGY_PARAMS = _load_json_config("config/strategy_params.json", DEFAULT_STRATEGY_PARAMS)
+LAST_SUCCESSFUL_TA = None
 
 RSS_FEEDS = [
     ("Google News Gold", "https://news.google.com/rss/search?q=gold%20OR%20XAUUSD%20OR%20%22Federal%20Reserve%22%20OR%20inflation&hl=en-US&gl=US&ceid=US:en"),
@@ -255,6 +257,7 @@ def _fetch_mtf_trends(td_symbol, h1_trend):
 
 def get_technical_analysis():
     """Fetches gold price/technical data from Twelve Data only."""
+    global LAST_SUCCESSFUL_TA
     td_symbol = "XAU/USD"  # Twelve Data symbol for all technical/price calculations
 
     if not td_client:
@@ -263,27 +266,45 @@ def get_technical_analysis():
     df = pd.DataFrame()
     data_source = "Twelve Data"
 
-    try:
-        try:
-            ts = td_client.time_series(symbol=td_symbol, interval="1h", outputsize=100)
-            df = ts.as_pandas()
+    def _cached_ta(error_message):
+        if isinstance(LAST_SUCCESSFUL_TA, dict):
+            cached = dict(LAST_SUCCESSFUL_TA)
+            cached["stale_data"] = True
+            cached["data_warning"] = error_message
+            cached["fallback_served_at"] = int(time.time())
+            cached["data_source"] = f"{cached.get('data_source', 'Twelve Data')} (Cached Fallback)"
+            return cached
+        return {"error": error_message}
 
-            if not df.empty:
+    try:
+        last_td_error = None
+        for _ in range(2):
+            try:
+                ts = td_client.time_series(symbol=td_symbol, interval="1h", outputsize=100)
+                df = ts.as_pandas()
+
+                if df.empty:
+                    last_td_error = "Twelve Data returned an empty time series."
+                    continue
+
                 data_source = "Twelve Data (Real-Time)"
                 df.columns = [col.capitalize() for col in df.columns]
 
                 try:
                     price_data = td_client.price(symbol=td_symbol).as_json()
-                    live_price = float(price_data.get('price', 0))
-                    if live_price > 0:
-                        df.iloc[-1, df.columns.get_loc('Close')] = live_price
+                    if isinstance(price_data, dict):
+                        live_price_raw = price_data.get("price")
+                        live_price = float(live_price_raw) if live_price_raw is not None else 0.0
+                        if live_price > 0 and "Close" in df.columns:
+                            df.iloc[-1, df.columns.get_loc('Close')] = live_price
                 except Exception as p_err:
                     print(f"Twelve Data Price Tick Error: {p_err}. Using last candle close instead.")
-        except Exception as td_err:
-            return {"error": f"Twelve Data TimeSeries Error: {td_err}"}
+                break
+            except Exception as td_err:
+                last_td_error = f"Twelve Data TimeSeries Error: {td_err}"
 
         if df.empty:
-            return {"error": "Failed to fetch price data from Twelve Data."}
+            return _cached_ta(last_td_error or "Failed to fetch price data from Twelve Data.")
 
         # Normalize core OHLCV columns to numeric for stable indicator math
         for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
@@ -295,7 +316,7 @@ def get_technical_analysis():
 
         df = df.dropna(subset=['Open', 'High', 'Low', 'Close'])
         if df.empty:
-            return {"error": "Price data is malformed after cleanup."}
+            return _cached_ta("Price data is malformed after cleanup.")
 
         ema_short = int(ACTIVE_STRATEGY_PARAMS.get("ema_short", 20))
         ema_long = int(ACTIVE_STRATEGY_PARAMS.get("ema_long", 50))
@@ -436,8 +457,10 @@ def get_technical_analysis():
         # Multi-timeframe trend confirmation (15m + 1h + 4h) from Twelve Data only.
         mtf = _fetch_mtf_trends(td_symbol=td_symbol, h1_trend=ema_trend)
 
-        return {
+        result = {
             "data_source": data_source,
+            "last_updated_at": int(time.time()),
+            "stale_data": False,
             "current_price": round(latest['Close'], 2),
             "ema_trend": ema_trend,
             "ema_20": round(latest['EMA_20'], 2),
@@ -474,8 +497,10 @@ def get_technical_analysis():
             "data_points_analyzed": len(df),
             "active_strategy_params": ACTIVE_STRATEGY_PARAMS.copy(),
         }
+        LAST_SUCCESSFUL_TA = dict(result)
+        return result
     except Exception as e:
-        return {"error": str(e)}
+        return _cached_ta(str(e))
 
 def _clean_headline(text):
     text = unescape((text or "").strip())

@@ -855,6 +855,26 @@
         sourceEl.style.color = "var(--bearish)";
       }
 
+      function formatMarketDataStatus(ta) {
+        if (!ta || typeof ta !== "object") return "Market data status unknown";
+
+        const updatedAt =
+          typeof ta.last_updated_at === "number" && ta.last_updated_at > 0
+            ? new Date(ta.last_updated_at * 1000).toLocaleTimeString()
+            : null;
+
+        if (ta.stale_data) {
+          const base = ta.data_warning
+            ? `Using cached market snapshot. ${ta.data_warning}`
+            : "Using cached market snapshot.";
+          return updatedAt ? `${base} Last fresh update: ${updatedAt}` : base;
+        }
+
+        return updatedAt
+          ? `${ta.data_source} · Updated ${updatedAt}`
+          : ta.data_source || "Market data available";
+      }
+
       function updateSocketState(text, isGood) {
         const el = document.getElementById("socket-state");
         if (!el) return;
@@ -1457,10 +1477,12 @@
           sourceEl.style.marginBottom = "1rem";
           priceEl.after(sourceEl);
         }
-        sourceEl.innerText = ta.data_source;
-        sourceEl.style.color = ta.data_source.includes("Real-Time")
-          ? "var(--gold-primary)"
-          : "var(--text-muted)";
+        sourceEl.innerText = formatMarketDataStatus(ta);
+        sourceEl.style.color = ta.stale_data
+          ? "var(--bearish)"
+          : ta.data_source.includes("Real-Time")
+            ? "var(--gold-primary)"
+            : "var(--text-muted)";
 
         // Update market sentiment summary (no raw headline listing)
         const newsList = Array.isArray(data.SentimentalAnalysis)
