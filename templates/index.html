@@ -79,6 +79,7 @@
             rgba(191, 149, 63, 0.05),
             transparent 25%
           );
+        overflow-x: hidden;
       }
 
       .header {
@@ -441,15 +442,21 @@
 
       .loading {
         position: fixed;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
+        inset: 0;
+        width: 100vw;
+        height: 100vh;
+        min-height: 100dvh;
         background: var(--bg-color);
         display: flex;
         flex-direction: column;
         justify-content: center;
         align-items: center;
+        text-align: center;
+        padding:
+          max(20px, env(safe-area-inset-top))
+          max(16px, env(safe-area-inset-right))
+          max(20px, env(safe-area-inset-bottom))
+          max(16px, env(safe-area-inset-left));
         z-index: 999;
         transition: opacity 0.5s ease;
       }
@@ -1587,7 +1594,7 @@
         const buyChecks = [
           verdict === "Bullish" && confidence >= 70,
           trend === "Bullish" && hasBullishStructure,
-          bullishAlignment || !/mixed/i.test(alignment),
+          bullishAlignment,
           !hasDojiLikePattern && !noCleanTrigger,
           /watch|strong/i.test(buyLevel) && /low|medium/i.test(exitLevel),
         ];
@@ -1595,7 +1602,7 @@
         const sellChecks = [
           verdict === "Bearish" && confidence >= 70,
           trend === "Bearish" && hasBearishStructure,
-          bearishAlignment || !/mixed/i.test(alignment),
+          bearishAlignment,
           !hasDojiLikePattern && !noCleanTrigger,
           /watch|strong/i.test(sellLevel) && /low|medium/i.test(exitLevel),
         ];
