@@ -25,6 +25,7 @@ BACKTEST_PARAMS_FILE = os.path.join(BASE_DIR, "config", "backtest_params.json")
 LATEST_RESULT_FILE = os.path.join(BASE_DIR, "data", "swarm", "latest_result.json")
 PROMOTED_RESULT_FILE = os.path.join(BASE_DIR, "data", "swarm", "promoted_result.json")
 PROMOTION_DECISION_FILE = os.path.join(BASE_DIR, "data", "swarm", "promotion_decision.json")
+CONFIDENCE_CALIBRATION_FILE = os.path.join(BASE_DIR, "tools", "reports", "confidence_calibration.json")
 
 NOTIFY_TELEGRAM_TARGET = os.environ.get("GOLD_PREDICTOR_NOTIFY_TELEGRAM", "623118122")
 NOTIFY_CHANNELS = [
@@ -195,6 +196,24 @@ def _write_json(file_path, data):
     with open(file_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
         f.write("\n")
+
+
+def _write_confidence_calibration(best_result):
+    summary = (best_result or {}).get("summary") or {}
+    pass_rate = summary.get("pass_rate")
+    if not isinstance(pass_rate, (int, float)):
+        return
+
+    calibrated = round(max(50.0, min(95.0, 45.0 + (float(pass_rate) * 100.0))), 2)
+    payload = {
+        "trend|Bullish|High|stable": calibrated,
+        "trend|Bearish|High|stable": calibrated,
+        "transition|Bullish|Medium|stable": round(max(50.0, calibrated - 10.0), 2),
+        "transition|Bearish|Medium|stable": round(max(50.0, calibrated - 10.0), 2),
+        "range|Neutral|Low|unstable": 52.0,
+        "event-risk|Neutral|Low|unstable": 50.0,
+    }
+    _write_json(CONFIDENCE_CALIBRATION_FILE, payload)
 
 
 def _notify_user(message):
@@ -634,6 +653,7 @@ def run_swarm(reduced=False, serial=False, threshold_only=False, period="730d", 
     print("\n📝 Writing latest swarm run artifacts...", flush=True)
     _write_json(LATEST_RESULT_FILE, latest_payload)
     _write_json(PROMOTION_DECISION_FILE, decision_payload)
+    _write_confidence_calibration(best_result)
 
     if not promotion_decision["promote"]:
         print(f"⚖️ Promotion gate rejected candidate. {promotion_decision['promotion_reason']}", flush=True)

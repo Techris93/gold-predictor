@@ -410,6 +410,60 @@ def _compute_trade_guidance(ta_data, sentiment_label, confidence):
 
 
 def _evaluate_decision_status(verdict, confidence, ta_data, trade_guidance):
+    market_state = (ta_data or {}).get("_prediction_market_state") or {}
+    action_state = str(market_state.get("action_state") or "")
+    action = str(market_state.get("action") or "")
+    regime = str(market_state.get("regime") or "")
+    tradeability = str(market_state.get("tradeability") or "")
+    scores = market_state.get("scores") or {}
+    if action_state:
+        text = "Stand aside. Checklist does not support a clean trade yet."
+        status = "wait"
+        if action_state == "SETUP_LONG":
+            text = "Long setup forming. Bias is constructive, but trigger confirmation is still pending."
+            status = "wait"
+        elif action_state == "LONG_ACTIVE":
+            text = "Safer to look for a buy. Long state is confirmed with acceptable tradeability."
+            status = "buy"
+        elif action_state == "SETUP_SHORT":
+            text = "Short setup forming. Bias is constructive, but trigger confirmation is still pending."
+            status = "wait"
+        elif action_state == "SHORT_ACTIVE":
+            text = "Safer to look for a sell. Short state is confirmed with acceptable tradeability."
+            status = "sell"
+        elif action_state == "EXIT_RISK":
+            text = "Safer to exit or stand aside. Exit risk is confirmed against the active directional state."
+            status = "exit"
+
+        buy_checks = [
+            action_state in {"SETUP_LONG", "LONG_ACTIVE"},
+            action_state == "LONG_ACTIVE",
+            market_state.get("directional_bias") == "Bullish",
+            tradeability in {"Medium", "High"},
+            float(scores.get("stability", 0.0) or 0.0) >= 60.0,
+        ]
+        sell_checks = [
+            action_state in {"SETUP_SHORT", "SHORT_ACTIVE"},
+            action_state == "SHORT_ACTIVE",
+            market_state.get("directional_bias") == "Bearish",
+            tradeability in {"Medium", "High"},
+            float(scores.get("stability", 0.0) or 0.0) >= 60.0,
+        ]
+        exit_checks = [
+            action_state == "EXIT_RISK",
+            regime in {"event-risk", "range", "transition", "unstable"},
+            action == "exit" or tradeability == "Low",
+            float(scores.get("exit_risk", 0.0) or 0.0) >= 6.0,
+            float(scores.get("stability", 0.0) or 0.0) < 65.0,
+        ]
+        return {
+            "text": text,
+            "status": status,
+            "buyChecks": buy_checks,
+            "sellChecks": sell_checks,
+            "exitChecks": exit_checks,
+        }
+
     trend = str((ta_data or {}).get("ema_trend") or "Neutral")
     price_action = (ta_data or {}).get("price_action") or {}
     mtf = (ta_data or {}).get("multi_timeframe") or {}
@@ -674,6 +728,7 @@ def _build_prediction_response():
         compute_prediction_from_ta(ta_data, sentiment_summary),
         ta_data,
     )
+    ta_data["_prediction_market_state"] = prediction.get("MarketState", {})
     decision_status = _evaluate_decision_status(
         verdict=prediction["verdict"],
         confidence=int(prediction["confidence"]),
@@ -690,6 +745,7 @@ def _build_prediction_response():
         "SentimentalAnalysis": sa_data,
         "SentimentSummary": sentiment_summary,
         "TradeGuidance": prediction["TradeGuidance"],
+        "MarketState": prediction.get("MarketState", {}),
         "DecisionStatus": decision_status,
     }, 200
 
@@ -884,15 +940,24 @@ def get_autoresearch_latest():
         top_result = top_results[0] if isinstance(top_results, list) and top_results else {}
         roi = best.get("roi") or display_summary.get("roi")
         latest_generated_at = (latest_report or {}).get("generated_at")
-        promote = bool(promoted_report or display_report.get("promote")) and bool(best)
+        latest_run_promote = bool((latest_report or {}).get("promote"))
+        has_active_promoted_strategy = bool(promoted_report and (promoted_report.get("best_params") or {}))
         decision_reason = (decision_report or {}).get("promotion_reason") or (latest_report or {}).get("promotion_reason")
+        active_strategy_reason = (
+            "Active promoted strategy is available."
+            if has_active_promoted_strategy
+            else "No promoted strategy has been saved yet."
+        )
 
         return jsonify({
             "status": "success" if display_report else "idle",
             "generated_at": display_report.get("generated_at"),
             "latest_generated_at": latest_generated_at,
-            "promote": promote,
-            "promotion_reason": decision_reason or ("Loaded from promoted_result.json" if promote else "Swarm has not produced a fresh result yet."),
+            "promote": latest_run_promote,
+            "latest_run_promote": latest_run_promote,
+            "has_active_promoted_strategy": has_active_promoted_strategy,
+            "promotion_reason": decision_reason or "Swarm has not produced a fresh result yet.",
+            "active_strategy_reason": active_strategy_reason,
             "best_params": best,
             "latest_best_params": latest_best,
             "median_score": roi,
@@ -909,7 +974,8 @@ def get_autoresearch_latest():
                 "profit_factor": display_summary.get("profit_factor"),
                 "expectancy": display_summary.get("expectancy"),
                 "latest_run_roi": latest_summary.get("roi"),
-                "latest_run_promote": (latest_report or {}).get("promote"),
+                "latest_run_promote": latest_run_promote,
+                "has_active_promoted_strategy": has_active_promoted_strategy,
             },
             "checks": (decision_report or {}).get("checks") or (latest_report or {}).get("checks") or {},
         })

@@ -661,6 +661,46 @@
           <span class="metric-value" id="ta-active-params" style="font-size: 0.78rem; text-align: right; max-width: 56%; line-height: 1.5; white-space: normal;">---</span>
         </div>
       </div>
+
+      <div style="margin: 2rem 0">
+        <div
+          style="
+            margin-bottom: 1rem;
+            color: var(--gold-primary);
+            font-size: 0.8rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+          "
+        >
+          Market State
+        </div>
+
+        <div class="metric-row">
+          <span class="metric-label">Regime</span>
+          <span class="metric-value" id="ms-regime">---</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Directional Bias</span>
+          <span class="metric-value" id="ms-bias">---</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Tradeability</span>
+          <span class="metric-value" id="ms-tradeability">---</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Action State</span>
+          <span class="metric-value" id="ms-action-state">---</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Action</span>
+          <span class="metric-value" id="ms-action">---</span>
+        </div>
+        <div class="metric-row" style="align-items: flex-start; gap: 0.75rem;">
+          <span class="metric-label">Composite Scores</span>
+          <span class="metric-value" id="ms-scores" style="font-size: 0.78rem; text-align: right; max-width: 56%; line-height: 1.5; white-space: normal;">---</span>
+        </div>
+      </div>
       <div class="ar-card" style="margin-bottom: 2rem">
         <button
           type="button"
@@ -735,7 +775,7 @@
               <ul class="decision-points" id="buy-checklist">
                 <li><span class="check-icon">-</span><strong>Verdict:</strong> Bullish with confidence around 70% or higher.</li>
                 <li><span class="check-icon">-</span><strong>Trend + structure:</strong> Trend Structure is Bullish and Market Structure is bullish drift, breakout, or continuation.</li>
-                <li><span class="check-icon">-</span><strong>Alignment:</strong> 15m / 1H / 4H is bullish or at least not mixed.</li>
+                <li><span class="check-icon">-</span><strong>Alignment:</strong> 15m / 1H / 4H shows strong bullish alignment.</li>
                 <li><span class="check-icon">-</span><strong>Trigger:</strong> Candle is not a doji and Summary does not say there is no clean trigger.</li>
                 <li><span class="check-icon">-</span><strong>Guidance:</strong> Buy Setup is Moderate or Strong while Exit Warning stays Low or Moderate.</li>
               </ul>
@@ -745,7 +785,7 @@
               <ul class="decision-points" id="sell-checklist">
                 <li><span class="check-icon">-</span><strong>Verdict:</strong> Bearish with confidence around 70% or higher.</li>
                 <li><span class="check-icon">-</span><strong>Trend + structure:</strong> Trend Structure is Bearish and Market Structure shows bearish drift, breakdown, or rejection.</li>
-                <li><span class="check-icon">-</span><strong>Alignment:</strong> 15m / 1H / 4H is bearish or at least not mixed.</li>
+                <li><span class="check-icon">-</span><strong>Alignment:</strong> 15m / 1H / 4H shows strong bearish alignment.</li>
                 <li><span class="check-icon">-</span><strong>Trigger:</strong> Candle is not indecisive and Summary supports downside continuation or rejection.</li>
                 <li><span class="check-icon">-</span><strong>Guidance:</strong> Sell Setup is Moderate or Strong while Exit Warning stays Low or Moderate.</li>
               </ul>
@@ -1819,6 +1859,43 @@
           regime.adx_14 !== undefined ? regime.adx_14 : "N/A";
         document.getElementById("ta-atrpct").innerText =
           regime.atr_percent !== undefined ? `${regime.atr_percent}%` : "N/A";
+
+        const marketState =
+          data.MarketState && typeof data.MarketState === "object"
+            ? data.MarketState
+            : {};
+        const marketScores =
+          marketState.scores && typeof marketState.scores === "object"
+            ? marketState.scores
+            : {};
+        const marketRegimeText = marketState.regime || "Unknown";
+        const marketBiasText = marketState.directional_bias || "Neutral";
+        const marketTradeabilityText = marketState.tradeability || "Low";
+        const marketActionStateText = marketState.action_state || "WAIT";
+        const marketActionText = marketState.action || "hold";
+
+        const marketRegimeEl = document.getElementById("ms-regime");
+        marketRegimeEl.innerText = marketRegimeText;
+        marketRegimeEl.className = `metric-value ${marketRegimeText === "trend" ? "value-bullish" : marketRegimeText === "event-risk" ? "value-bearish" : ""}`;
+
+        const marketBiasEl = document.getElementById("ms-bias");
+        marketBiasEl.innerText = marketBiasText;
+        marketBiasEl.className = `metric-value ${marketBiasText === "Bullish" ? "value-bullish" : marketBiasText === "Bearish" ? "value-bearish" : ""}`;
+
+        const marketTradeabilityEl = document.getElementById("ms-tradeability");
+        marketTradeabilityEl.innerText = marketTradeabilityText;
+        marketTradeabilityEl.className = `metric-value ${marketTradeabilityText === "High" ? "value-bullish" : marketTradeabilityText === "Low" ? "value-bearish" : ""}`;
+
+        const marketActionStateEl = document.getElementById("ms-action-state");
+        marketActionStateEl.innerText = marketActionStateText.replaceAll("_", " ");
+        marketActionStateEl.className = `metric-value ${marketActionStateText === "LONG_ACTIVE" ? "value-bullish" : marketActionStateText === "SHORT_ACTIVE" || marketActionStateText === "EXIT_RISK" ? "value-bearish" : ""}`;
+
+        const marketActionEl = document.getElementById("ms-action");
+        marketActionEl.innerText = marketActionText.toUpperCase();
+        marketActionEl.className = `metric-value ${marketActionText === "buy" ? "value-bullish" : marketActionText === "sell" || marketActionText === "exit" ? "value-bearish" : ""}`;
+
+        const marketScoresEl = document.getElementById("ms-scores");
+        marketScoresEl.innerText = `Direction ${Number(marketScores.direction || 0).toFixed(2)} · Tradeability ${Number(marketScores.tradeability || 0).toFixed(2)} · Exit Risk ${Number(marketScores.exit_risk || 0).toFixed(2)} · Stability ${Number(marketScores.stability || 0).toFixed(2)}`;
 
         const tradeGuidance =
           data.TradeGuidance && typeof data.TradeGuidance === "object"

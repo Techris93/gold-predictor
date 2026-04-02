@@ -76,17 +76,103 @@ def generate_signals(df):
     params = normalize_strategy_params(ACTIVE_BACKTEST_PARAMS)
     enriched = prepare_historical_features(df, params)
     signals = pd.Series('Neutral', index=enriched.index)
+    states = []
     sentiment_summary = {"label": "Neutral"}
 
     for i in range(len(enriched)):
         ta_payload = build_ta_payload_from_row(enriched.iloc[i], params)
-        verdict = compute_prediction_from_ta(ta_payload, sentiment_summary)["verdict"]
+        prediction = compute_prediction_from_ta(ta_payload, sentiment_summary)
+        verdict = prediction["verdict"]
         if verdict == 'Bullish':
             signals.iloc[i] = 'Buy'
         elif verdict == 'Bearish':
             signals.iloc[i] = 'Sell'
+        states.append(
+            {
+                "timestamp": str(enriched.index[i]),
+                "verdict": verdict,
+                "action_state": prediction.get("actionState"),
+                "action": prediction.get("action"),
+                "regime": prediction.get("regime"),
+                "directional_bias": prediction.get("directionalBias"),
+                "tradeability": prediction.get("tradeability"),
+                "confidence": prediction.get("confidence"),
+                "direction_score": prediction.get("directionScore"),
+                "tradeability_score": prediction.get("tradeabilityScore"),
+                "exit_risk_score": prediction.get("exitRiskScore"),
+                "stability_score": prediction.get("stabilityScore"),
+            }
+        )
 
-    return signals
+    return signals, states
+
+
+def summarize_transition_metrics(df, states):
+    if not states:
+        return {}
+
+    actionable_states = {"LONG_ACTIVE", "SHORT_ACTIVE"}
+    transition_count = 0
+    false_entry_count = 0
+    whipsaw_count = 0
+    persistence_lengths = []
+    favorable_moves = []
+    adverse_moves = []
+    reversal_lengths = []
+
+    last_action_state = states[0].get("action_state")
+    current_persistence = 1
+
+    for i in range(1, len(states)):
+        state = states[i]
+        prev = states[i - 1]
+        if state.get("action_state") != prev.get("action_state"):
+            transition_count += 1
+            persistence_lengths.append(current_persistence)
+            current_persistence = 1
+        else:
+            current_persistence += 1
+
+        prev_state = prev.get("action_state")
+        cur_state = state.get("action_state")
+        if prev_state in actionable_states and cur_state == "EXIT_RISK":
+            reversal_lengths.append(1)
+        if prev_state == "LONG_ACTIVE" and cur_state in {"EXIT_RISK", "WAIT"}:
+            entry_price = float(df["Close"].iloc[i - 1])
+            future = df.iloc[i:min(i + 4, len(df))]
+            if not future.empty:
+                favorable = (future["High"].max() - entry_price) / max(entry_price, 1e-8)
+                adverse = (future["Low"].min() - entry_price) / max(entry_price, 1e-8)
+                favorable_moves.append(float(favorable))
+                adverse_moves.append(float(adverse))
+                if favorable < 0.0025:
+                    false_entry_count += 1
+        if prev_state == "SHORT_ACTIVE" and cur_state in {"EXIT_RISK", "WAIT"}:
+            entry_price = float(df["Close"].iloc[i - 1])
+            future = df.iloc[i:min(i + 4, len(df))]
+            if not future.empty:
+                favorable = (entry_price - future["Low"].min()) / max(entry_price, 1e-8)
+                adverse = (entry_price - future["High"].max()) / max(entry_price, 1e-8)
+                favorable_moves.append(float(favorable))
+                adverse_moves.append(float(adverse))
+                if favorable < 0.0025:
+                    false_entry_count += 1
+        if prev_state in {"LONG_ACTIVE", "SHORT_ACTIVE"} and cur_state in {"LONG_ACTIVE", "SHORT_ACTIVE"} and prev_state != cur_state:
+            whipsaw_count += 1
+
+    persistence_lengths.append(current_persistence)
+    actionable_entries = sum(1 for item in states if item.get("action_state") in actionable_states)
+
+    return {
+        "transition_count": transition_count,
+        "actionable_entries": actionable_entries,
+        "false_entry_rate": round(false_entry_count / actionable_entries, 4) if actionable_entries else 0.0,
+        "whipsaw_rate": round(whipsaw_count / actionable_entries, 4) if actionable_entries else 0.0,
+        "avg_signal_persistence": round(float(np.mean(persistence_lengths)), 2) if persistence_lengths else 0.0,
+        "avg_favorable_excursion": round(float(np.mean(favorable_moves)) * 100, 3) if favorable_moves else 0.0,
+        "avg_adverse_excursion": round(float(np.mean(adverse_moves)) * 100, 3) if adverse_moves else 0.0,
+        "avg_time_to_reversal": round(float(np.mean(reversal_lengths)), 2) if reversal_lengths else 0.0,
+    }
 
 def run_backtest(ticker="GC=F", period="2y", interval="1h"):
     print(f"Fetching {period} of {interval} data for {ticker}...")
@@ -100,7 +186,7 @@ def run_backtest(ticker="GC=F", period="2y", interval="1h"):
     print(f"Loaded {len(df)} historical candles.")
     print("Calculating indicators and applying strategy logic...")
 
-    signals = generate_signals(df)
+    signals, states = generate_signals(df)
 
     position = 0
     entry_price = 0
@@ -161,6 +247,12 @@ def run_backtest(ticker="GC=F", period="2y", interval="1h"):
         print(f"Average Win:        {avg_win:.2f}%")
         print(f"Average Loss:       {avg_loss:.2f}%")
         print(f"Final Capital:      ${capital:.2f} (from $10,000 start)")
+        transition_metrics = summarize_transition_metrics(df, states)
+        print(f"Whipsaw Rate:       {transition_metrics.get('whipsaw_rate', 0.0):.4f}")
+        print(f"False Entry Rate:   {transition_metrics.get('false_entry_rate', 0.0):.4f}")
+        print(f"Avg Persistence:    {transition_metrics.get('avg_signal_persistence', 0.0):.2f} bars")
+        print(f"Avg Favorable Exc.: {transition_metrics.get('avg_favorable_excursion', 0.0):.3f}%")
+        print(f"Avg Adverse Exc.:   {transition_metrics.get('avg_adverse_excursion', 0.0):.3f}%")
     else:
         print("No trades triggered.")
 

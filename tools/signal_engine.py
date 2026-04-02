@@ -1,5 +1,7 @@
 import pandas as pd
 import ta
+from pathlib import Path
+import json
 
 
 DEFAULT_STRATEGY_PARAMS = {
@@ -43,8 +45,25 @@ DEFAULT_STRATEGY_PARAMS = {
     "no_trade_adx_threshold": 18,
     "no_trade_confidence_cap": 60,
     "event_risk_penalty": 15.0,
+    "regime_quality_weight": 0.30,
+    "alignment_quality_weight": 0.20,
+    "structure_quality_weight": 0.20,
+    "trigger_quality_weight": 0.15,
+    "volume_quality_weight": 0.10,
+    "sentiment_quality_weight": 0.05,
+    "stability_flip_penalty": 12.0,
+    "stability_conflict_penalty": 10.0,
+    "stability_mixed_alignment_penalty": 10.0,
+    "high_tradeability_threshold": 68.0,
+    "medium_tradeability_threshold": 52.0,
+    "direction_entry_threshold": 8.0,
+    "direction_hold_threshold": 5.0,
+    "exit_risk_threshold": 6.0,
     "mtf_intervals": ["15min", "1h", "4h"],
 }
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+CONFIDENCE_CALIBRATION_FILE = BASE_DIR / "tools" / "reports" / "confidence_calibration.json"
 
 SENTIMENT_WEIGHTED_SIGNALS = [
     {
@@ -123,6 +142,37 @@ def normalize_strategy_params(params=None):
     if isinstance(params, dict):
         merged.update(params)
     return merged
+
+
+def _load_confidence_calibration():
+    try:
+        if not CONFIDENCE_CALIBRATION_FILE.exists():
+            return {}
+        data = json.loads(CONFIDENCE_CALIBRATION_FILE.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _bucket_from_components(regime_label, directional_bias, tradeability, stability):
+    return "|".join(
+        [
+            str(regime_label or "unknown"),
+            str(directional_bias or "Neutral"),
+            str(tradeability or "Low"),
+            "stable" if float(stability or 0) >= 60 else "unstable",
+        ]
+    )
+
+
+def _calibrate_confidence(raw_confidence, regime_label, directional_bias, tradeability, stability):
+    calibration = _load_confidence_calibration()
+    bucket = _bucket_from_components(regime_label, directional_bias, tradeability, stability)
+    empirical = calibration.get(bucket)
+    if isinstance(empirical, (int, float)):
+        calibrated = max(50, min(95, round(float(empirical))))
+        return calibrated, "empirical", bucket
+    return int(raw_confidence), "heuristic", bucket
 
 
 def classify_market_sentiment(news_list):
@@ -412,12 +462,125 @@ def compute_prediction_from_ta(ta_data, sentiment_summary=None):
     score_margin = abs(score_diff)
     evidence_total = bull_score + bear_score
 
-    if score_diff >= verdict_margin_threshold and bull_trigger >= trigger_min_score:
+    direction_entry_threshold = float(strategy_params.get("direction_entry_threshold", 8.0))
+    direction_hold_threshold = float(strategy_params.get("direction_hold_threshold", 5.0))
+    exit_risk_threshold = float(strategy_params.get("exit_risk_threshold", 6.0))
+    regime_quality_weight = float(strategy_params.get("regime_quality_weight", 0.30))
+    alignment_quality_weight = float(strategy_params.get("alignment_quality_weight", 0.20))
+    structure_quality_weight = float(strategy_params.get("structure_quality_weight", 0.20))
+    trigger_quality_weight = float(strategy_params.get("trigger_quality_weight", 0.15))
+    volume_quality_weight = float(strategy_params.get("volume_quality_weight", 0.10))
+    sentiment_quality_weight = float(strategy_params.get("sentiment_quality_weight", 0.05))
+    stability_flip_penalty = float(strategy_params.get("stability_flip_penalty", 12.0))
+    stability_conflict_penalty = float(strategy_params.get("stability_conflict_penalty", 10.0))
+    stability_mixed_alignment_penalty = float(strategy_params.get("stability_mixed_alignment_penalty", 10.0))
+    high_tradeability_threshold = float(strategy_params.get("high_tradeability_threshold", 68.0))
+    medium_tradeability_threshold = float(strategy_params.get("medium_tradeability_threshold", 52.0))
+
+    regime_label = "transition"
+    if event_risk.get("active"):
+        regime_label = "event-risk"
+    elif regime == "Range-Bound":
+        regime_label = "range"
+    elif alignment_label == "Mixed / Low Alignment" or ("Consolidating" in pa_struct and trend == "Neutral"):
+        regime_label = "transition"
+    elif regime == "Trending" and trend in {"Bullish", "Bearish"}:
+        regime_label = "trend"
+    else:
+        regime_label = "unstable"
+
+    directional_bias = "Neutral"
+    if score_diff >= verdict_margin_threshold:
+        directional_bias = "Bullish"
+    elif score_diff <= -verdict_margin_threshold:
+        directional_bias = "Bearish"
+
+    if directional_bias == "Bullish" and bull_trigger >= trigger_min_score:
         verdict = "Bullish"
-    elif score_diff <= -verdict_margin_threshold and bear_trigger >= trigger_min_score:
+    elif directional_bias == "Bearish" and bear_trigger >= trigger_min_score:
         verdict = "Bearish"
 
-    base_conf = 50 + (score_margin * confidence_margin_multiplier) + (evidence_total * confidence_evidence_multiplier)
+    conflict_count = 0
+    if trend == "Bullish" and ("Bearish" in pa_struct or "Bearish" in pa_pattern):
+        conflict_count += 1
+    if trend == "Bearish" and ("Bullish" in pa_struct or "Bullish" in pa_pattern):
+        conflict_count += 1
+    if alignment_label == "Mixed / Low Alignment":
+        conflict_count += 1
+    if regime_label in {"transition", "event-risk", "unstable"}:
+        conflict_count += 1
+
+    stability_score = 100.0
+    stability_score -= conflict_count * stability_conflict_penalty
+    if alignment_label == "Mixed / Low Alignment":
+        stability_score -= stability_mixed_alignment_penalty
+    if regime_label in {"transition", "unstable"}:
+        stability_score -= stability_flip_penalty * 0.5
+    if "Doji" in pa_pattern:
+        stability_score -= 8.0
+    if no_trade_reasons:
+        stability_score -= 8.0
+    stability_score = max(0.0, min(100.0, stability_score))
+
+    regime_quality = 100.0 if regime_label == "trend" else 65.0 if regime_label == "transition" else 35.0 if regime_label == "range" else 20.0 if regime_label == "event-risk" else 30.0
+    alignment_quality = 85.0 if alignment_label.startswith("Strong") else 35.0
+    structure_quality = 80.0 if any(token in pa_struct for token in ["Breakout", "Breakdown", "Bullish Drift", "Bearish Drift", "Bullish Structure", "Bearish Structure"]) else 35.0
+    trigger_quality = min(100.0, max(bull_trigger, bear_trigger) * 20.0)
+    volume_quality = 75.0 if "Strong" in volume else 55.0 if "Bias" in volume else 40.0
+    sentiment_quality = 70.0 if sentiment_summary.get("label") in {"Bullish", "Bearish"} else 45.0
+
+    tradeability_score = (
+        regime_quality * regime_quality_weight
+        + alignment_quality * alignment_quality_weight
+        + structure_quality * structure_quality_weight
+        + trigger_quality * trigger_quality_weight
+        + volume_quality * volume_quality_weight
+        + sentiment_quality * sentiment_quality_weight
+    )
+    tradeability_score = max(0.0, min(100.0, tradeability_score * (stability_score / 100.0)))
+
+    if tradeability_score >= high_tradeability_threshold:
+        tradeability_label = "High"
+    elif tradeability_score >= medium_tradeability_threshold:
+        tradeability_label = "Medium"
+    else:
+        tradeability_label = "Low"
+
+    direction_score = round(max(bull_score, bear_score), 2)
+    exit_risk_score = 0.0
+    if verdict == "Bullish":
+        exit_risk_score = bear_trigger + (2.0 if alignment_label == "Mixed / Low Alignment" else 0.0) + (2.0 if "Bearish" in pa_pattern else 0.0)
+    elif verdict == "Bearish":
+        exit_risk_score = bull_trigger + (2.0 if alignment_label == "Mixed / Low Alignment" else 0.0) + (2.0 if "Bullish" in pa_pattern else 0.0)
+    else:
+        exit_risk_score = 4.0 if no_trade_reasons else 2.0
+
+    action_state = "WAIT"
+    if regime_label in {"event-risk", "range", "unstable"} or tradeability_label == "Low":
+        action_state = "WAIT"
+    elif directional_bias == "Bullish":
+        if direction_score >= direction_entry_threshold and bull_trigger >= trigger_min_score and tradeability_label == "High":
+            action_state = "LONG_ACTIVE"
+        elif direction_score >= direction_hold_threshold:
+            action_state = "SETUP_LONG"
+    elif directional_bias == "Bearish":
+        if direction_score >= direction_entry_threshold and bear_trigger >= trigger_min_score and tradeability_label == "High":
+            action_state = "SHORT_ACTIVE"
+        elif direction_score >= direction_hold_threshold:
+            action_state = "SETUP_SHORT"
+
+    if verdict in {"Bullish", "Bearish"} and exit_risk_score >= exit_risk_threshold:
+        action_state = "EXIT_RISK"
+
+    action = "hold"
+    if action_state == "LONG_ACTIVE":
+        action = "buy"
+    elif action_state == "SHORT_ACTIVE":
+        action = "sell"
+    elif action_state == "EXIT_RISK":
+        action = "exit"
+
+    base_conf = 50 + (score_margin * confidence_margin_multiplier) + (evidence_total * confidence_evidence_multiplier) + (stability_score * 0.12)
     penalty = 0.0
 
     if regime == "Range-Bound":
@@ -443,9 +606,18 @@ def compute_prediction_from_ta(ta_data, sentiment_summary=None):
     if no_trade_reasons:
         verdict = "Neutral"
         confidence = min(confidence, no_trade_confidence_cap)
+        action_state = "WAIT" if action_state != "EXIT_RISK" else "EXIT_RISK"
+        action = "hold" if action_state == "WAIT" else "exit"
     elif verdict == "Neutral":
         confidence = min(confidence, neutral_confidence_cap)
     confidence = round(min(max(confidence, 50), 95))
+    confidence, confidence_mode, confidence_bucket = _calibrate_confidence(
+        confidence,
+        regime_label,
+        directional_bias,
+        tradeability_label,
+        stability_score,
+    )
 
     trade_guidance = compute_trade_guidance(
         ta_data,
@@ -457,6 +629,17 @@ def compute_prediction_from_ta(ta_data, sentiment_summary=None):
         trade_guidance["buyLevel"] = "Weak"
         trade_guidance["summary"] = no_trade_reasons[0]
 
+    if action_state == "SETUP_LONG":
+        trade_guidance["summary"] = "Long setup is forming, but trigger confirmation is still pending."
+    elif action_state == "LONG_ACTIVE":
+        trade_guidance["summary"] = "Long setup confirmed with acceptable tradeability."
+    elif action_state == "SETUP_SHORT":
+        trade_guidance["summary"] = "Short setup is forming, but trigger confirmation is still pending."
+    elif action_state == "SHORT_ACTIVE":
+        trade_guidance["summary"] = "Short setup confirmed with acceptable tradeability."
+    elif action_state == "EXIT_RISK":
+        trade_guidance["summary"] = "Exit risk is elevated; the active directional state is deteriorating."
+
     return {
         "raw_verdict": "Bullish" if score_diff >= verdict_margin_threshold else ("Bearish" if score_diff <= -verdict_margin_threshold else "Neutral"),
         "verdict": verdict,
@@ -464,6 +647,40 @@ def compute_prediction_from_ta(ta_data, sentiment_summary=None):
         "noTradeReason": no_trade_reasons[0] if no_trade_reasons else "",
         "setupScore": round(max(bull_setup, bear_setup), 2),
         "triggerScore": round(max(bull_trigger, bear_trigger), 2),
+        "directionScore": direction_score,
+        "tradeabilityScore": round(tradeability_score, 2),
+        "exitRiskScore": round(exit_risk_score, 2),
+        "stabilityScore": round(stability_score, 2),
+        "regime": regime_label,
+        "directionalBias": directional_bias,
+        "tradeability": tradeability_label,
+        "actionState": action_state,
+        "action": action,
+        "confidenceMode": confidence_mode,
+        "confidenceBucket": confidence_bucket,
+        "MarketState": {
+            "regime": regime_label,
+            "directional_bias": directional_bias,
+            "tradeability": tradeability_label,
+            "action": action,
+            "action_state": action_state,
+            "scores": {
+                "direction": round(direction_score, 2),
+                "tradeability": round(tradeability_score, 2),
+                "exit_risk": round(exit_risk_score, 2),
+                "stability": round(stability_score, 2),
+            },
+            "quality_components": {
+                "regime_quality": round(regime_quality, 2),
+                "alignment_quality": round(alignment_quality, 2),
+                "structure_quality": round(structure_quality, 2),
+                "trigger_quality": round(trigger_quality, 2),
+                "volume_quality": round(volume_quality, 2),
+                "sentiment_quality": round(sentiment_quality, 2),
+            },
+            "confidence_mode": confidence_mode,
+            "confidence_bucket": confidence_bucket,
+        },
         "TradeGuidance": trade_guidance,
     }
 
