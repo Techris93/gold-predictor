@@ -14,18 +14,29 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
 echo "================================================="
 echo "Gold (XAUUSD) Swarm Optimization Run: $(date)"
 echo "================================================="
 
-# IMPORTANT: Ensure your python path here is correct.
-PYTHON_EXEC="${PYTHON_EXEC:-python3}"
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Prefer the project virtualenv under cron, where PATH is usually minimal.
+DEFAULT_PYTHON="$PROJECT_ROOT/.venv/bin/python"
+if [[ ! -x "$DEFAULT_PYTHON" && -x "$PROJECT_ROOT/.venv313/bin/python" ]]; then
+  DEFAULT_PYTHON="$PROJECT_ROOT/.venv313/bin/python"
+fi
+PYTHON_EXEC="${PYTHON_EXEC:-$DEFAULT_PYTHON}"
 SCRIPT_PATH="$SCRIPT_DIR/swarm_optimize.py"
 
 cd "$SCRIPT_DIR"
 if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   git pull --ff-only origin main >/tmp/gold_swarm_git_pull.log 2>&1 || true
+fi
+
+if [[ ! -x "$PYTHON_EXEC" ]]; then
+  echo "Python executable not found: $PYTHON_EXEC"
+  exit 1
 fi
 
 "$PYTHON_EXEC" -u "$SCRIPT_PATH" --threshold-only --reduced --serial --period 365d --interval 1h --ticker GC=F

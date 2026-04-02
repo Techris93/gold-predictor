@@ -26,10 +26,8 @@ LATEST_RESULT_FILE = os.path.join(BASE_DIR, "data", "swarm", "latest_result.json
 PROMOTED_RESULT_FILE = os.path.join(BASE_DIR, "data", "swarm", "promoted_result.json")
 PROMOTION_DECISION_FILE = os.path.join(BASE_DIR, "data", "swarm", "promotion_decision.json")
 
-NOTIFY_WHATSAPP_TARGET = os.environ.get("GOLD_PREDICTOR_NOTIFY_WHATSAPP", "+905528493671")
 NOTIFY_TELEGRAM_TARGET = os.environ.get("GOLD_PREDICTOR_NOTIFY_TELEGRAM", "623118122")
 NOTIFY_CHANNELS = [
-    ("whatsapp", NOTIFY_WHATSAPP_TARGET),
     ("telegram", NOTIFY_TELEGRAM_TARGET),
 ]
 
