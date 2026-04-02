@@ -285,6 +285,130 @@
         font-size: 0.95rem;
       }
 
+      .decision-card {
+        margin-top: 1rem;
+        padding: 1rem;
+        border-radius: 16px;
+        background: rgba(255, 215, 0, 0.05);
+        border: 1px solid rgba(255, 215, 0, 0.14);
+      }
+
+      .decision-title {
+        color: var(--gold-primary);
+        font-size: 0.76rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        margin-bottom: 0.85rem;
+      }
+
+      .decision-grid {
+        display: grid;
+        gap: 0.85rem;
+      }
+
+      .decision-block {
+        padding: 0.8rem 0.9rem;
+        border-radius: 12px;
+        background: rgba(0, 0, 0, 0.18);
+      }
+
+      .decision-heading {
+        font-size: 0.8rem;
+        font-weight: 700;
+        margin-bottom: 0.45rem;
+      }
+
+      .decision-heading.buy {
+        color: var(--bullish);
+      }
+
+      .decision-heading.sell {
+        color: var(--bearish);
+      }
+
+      .decision-heading.exit {
+        color: var(--gold-primary);
+      }
+
+      .decision-points {
+        list-style: none;
+        display: grid;
+        gap: 0.4rem;
+      }
+
+      .decision-points li {
+        color: var(--text-muted);
+        font-size: 0.8rem;
+        line-height: 1.4;
+      }
+
+      .decision-points li.pass {
+        color: #d5dfef;
+      }
+
+      .decision-points li.fail {
+        color: var(--text-muted);
+        opacity: 0.78;
+      }
+
+      .decision-points li .check-icon {
+        display: inline-block;
+        width: 1.1rem;
+        font-weight: 700;
+      }
+
+      .decision-points li.pass .check-icon {
+        color: var(--bullish);
+      }
+
+      .decision-points li.fail .check-icon {
+        color: var(--bearish);
+      }
+
+      .decision-status {
+        margin-bottom: 0.9rem;
+        padding: 0.95rem 1rem;
+        border-radius: 14px;
+        background: rgba(0, 0, 0, 0.22);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+      }
+
+      .decision-status-label {
+        color: var(--text-muted);
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.8px;
+        margin-bottom: 0.35rem;
+      }
+
+      .decision-status-value {
+        font-size: 0.92rem;
+        font-weight: 700;
+        line-height: 1.4;
+      }
+
+      .decision-status-value.buy {
+        color: var(--bullish);
+      }
+
+      .decision-status-value.sell {
+        color: var(--bearish);
+      }
+
+      .decision-status-value.exit {
+        color: var(--gold-primary);
+      }
+
+      .decision-status-value.wait {
+        color: var(--neutral);
+      }
+
+      .decision-points strong {
+        color: var(--text-main);
+        font-weight: 600;
+      }
+
       .value-bullish {
         color: var(--bullish);
       }
@@ -588,6 +712,47 @@
               style="font-size: 0.8rem; text-align: right; max-width: 56%"
               >---</span
             >
+          </div>
+        </div>
+        <div class="decision-card">
+          <div class="decision-title">Execution Checklist</div>
+          <div class="decision-status">
+            <div class="decision-status-label">Current Read</div>
+            <div class="decision-status-value wait" id="decision-status">
+              Evaluating checklist...
+            </div>
+          </div>
+          <div class="decision-grid">
+            <div class="decision-block">
+              <div class="decision-heading buy">Buy Only When</div>
+              <ul class="decision-points" id="buy-checklist">
+                <li><span class="check-icon">-</span><strong>Verdict:</strong> Bullish with confidence around 70% or higher.</li>
+                <li><span class="check-icon">-</span><strong>Trend + structure:</strong> Trend Structure is Bullish and Market Structure is bullish drift, breakout, or continuation.</li>
+                <li><span class="check-icon">-</span><strong>Alignment:</strong> 15m / 1H / 4H is bullish or at least not mixed.</li>
+                <li><span class="check-icon">-</span><strong>Trigger:</strong> Candle is not a doji and Summary does not say there is no clean trigger.</li>
+                <li><span class="check-icon">-</span><strong>Guidance:</strong> Buy Setup is Moderate or Strong while Exit Warning stays Low or Moderate.</li>
+              </ul>
+            </div>
+            <div class="decision-block">
+              <div class="decision-heading sell">Sell Only When</div>
+              <ul class="decision-points" id="sell-checklist">
+                <li><span class="check-icon">-</span><strong>Verdict:</strong> Bearish with confidence around 70% or higher.</li>
+                <li><span class="check-icon">-</span><strong>Trend + structure:</strong> Trend Structure is Bearish and Market Structure shows bearish drift, breakdown, or rejection.</li>
+                <li><span class="check-icon">-</span><strong>Alignment:</strong> 15m / 1H / 4H is bearish or at least not mixed.</li>
+                <li><span class="check-icon">-</span><strong>Trigger:</strong> Candle is not indecisive and Summary supports downside continuation or rejection.</li>
+                <li><span class="check-icon">-</span><strong>Guidance:</strong> Sell Setup is Moderate or Strong while Exit Warning stays Low or Moderate.</li>
+              </ul>
+            </div>
+            <div class="decision-block">
+              <div class="decision-heading exit">Exit Or Stand Aside When</div>
+              <ul class="decision-points" id="exit-checklist">
+                <li><span class="check-icon">-</span><strong>Neutral:</strong> Verdict is Neutral, alignment is mixed, or Summary says no clean trigger is present.</li>
+                <li><span class="check-icon">-</span><strong>Warning:</strong> Exit Warning is High or confidence drops sharply.</li>
+                <li><span class="check-icon">-</span><strong>Conflict:</strong> Market Structure and Trend Structure point in different directions.</li>
+                <li><span class="check-icon">-</span><strong>Indecision:</strong> Candle Pattern is Doji or another weak reversal candle near key levels.</li>
+                <li><span class="check-icon">-</span><strong>Rule:</strong> If Buy Setup and Sell Setup are both Weak, do not force a trade.</li>
+              </ul>
+            </div>
           </div>
         </div>
       </div>
@@ -1421,6 +1586,96 @@
         };
       }
 
+      function setChecklistState(listId, checks) {
+        const list = document.getElementById(listId);
+        if (!list) return;
+        const items = Array.from(list.querySelectorAll("li"));
+        items.forEach((item, index) => {
+          const passed = Boolean(checks[index]);
+          item.classList.toggle("pass", passed);
+          item.classList.toggle("fail", !passed);
+          const icon = item.querySelector(".check-icon");
+          if (icon) {
+            icon.textContent = passed ? "✓" : "✗";
+          }
+        });
+      }
+
+      function evaluateDecisionChecklist(data, ta, tradeGuidance) {
+        const verdict = String(data?.verdict || "Neutral");
+        const confidence = Number(data?.confidence || 0);
+        const trend = String(ta?.ema_trend || "Neutral");
+        const structure = String(ta?.price_action?.structure || "");
+        const pattern = String(ta?.price_action?.latest_candle_pattern || "");
+        const alignment = String(ta?.multi_timeframe?.alignment_label || "Mixed / Low Alignment");
+        const summary = String(tradeGuidance?.summary || "");
+        const buyLevel = String(tradeGuidance?.buyLevel || "Weak");
+        const sellLevel = String(tradeGuidance?.sellLevel || "Weak");
+        const exitLevel = String(tradeGuidance?.exitLevel || "Low");
+
+        const hasBullishStructure =
+          /bullish|breakout|continuation/i.test(structure);
+        const hasBearishStructure =
+          /bearish|breakdown|rejection/i.test(structure);
+        const hasDojiLikePattern = /doji|indecision|spinning top/i.test(pattern);
+        const noCleanTrigger = /no clean trigger/i.test(summary);
+        const bullishAlignment = /bullish/i.test(alignment) && !/mixed/i.test(alignment);
+        const bearishAlignment = /bearish/i.test(alignment) && !/mixed/i.test(alignment);
+        const structureConflict =
+          (trend === "Bullish" && /bearish/i.test(structure)) ||
+          (trend === "Bearish" && /bullish/i.test(structure));
+
+        const buyChecks = [
+          verdict === "Bullish" && confidence >= 70,
+          trend === "Bullish" && hasBullishStructure,
+          bullishAlignment || !/mixed/i.test(alignment),
+          !hasDojiLikePattern && !noCleanTrigger,
+          /watch|strong/i.test(buyLevel) && /low|medium/i.test(exitLevel),
+        ];
+
+        const sellChecks = [
+          verdict === "Bearish" && confidence >= 70,
+          trend === "Bearish" && hasBearishStructure,
+          bearishAlignment || !/mixed/i.test(alignment),
+          !hasDojiLikePattern && !noCleanTrigger,
+          /watch|strong/i.test(sellLevel) && /low|medium/i.test(exitLevel),
+        ];
+
+        const exitChecks = [
+          verdict === "Neutral" || /mixed/i.test(alignment) || noCleanTrigger,
+          exitLevel === "High" || confidence < 60,
+          structureConflict,
+          hasDojiLikePattern,
+          buyLevel === "Weak" && sellLevel === "Weak",
+        ];
+
+        const buyPassed = buyChecks.filter(Boolean).length;
+        const sellPassed = sellChecks.filter(Boolean).length;
+        const exitPassed = exitChecks.filter(Boolean).length;
+
+        let statusText = "Stand aside. Checklist does not support a clean trade yet.";
+        let statusClass = "wait";
+
+        if (buyPassed >= 4 && buyPassed > sellPassed && exitPassed < 3) {
+          statusText = "Safer to look for a buy. Most buy conditions are confirmed.";
+          statusClass = "buy";
+        } else if (sellPassed >= 4 && sellPassed > buyPassed && exitPassed < 3) {
+          statusText = "Safer to look for a sell. Most sell conditions are confirmed.";
+          statusClass = "sell";
+        } else if (exitPassed >= 2) {
+          statusText = "Safer to exit or stand aside. The checklist is flagging risk or indecision.";
+          statusClass = "exit";
+        }
+
+        return {
+          buyChecks,
+          sellChecks,
+          exitChecks,
+          statusText,
+          statusClass,
+        };
+      }
+
       function updateUI(data) {
         if (!data || !data.TechnicalAnalysis) {
           showInlineError("Malformed server response");
@@ -1624,6 +1879,16 @@
         exitEl.className = `metric-value ${tradeGuidance.exitLevel === "High" ? "value-bearish" : tradeGuidance.exitLevel === "Medium" ? "value-bullish" : ""}`;
 
         summaryEl.innerText = tradeGuidance.summary;
+
+        const checklist = evaluateDecisionChecklist(data, ta, tradeGuidance);
+        setChecklistState("buy-checklist", checklist.buyChecks);
+        setChecklistState("sell-checklist", checklist.sellChecks);
+        setChecklistState("exit-checklist", checklist.exitChecks);
+        const decisionStatusEl = document.getElementById("decision-status");
+        if (decisionStatusEl) {
+          decisionStatusEl.innerText = checklist.statusText;
+          decisionStatusEl.className = `decision-status-value ${checklist.statusClass}`;
+        }
 
         if (shouldNotifyFromUi) {
           const changeText = summarizeChanges(uiChanges);
