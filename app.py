@@ -45,10 +45,24 @@ def _read_int_env(name, default, minimum):
     return max(minimum, value)
 
 
+def _read_bool_env(name, default=False):
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
 MONITOR_INTERVAL_SECONDS = _read_int_env("INDICATOR_MONITOR_INTERVAL_SECONDS", 3, 2)
 NOTIFY_MIN_INTERVAL_SECONDS = _read_int_env("INDICATOR_NOTIFY_MIN_INTERVAL_SECONDS", 6, 1)
 PREDICTION_CONFIRMATION_COUNT = _read_int_env("PREDICTION_CONFIRMATION_COUNT", 2, 1)
+DECISION_CONFIRMATION_COUNT = _read_int_env("DECISION_CONFIRMATION_COUNT", 2, 1)
+ENTER_DECISION_CONFIRMATION_COUNT = _read_int_env("ENTER_DECISION_CONFIRMATION_COUNT", 2, 1)
+EXIT_DECISION_CONFIRMATION_COUNT = _read_int_env("EXIT_DECISION_CONFIRMATION_COUNT", 3, 1)
+WAIT_DECISION_CONFIRMATION_COUNT = _read_int_env("WAIT_DECISION_CONFIRMATION_COUNT", 4, 1)
+DIRECTIONAL_REVERSAL_CONFIRMATION_COUNT = _read_int_env("DIRECTIONAL_REVERSAL_CONFIRMATION_COUNT", 4, 1)
 ALERT_COOLDOWN_SECONDS = _read_int_env("ALERT_COOLDOWN_SECONDS", 900, 0)
+DECISION_FLIP_MIN_HOLD_SECONDS = _read_int_env("DECISION_FLIP_MIN_HOLD_SECONDS", 300, 0)
+NOTIFY_EXIT_READS = _read_bool_env("NOTIFY_EXIT_READS", True)
 PUSH_EXCLUDED_FIELDS = {
     "candle_pattern",
     "rsi_14",
@@ -61,6 +75,7 @@ PUSH_EXCLUDED_FIELDS = {
 BASE_DIR = Path(__file__).resolve().parent
 SUBSCRIPTIONS_FILE = BASE_DIR / "tools" / "reports" / "webpush_subscriptions.json"
 PREDICTION_STATE_FILE = BASE_DIR / "tools" / "reports" / "prediction_state.json"
+DECISION_STATE_FILE = BASE_DIR / "tools" / "reports" / "decision_state.json"
 ALERT_STATE_FILE = BASE_DIR / "tools" / "reports" / "alert_state.json"
 VAPID_PUBLIC_KEY = os.getenv("VAPID_PUBLIC_KEY", "")
 VAPID_PRIVATE_KEY = os.getenv("VAPID_PRIVATE_KEY", "")
@@ -464,6 +479,89 @@ def _evaluate_decision_status(verdict, confidence, ta_data, trade_guidance):
     }
 
 
+def _stabilize_decision_status(decision_status):
+    raw_status = str((decision_status or {}).get("status") or "wait")
+    raw_text = str((decision_status or {}).get("text") or "Stand aside.")
+    now_ts = int(time.time())
+    state = _load_json_file(
+        DECISION_STATE_FILE,
+        {
+            "stable_status": raw_status,
+            "stable_text": raw_text,
+            "last_raw_status": raw_status,
+            "raw_streak": 1,
+            "last_stable_change_ts": now_ts,
+        },
+    )
+
+    last_raw_status = str(state.get("last_raw_status", raw_status))
+    raw_streak = int(state.get("raw_streak", 0) or 0)
+    if raw_status == last_raw_status:
+        raw_streak += 1
+    else:
+        raw_streak = 1
+
+    stable_status = str(state.get("stable_status", raw_status))
+    stable_text = str(state.get("stable_text", raw_text))
+    last_stable_change_ts = int(state.get("last_stable_change_ts", now_ts) or now_ts)
+
+    if raw_status == stable_status:
+        required_confirmation = 1
+    elif raw_status in {"buy", "sell"} and stable_status == "wait":
+        required_confirmation = max(DECISION_CONFIRMATION_COUNT, ENTER_DECISION_CONFIRMATION_COUNT)
+    elif raw_status in {"buy", "sell"} and stable_status == "exit":
+        required_confirmation = max(DECISION_CONFIRMATION_COUNT, ENTER_DECISION_CONFIRMATION_COUNT)
+    elif raw_status == "exit" and stable_status in {"buy", "sell"}:
+        required_confirmation = max(DECISION_CONFIRMATION_COUNT, EXIT_DECISION_CONFIRMATION_COUNT)
+    elif raw_status == "wait" and stable_status in {"buy", "sell", "exit"}:
+        required_confirmation = max(DECISION_CONFIRMATION_COUNT, WAIT_DECISION_CONFIRMATION_COUNT)
+    elif raw_status in {"buy", "sell"} and stable_status in {"buy", "sell"} and raw_status != stable_status:
+        required_confirmation = max(DECISION_CONFIRMATION_COUNT, DIRECTIONAL_REVERSAL_CONFIRMATION_COUNT)
+    else:
+        required_confirmation = DECISION_CONFIRMATION_COUNT
+
+    if raw_streak >= required_confirmation:
+        can_flip = True
+        if raw_status != stable_status and (now_ts - last_stable_change_ts) < DECISION_FLIP_MIN_HOLD_SECONDS:
+            if stable_status in {"buy", "sell"} and raw_status == "exit":
+                can_flip = False
+            elif stable_status == "exit" and raw_status in {"buy", "sell"}:
+                can_flip = False
+            elif stable_status in {"buy", "sell"} and raw_status in {"buy", "sell"}:
+                can_flip = False
+            elif stable_status in {"buy", "sell", "exit"} and raw_status == "wait":
+                can_flip = False
+
+        if can_flip:
+            if raw_status != stable_status or raw_text != stable_text:
+                last_stable_change_ts = now_ts
+            stable_status = raw_status
+            stable_text = raw_text
+
+    state.update(
+        {
+            "stable_status": stable_status,
+            "stable_text": stable_text,
+            "last_raw_status": raw_status,
+            "raw_streak": raw_streak,
+            "last_stable_change_ts": last_stable_change_ts,
+            "updated_at": now_ts,
+        }
+    )
+    _save_json_file(DECISION_STATE_FILE, state)
+
+    stabilized = dict(decision_status or {})
+    stabilized["rawStatus"] = raw_status
+    stabilized["rawText"] = raw_text
+    stabilized["status"] = stable_status
+    stabilized["text"] = stable_text
+    stabilized["confirmationCount"] = raw_streak
+    stabilized["requiredConfirmation"] = required_confirmation
+    stabilized["confirmed"] = raw_streak >= required_confirmation and raw_status == stable_status
+    stabilized["heldForSeconds"] = max(0, now_ts - last_stable_change_ts)
+    return stabilized
+
+
 def _stabilize_prediction(prediction, ta_data):
     raw_verdict = prediction.get("verdict", "Neutral")
     raw_confidence = int(prediction.get("confidence", 50) or 50)
@@ -582,6 +680,7 @@ def _build_prediction_response():
         ta_data=ta_data,
         trade_guidance=prediction["TradeGuidance"],
     )
+    decision_status = _stabilize_decision_status(decision_status)
 
     return {
         "status": "success",
@@ -625,11 +724,17 @@ def _indicator_monitor_loop():
                             ALERT_STATE_FILE,
                             {"last_decision_read": "", "last_alert_ts": 0},
                         )
+                        decision_payload = payload.get("DecisionStatus") or {}
                         decision_read = str(((payload.get("DecisionStatus") or {}).get("text")) or "")
+                        decision_kind = str(decision_payload.get("status") or "wait")
+                        decision_confirmed = bool(decision_payload.get("confirmed"))
                         should_alert = bool(
                             decision_read
                             and "decision_read" in notification_changes
+                            and decision_confirmed
                         )
+                        if should_alert and decision_kind not in {"buy", "sell"}:
+                            should_alert = NOTIFY_EXIT_READS and decision_kind == "exit"
                         if should_alert:
                             last_decision_read = str(alert_state.get("last_decision_read", ""))
                             last_alert_ts = int(alert_state.get("last_alert_ts", 0) or 0)
