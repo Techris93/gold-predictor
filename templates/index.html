@@ -1880,14 +1880,19 @@
 
         summaryEl.innerText = tradeGuidance.summary;
 
-        const checklist = evaluateDecisionChecklist(data, ta, tradeGuidance);
-        setChecklistState("buy-checklist", checklist.buyChecks);
-        setChecklistState("sell-checklist", checklist.sellChecks);
-        setChecklistState("exit-checklist", checklist.exitChecks);
+        const checklist =
+          data.DecisionStatus && typeof data.DecisionStatus === "object"
+            ? data.DecisionStatus
+            : evaluateDecisionChecklist(data, ta, tradeGuidance);
+        setChecklistState("buy-checklist", checklist.buyChecks || []);
+        setChecklistState("sell-checklist", checklist.sellChecks || []);
+        setChecklistState("exit-checklist", checklist.exitChecks || []);
         const decisionStatusEl = document.getElementById("decision-status");
         if (decisionStatusEl) {
-          decisionStatusEl.innerText = checklist.statusText;
-          decisionStatusEl.className = `decision-status-value ${checklist.statusClass}`;
+          const checklistText = checklist.text || checklist.statusText || "Stand aside.";
+          const checklistClass = checklist.status || checklist.statusClass || "wait";
+          decisionStatusEl.innerText = checklistText;
+          decisionStatusEl.className = `decision-status-value ${checklistClass}`;
         }
 
         if (shouldNotifyFromUi) {

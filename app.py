@@ -2,6 +2,7 @@ from flask import Flask, jsonify, render_template, request, send_from_directory
 from flask_socketio import SocketIO
 import json
 import os
+import re
 import threading
 import time
 from pathlib import Path
@@ -68,20 +69,7 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 TELEGRAM_THREAD_ID = os.getenv("TELEGRAM_THREAD_ID", "").strip()
 CHANGE_SUMMARY_ORDER = [
-    "verdict",
-    "confidence",
-    "sentiment_label",
-    "trend",
-    "market_structure",
-    "candle_pattern",
-    "market_regime",
-    "alignment",
-    "trade_sell_setup",
-    "trade_buy_setup",
-    "trade_exit_warning",
-    "rsi_14",
-    "adx_14",
-    "atr_percent",
+    "decision_read",
 ]
 SENTIMENT_WEIGHTED_SIGNALS = [
     {
@@ -233,18 +221,7 @@ def _filter_notification_changes(changes):
 
 def _summarize_changes_for_push(changes):
     labels = {
-        "verdict": "Verdict",
-        "confidence": "Confidence",
-        "trend": "Trend",
-        "sentiment_label": "Sentiment",
-        "market_structure": "Structure",
-        "candle_pattern": "Pattern",
-        "rsi_14": "RSI",
-        "market_regime": "Regime",
-        "alignment": "Alignment",
-        "trade_sell_setup": "Sell Setup",
-        "trade_buy_setup": "Buy Setup",
-        "trade_exit_warning": "Exit Warning",
+        "decision_read": "Current Read",
     }
     ordered_keys = [key for key in CHANGE_SUMMARY_ORDER if key in changes]
     ordered_keys.extend(key for key in changes if key not in ordered_keys)
@@ -254,7 +231,7 @@ def _summarize_changes_for_push(changes):
         prev = val.get("previous") if isinstance(val, dict) else None
         cur = val.get("current") if isinstance(val, dict) else None
         parts.append(f"{labels.get(key, key)}: {prev} -> {cur}")
-    return " | ".join(parts) if parts else "Indicators changed"
+    return " | ".join(parts) if parts else "Current read changed"
 
 
 def _classify_market_sentiment(news_list):
@@ -269,22 +246,28 @@ def _has_background_alert_channels():
     return _has_push_subscribers() or _telegram_enabled()
 
 
-def _send_telegram_notification(changes, verdict, confidence, trade_guidance):
+def _send_telegram_notification(changes, verdict, confidence, trade_guidance, decision_status):
     if not _telegram_enabled():
         return
 
-    title = "XAUUSD Indicator Update"
+    title = "XAUUSD Current Read Changed"
 
     change_summary = _summarize_changes_for_push(changes)
     trade_summary = ""
     if isinstance(trade_guidance, dict):
         trade_summary = trade_guidance.get("summary") or ""
+    decision_text = ""
+    if isinstance(decision_status, dict):
+        decision_text = str(decision_status.get("text") or "").strip()
 
     lines = [
         title,
-        f"Verdict: {verdict} ({confidence}%)",
         change_summary,
     ]
+    if decision_text:
+        lines.append(decision_text)
+    else:
+        lines.append(f"Verdict: {verdict} ({confidence}%)")
     if trade_summary:
         lines.append(trade_summary)
 
@@ -308,7 +291,7 @@ def _send_telegram_notification(changes, verdict, confidence, trade_guidance):
         return
 
 
-def _send_web_push_notifications(changes, verdict, confidence, trade_guidance):
+def _send_web_push_notifications(changes, verdict, confidence, trade_guidance, decision_status):
     if webpush is None or not VAPID_PUBLIC_KEY or not VAPID_PRIVATE_KEY:
         return
 
@@ -316,13 +299,20 @@ def _send_web_push_notifications(changes, verdict, confidence, trade_guidance):
     if not subscriptions:
         return
 
-    title = "XAUUSD Indicator Update"
+    title = "XAUUSD Current Read Changed"
 
     change_summary = _summarize_changes_for_push(changes)
     trade_summary = ""
     if isinstance(trade_guidance, dict):
         trade_summary = trade_guidance.get("summary") or ""
-    body_parts = [change_summary, f"Verdict: {verdict} ({confidence}%)"]
+    decision_text = ""
+    if isinstance(decision_status, dict):
+        decision_text = str(decision_status.get("text") or "").strip()
+    body_parts = [change_summary]
+    if decision_text:
+        body_parts.append(decision_text)
+    else:
+        body_parts.append(f"Verdict: {verdict} ({confidence}%)")
     if trade_summary:
         body_parts.append(trade_summary)
     body = " | ".join(part for part in body_parts if part)
@@ -332,6 +322,7 @@ def _send_web_push_notifications(changes, verdict, confidence, trade_guidance):
         "verdict": verdict,
         "confidence": confidence,
         "trade_guidance": trade_guidance,
+        "decision_status": decision_status,
         "url": "/",
         "ts": int(time.time()),
     }
@@ -403,6 +394,76 @@ def _compute_trade_guidance(ta_data, sentiment_label, confidence):
     return shared_compute_trade_guidance(ta_data, sentiment_label, confidence)
 
 
+def _evaluate_decision_status(verdict, confidence, ta_data, trade_guidance):
+    trend = str((ta_data or {}).get("ema_trend") or "Neutral")
+    price_action = (ta_data or {}).get("price_action") or {}
+    mtf = (ta_data or {}).get("multi_timeframe") or {}
+    structure = str(price_action.get("structure") or "")
+    pattern = str(price_action.get("latest_candle_pattern") or "")
+    alignment = str(mtf.get("alignment_label") or "Mixed / Low Alignment")
+    summary = str((trade_guidance or {}).get("summary") or "")
+    buy_level = str((trade_guidance or {}).get("buyLevel") or "Weak")
+    sell_level = str((trade_guidance or {}).get("sellLevel") or "Weak")
+    exit_level = str((trade_guidance or {}).get("exitLevel") or "Low")
+
+    has_bullish_structure = bool(re.search(r"bullish|breakout|continuation", structure, re.IGNORECASE))
+    has_bearish_structure = bool(re.search(r"bearish|breakdown|rejection", structure, re.IGNORECASE))
+    has_doji_like_pattern = bool(re.search(r"doji|indecision|spinning top", pattern, re.IGNORECASE))
+    no_clean_trigger = "no clean trigger" in summary.lower()
+    bullish_alignment = "bullish" in alignment.lower() and "mixed" not in alignment.lower()
+    bearish_alignment = "bearish" in alignment.lower() and "mixed" not in alignment.lower()
+    structure_conflict = (
+        (trend == "Bullish" and "bearish" in structure.lower())
+        or (trend == "Bearish" and "bullish" in structure.lower())
+    )
+
+    buy_checks = [
+        verdict == "Bullish" and confidence >= 70,
+        trend == "Bullish" and has_bullish_structure,
+        bullish_alignment or "mixed" not in alignment.lower(),
+        not has_doji_like_pattern and not no_clean_trigger,
+        buy_level in {"Watch", "Strong"} and exit_level in {"Low", "Medium"},
+    ]
+    sell_checks = [
+        verdict == "Bearish" and confidence >= 70,
+        trend == "Bearish" and has_bearish_structure,
+        bearish_alignment or "mixed" not in alignment.lower(),
+        not has_doji_like_pattern and not no_clean_trigger,
+        sell_level in {"Watch", "Strong"} and exit_level in {"Low", "Medium"},
+    ]
+    exit_checks = [
+        verdict == "Neutral" or "mixed" in alignment.lower() or no_clean_trigger,
+        exit_level == "High" or confidence < 60,
+        structure_conflict,
+        has_doji_like_pattern,
+        buy_level == "Weak" and sell_level == "Weak",
+    ]
+
+    buy_passed = sum(1 for item in buy_checks if item)
+    sell_passed = sum(1 for item in sell_checks if item)
+    exit_passed = sum(1 for item in exit_checks if item)
+
+    text = "Stand aside. Checklist does not support a clean trade yet."
+    status = "wait"
+    if buy_passed >= 4 and buy_passed > sell_passed and exit_passed < 3:
+        text = "Safer to look for a buy. Most buy conditions are confirmed."
+        status = "buy"
+    elif sell_passed >= 4 and sell_passed > buy_passed and exit_passed < 3:
+        text = "Safer to look for a sell. Most sell conditions are confirmed."
+        status = "sell"
+    elif exit_passed >= 2:
+        text = "Safer to exit or stand aside. The checklist is flagging risk or indecision."
+        status = "exit"
+
+    return {
+        "text": text,
+        "status": status,
+        "buyChecks": buy_checks,
+        "sellChecks": sell_checks,
+        "exitChecks": exit_checks,
+    }
+
+
 def _stabilize_prediction(prediction, ta_data):
     raw_verdict = prediction.get("verdict", "Neutral")
     raw_confidence = int(prediction.get("confidence", 50) or 50)
@@ -471,20 +532,7 @@ def _extract_indicator_snapshot(payload):
     return {
         "verdict": payload.get("verdict"),
         "confidence": payload.get("confidence"),
-        "sentiment_label": sentiment_summary.get("label"),
-        "trend": ta_data.get("ema_trend"),
-        "market_structure": pa.get("structure"),
-        "candle_pattern": pa.get("latest_candle_pattern"),
-        "rsi_14": ta_data.get("rsi_14"),
-        "ema_20": ta_data.get("ema_20"),
-        "ema_50": ta_data.get("ema_50"),
-        "market_regime": regime.get("market_regime"),
-        "alignment": mtf.get("alignment_label"),
-        "adx_14": regime.get("adx_14"),
-        "atr_percent": regime.get("atr_percent"),
-        "trade_sell_setup": trade_guidance.get("sellLevel"),
-        "trade_buy_setup": trade_guidance.get("buyLevel"),
-        "trade_exit_warning": trade_guidance.get("exitLevel"),
+        "decision_read": ((payload.get("DecisionStatus") or {}).get("text")),
     }
 
 
@@ -528,6 +576,12 @@ def _build_prediction_response():
         compute_prediction_from_ta(ta_data, sentiment_summary),
         ta_data,
     )
+    decision_status = _evaluate_decision_status(
+        verdict=prediction["verdict"],
+        confidence=int(prediction["confidence"]),
+        ta_data=ta_data,
+        trade_guidance=prediction["TradeGuidance"],
+    )
 
     return {
         "status": "success",
@@ -537,6 +591,7 @@ def _build_prediction_response():
         "SentimentalAnalysis": sa_data,
         "SentimentSummary": sentiment_summary,
         "TradeGuidance": prediction["TradeGuidance"],
+        "DecisionStatus": decision_status,
     }, 200
 
 
@@ -559,8 +614,8 @@ def _indicator_monitor_loop():
                     changes = _diff_snapshot(last_snapshot, current_snapshot)
                     notification_changes = _filter_notification_changes(changes)
                     now_ts = int(time.time())
-                    alert_title = "Indicator Update"
-                    alert_message = "Indicators changed"
+                    alert_title = "Current Read Changed"
+                    alert_message = "Current read changed"
                     if (
                         notification_changes
                         and _is_material_change(notification_changes)
@@ -568,14 +623,17 @@ def _indicator_monitor_loop():
                     ):
                         alert_state = _load_json_file(
                             ALERT_STATE_FILE,
-                            {"last_alert_verdict": "", "last_alert_ts": 0},
+                            {"last_decision_read": "", "last_alert_ts": 0},
                         )
-                        verdict = str(payload.get("verdict", "Neutral"))
-                        should_alert = verdict in {"Bullish", "Bearish"}
+                        decision_read = str(((payload.get("DecisionStatus") or {}).get("text")) or "")
+                        should_alert = bool(
+                            decision_read
+                            and "decision_read" in notification_changes
+                        )
                         if should_alert:
-                            last_alert_verdict = str(alert_state.get("last_alert_verdict", ""))
+                            last_decision_read = str(alert_state.get("last_decision_read", ""))
                             last_alert_ts = int(alert_state.get("last_alert_ts", 0) or 0)
-                            if verdict == last_alert_verdict and (now_ts - last_alert_ts) < ALERT_COOLDOWN_SECONDS:
+                            if decision_read == last_decision_read and (now_ts - last_alert_ts) < ALERT_COOLDOWN_SECONDS:
                                 should_alert = False
                         if not should_alert:
                             last_snapshot = current_snapshot
@@ -591,6 +649,7 @@ def _indicator_monitor_loop():
                                     "snapshot": current_snapshot,
                                     "verdict": payload.get("verdict"),
                                     "confidence": payload.get("confidence"),
+                                    "decision_status": payload.get("DecisionStatus"),
                                     "timestamp": now_ts,
                                 },
                             )
@@ -600,16 +659,18 @@ def _indicator_monitor_loop():
                             verdict=payload.get("verdict"),
                             confidence=payload.get("confidence"),
                             trade_guidance=payload.get("TradeGuidance"),
+                            decision_status=payload.get("DecisionStatus"),
                         )
                         _send_telegram_notification(
                             changes=notification_changes,
                             verdict=payload.get("verdict"),
                             confidence=payload.get("confidence"),
                             trade_guidance=payload.get("TradeGuidance"),
+                            decision_status=payload.get("DecisionStatus"),
                         )
                         _save_json_file(
                             ALERT_STATE_FILE,
-                            {"last_alert_verdict": verdict, "last_alert_ts": now_ts},
+                            {"last_decision_read": decision_read, "last_alert_ts": now_ts},
                         )
                         last_emit_ts = now_ts
                 last_snapshot = current_snapshot
