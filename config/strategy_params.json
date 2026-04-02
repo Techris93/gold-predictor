@@ -28,6 +28,12 @@
   "fast_signal_min_score": 3,
   "fast_signal_weight": 1.6,
   "fast_flip_bonus": 1.2,
+  "fast_flip_lookback_bars": 12,
+  "fast_flip_chop_threshold": 3,
+  "fast_persistence_bars": 2,
+  "fast_ema_compression_threshold_pct": 0.04,
+  "fast_chop_score_threshold": 2,
+  "chop_penalty": 10.0,
   "mtf_intervals": [
     "15min",
     "1h",

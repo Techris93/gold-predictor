@@ -84,6 +84,11 @@ DEFAULT_STRATEGY_PARAMS = {
     "fast_signal_min_score": 3,
     "fast_signal_weight": 1.6,
     "fast_flip_bonus": 1.2,
+    "fast_flip_lookback_bars": 12,
+    "fast_flip_chop_threshold": 3,
+    "fast_persistence_bars": 2,
+    "fast_ema_compression_threshold_pct": 0.04,
+    "fast_chop_score_threshold": 2,
     "mtf_intervals": ["15min", "1h", "4h"],
 }
 
@@ -329,6 +334,18 @@ def _resolve_fast_direction(close_value, ema_fast, ema_slow, ema_slope, rsi_valu
     }
 
 
+def _count_direction_flips(directions):
+    flips = 0
+    previous = None
+    for direction in directions:
+        if direction == "Neutral":
+            continue
+        if previous is not None and direction != previous:
+            flips += 1
+        previous = direction
+    return flips
+
+
 def _fetch_fast_signal(td_symbol):
     if not td_client:
         return {
@@ -344,6 +361,12 @@ def _fetch_fast_signal(td_symbol):
             "ema_fast": 0.0,
             "ema_slow": 0.0,
             "rsi_fast": 50.0,
+            "flip_count": 0,
+            "persistence_bars": 0,
+            "ema_compression_pct": 0.0,
+            "is_choppy": False,
+            "chop_score": 0,
+            "persistence_passed": False,
             "triggers": [],
             "source": "none",
         }
@@ -356,6 +379,11 @@ def _fetch_fast_signal(td_symbol):
     momentum_bars = int(ACTIVE_STRATEGY_PARAMS.get("fast_momentum_bars", 3))
     momentum_threshold_pct = float(ACTIVE_STRATEGY_PARAMS.get("fast_momentum_threshold_pct", 0.12))
     min_score = int(ACTIVE_STRATEGY_PARAMS.get("fast_signal_min_score", 3))
+    flip_lookback_bars = int(ACTIVE_STRATEGY_PARAMS.get("fast_flip_lookback_bars", 12))
+    flip_chop_threshold = int(ACTIVE_STRATEGY_PARAMS.get("fast_flip_chop_threshold", 3))
+    persistence_required = int(ACTIVE_STRATEGY_PARAMS.get("fast_persistence_bars", 2))
+    ema_compression_threshold_pct = float(ACTIVE_STRATEGY_PARAMS.get("fast_ema_compression_threshold_pct", 0.04))
+    chop_score_threshold = int(ACTIVE_STRATEGY_PARAMS.get("fast_chop_score_threshold", 2))
 
     try:
         ts = td_client.time_series(symbol=td_symbol, interval=interval, outputsize=120)
@@ -434,6 +462,57 @@ def _fetch_fast_signal(td_symbol):
             if changed else "None"
         )
 
+        historical_directions = []
+        history_window = max(flip_lookback_bars, persistence_required + 2)
+        for idx in range(-history_window, 0):
+            try:
+                look_close = float(close_col.iloc[idx])
+                look_prev_close = float(close_col.iloc[idx - momentum_bars])
+                look_momentum_pct = ((look_close - look_prev_close) / look_prev_close * 100.0) if look_prev_close else 0.0
+                if abs(look_momentum_pct) < momentum_threshold_pct:
+                    look_momentum_pct = 0.0
+                look_breakout_side = None
+                look_high = float(close_col.iloc[idx - breakout_lookback:idx].max())
+                look_low = float(close_col.iloc[idx - breakout_lookback:idx].min())
+                if look_close > look_high:
+                    look_breakout_side = "bullish"
+                elif look_close < look_low:
+                    look_breakout_side = "bearish"
+                historical = _resolve_fast_direction(
+                    look_close,
+                    float(ema_fast_series.iloc[idx]),
+                    float(ema_slow_series.iloc[idx]),
+                    float(ema_fast_series.iloc[idx] - ema_fast_series.iloc[idx - 1]),
+                    float(rsi_series.iloc[idx]) if not pd.isna(rsi_series.iloc[idx]) else 50.0,
+                    look_momentum_pct,
+                    look_breakout_side,
+                    min_score,
+                )
+                historical_directions.append(historical["direction"])
+            except Exception:
+                continue
+
+        flip_count = _count_direction_flips(historical_directions[-flip_lookback_bars:])
+        persistence_bars = 0
+        for direction in reversed(historical_directions):
+            if direction != current_signal["direction"] or direction == "Neutral":
+                break
+            persistence_bars += 1
+        persistence_passed = (
+            current_signal["direction"] != "Neutral"
+            and persistence_bars >= persistence_required
+        )
+
+        ema_compression_pct = (abs(ema_fast_latest - ema_slow_latest) / latest_close * 100.0) if latest_close else 0.0
+        chop_score = 0
+        if flip_count >= flip_chop_threshold:
+            chop_score += 1
+        if ema_compression_pct <= ema_compression_threshold_pct:
+            chop_score += 1
+        if breakout_side is None and abs(momentum_pct) == 0.0:
+            chop_score += 1
+        is_choppy = chop_score >= chop_score_threshold
+
         return {
             "interval": interval,
             "direction": current_signal["direction"],
@@ -447,6 +526,12 @@ def _fetch_fast_signal(td_symbol):
             "ema_fast": round(ema_fast_latest, 2),
             "ema_slow": round(ema_slow_latest, 2),
             "rsi_fast": round(rsi_latest, 2),
+            "flip_count": flip_count,
+            "persistence_bars": persistence_bars,
+            "ema_compression_pct": round(ema_compression_pct, 4),
+            "is_choppy": is_choppy,
+            "chop_score": chop_score,
+            "persistence_passed": persistence_passed,
             "triggers": current_signal["triggers"][:4],
             "source": "twelvedata",
         }
@@ -464,6 +549,12 @@ def _fetch_fast_signal(td_symbol):
             "ema_fast": 0.0,
             "ema_slow": 0.0,
             "rsi_fast": 50.0,
+            "flip_count": 0,
+            "persistence_bars": 0,
+            "ema_compression_pct": 0.0,
+            "is_choppy": False,
+            "chop_score": 0,
+            "persistence_passed": False,
             "triggers": [],
             "source": "twelvedata",
         }

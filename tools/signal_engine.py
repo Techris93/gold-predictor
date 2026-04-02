@@ -47,6 +47,12 @@ DEFAULT_STRATEGY_PARAMS = {
     "fast_signal_min_score": 3,
     "fast_signal_weight": 1.6,
     "fast_flip_bonus": 1.2,
+    "fast_flip_lookback_bars": 12,
+    "fast_flip_chop_threshold": 3,
+    "fast_persistence_bars": 2,
+    "fast_ema_compression_threshold_pct": 0.04,
+    "fast_chop_score_threshold": 2,
+    "chop_penalty": 10.0,
     "mtf_intervals": ["15min", "1h", "4h"],
 }
 
@@ -301,6 +307,8 @@ def compute_prediction_from_ta(ta_data, sentiment_summary=None):
     fast_signal = ta_data.get("fast_signal", {}) if isinstance(ta_data.get("fast_signal"), dict) else {}
     fast_direction = fast_signal.get("direction", "Neutral")
     fast_changed = bool(fast_signal.get("changed"))
+    fast_is_choppy = bool(fast_signal.get("is_choppy"))
+    fast_persistence_passed = bool(fast_signal.get("persistence_passed"))
     rsi = ta_data.get("rsi_14", 50)
     trend_base_weight = float(strategy_params.get("trend_base_weight", 2.5))
     alignment_weight = float(strategy_params.get("alignment_weight", 1.2))
@@ -325,6 +333,7 @@ def compute_prediction_from_ta(ta_data, sentiment_summary=None):
     neutral_confidence_cap = float(strategy_params.get("neutral_confidence_cap", 63))
     fast_signal_weight = float(strategy_params.get("fast_signal_weight", 1.6))
     fast_flip_bonus = float(strategy_params.get("fast_flip_bonus", 1.2))
+    chop_penalty = float(strategy_params.get("chop_penalty", 10.0))
 
     bull_score = 0.0
     bear_score = 0.0
@@ -392,12 +401,14 @@ def compute_prediction_from_ta(ta_data, sentiment_summary=None):
         bear_score += rsi_warning_weight
 
     if fast_direction == "Bullish":
-        bull_score += fast_signal_weight
-        if fast_changed:
+        applied_fast_weight = fast_signal_weight * (0.35 if fast_is_choppy else 1.0)
+        bull_score += applied_fast_weight
+        if fast_changed and fast_persistence_passed and not fast_is_choppy:
             bull_score += fast_flip_bonus
     elif fast_direction == "Bearish":
-        bear_score += fast_signal_weight
-        if fast_changed:
+        applied_fast_weight = fast_signal_weight * (0.35 if fast_is_choppy else 1.0)
+        bear_score += applied_fast_weight
+        if fast_changed and fast_persistence_passed and not fast_is_choppy:
             bear_score += fast_flip_bonus
 
     score_diff = bull_score - bear_score
@@ -421,6 +432,11 @@ def compute_prediction_from_ta(ta_data, sentiment_summary=None):
         penalty += volume_unavailable_penalty
     if alignment_label == "Mixed / Low Alignment":
         penalty += mixed_alignment_penalty
+    if fast_is_choppy:
+        penalty += chop_penalty
+
+    if fast_changed and not fast_persistence_passed and verdict != "Neutral":
+        verdict = "Neutral"
 
     confidence = base_conf - penalty
     if verdict == "Neutral":

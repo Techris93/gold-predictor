@@ -68,6 +68,8 @@ CHANGE_SUMMARY_ORDER = [
     "confidence",
     "fast_direction",
     "fast_direction_change",
+    "fast_is_choppy",
+    "fast_persistence_passed",
     "sentiment_label",
     "trend",
     "market_structure",
@@ -220,6 +222,8 @@ def _summarize_changes_for_push(changes):
         "confidence": "Confidence",
         "fast_direction": "Fast Direction",
         "fast_direction_change": "Fast Flip",
+        "fast_is_choppy": "Chop Filter",
+        "fast_persistence_passed": "Persistence",
         "trend": "Trend",
         "sentiment_label": "Sentiment",
         "market_structure": "Structure",
@@ -419,6 +423,8 @@ def _extract_indicator_snapshot(payload):
         "confidence": payload.get("confidence"),
         "fast_direction": (ta_data.get("fast_signal") or {}).get("direction"),
         "fast_direction_change": (ta_data.get("fast_signal") or {}).get("direction_change"),
+        "fast_is_choppy": (ta_data.get("fast_signal") or {}).get("is_choppy"),
+        "fast_persistence_passed": (ta_data.get("fast_signal") or {}).get("persistence_passed"),
         "sentiment_label": sentiment_summary.get("label"),
         "trend": ta_data.get("ema_trend"),
         "market_structure": pa.get("structure"),
@@ -504,10 +510,14 @@ def _indicator_monitor_loop():
                     changes = _diff_snapshot(last_snapshot, current_snapshot)
                     notification_changes = _filter_notification_changes(changes)
                     now_ts = int(time.time())
+                    fast_signal = payload.get("TechnicalAnalysis", {}).get("fast_signal", {})
                     fast_flip = notification_changes.get("fast_direction_change", {}).get("current")
+                    suppress_fast_flip_alert = bool(fast_flip and fast_flip != "None" and (
+                        fast_signal.get("is_choppy") or not fast_signal.get("persistence_passed")
+                    ))
                     alert_title = "Indicator Update"
                     alert_message = "Indicators changed"
-                    if fast_flip and fast_flip != "None":
+                    if fast_flip and fast_flip != "None" and not suppress_fast_flip_alert:
                         alert_title = f"Fast Direction Flip: {fast_flip}"
                         alert_message = f"Fast direction changed: {fast_flip}"
                     if (
@@ -529,18 +539,19 @@ def _indicator_monitor_loop():
                                 },
                             )
 
-                        _send_web_push_notifications(
-                            changes=notification_changes,
-                            verdict=payload.get("verdict"),
-                            confidence=payload.get("confidence"),
-                            trade_guidance=payload.get("TradeGuidance"),
-                        )
-                        _send_telegram_notification(
-                            changes=notification_changes,
-                            verdict=payload.get("verdict"),
-                            confidence=payload.get("confidence"),
-                            trade_guidance=payload.get("TradeGuidance"),
-                        )
+                        if not suppress_fast_flip_alert:
+                            _send_web_push_notifications(
+                                changes=notification_changes,
+                                verdict=payload.get("verdict"),
+                                confidence=payload.get("confidence"),
+                                trade_guidance=payload.get("TradeGuidance"),
+                            )
+                            _send_telegram_notification(
+                                changes=notification_changes,
+                                verdict=payload.get("verdict"),
+                                confidence=payload.get("confidence"),
+                                trade_guidance=payload.get("TradeGuidance"),
+                            )
                         last_emit_ts = now_ts
                 last_snapshot = current_snapshot
         except Exception:
