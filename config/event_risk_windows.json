@@ -1,0 +1,70 @@
+{
+  "windows": [
+    {
+      "name": "NFP / Employment Situation",
+      "start": "2026-04-03T12:00:00Z",
+      "end": "2026-04-03T13:45:00Z",
+      "reason": "BLS Employment Situation for March 2026. Release scheduled 08:30 ET on April 3, 2026."
+    },
+    {
+      "name": "CPI",
+      "start": "2026-04-10T12:00:00Z",
+      "end": "2026-04-10T13:45:00Z",
+      "reason": "BLS Consumer Price Index for March 2026. Release scheduled 08:30 ET on April 10, 2026."
+    },
+    {
+      "name": "PPI",
+      "start": "2026-04-14T12:00:00Z",
+      "end": "2026-04-14T13:45:00Z",
+      "reason": "BLS Producer Price Index for March 2026. Release scheduled 08:30 ET on April 14, 2026."
+    },
+    {
+      "name": "FOMC Statement / Press Conference",
+      "start": "2026-04-29T17:15:00Z",
+      "end": "2026-04-29T19:30:00Z",
+      "reason": "Federal Reserve FOMC meeting April 28-29, 2026. Statement and press conference on April 29."
+    },
+    {
+      "name": "NFP / Employment Situation",
+      "start": "2026-05-08T12:00:00Z",
+      "end": "2026-05-08T13:45:00Z",
+      "reason": "BLS Employment Situation for April 2026. Release scheduled 08:30 ET on May 8, 2026."
+    },
+    {
+      "name": "CPI",
+      "start": "2026-05-12T12:00:00Z",
+      "end": "2026-05-12T13:45:00Z",
+      "reason": "BLS Consumer Price Index for April 2026. Release scheduled 08:30 ET on May 12, 2026."
+    },
+    {
+      "name": "PPI",
+      "start": "2026-05-13T12:00:00Z",
+      "end": "2026-05-13T13:45:00Z",
+      "reason": "BLS Producer Price Index for April 2026. Release scheduled 08:30 ET on May 13, 2026."
+    },
+    {
+      "name": "NFP / Employment Situation",
+      "start": "2026-06-05T12:00:00Z",
+      "end": "2026-06-05T13:45:00Z",
+      "reason": "BLS Employment Situation for May 2026. Release scheduled 08:30 ET on June 5, 2026."
+    },
+    {
+      "name": "CPI",
+      "start": "2026-06-10T12:00:00Z",
+      "end": "2026-06-10T13:45:00Z",
+      "reason": "BLS Consumer Price Index for May 2026. Release scheduled 08:30 ET on June 10, 2026."
+    },
+    {
+      "name": "PPI",
+      "start": "2026-06-11T12:00:00Z",
+      "end": "2026-06-11T13:45:00Z",
+      "reason": "BLS Producer Price Index for May 2026. Release scheduled 08:30 ET on June 11, 2026."
+    },
+    {
+      "name": "FOMC Statement / Press Conference",
+      "start": "2026-06-17T17:15:00Z",
+      "end": "2026-06-17T19:30:00Z",
+      "reason": "Federal Reserve FOMC meeting June 16-17, 2026. Statement and press conference on June 17."
+    }
+  ]
+}

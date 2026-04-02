@@ -46,6 +46,8 @@ def _read_int_env(name, default, minimum):
 
 MONITOR_INTERVAL_SECONDS = _read_int_env("INDICATOR_MONITOR_INTERVAL_SECONDS", 3, 2)
 NOTIFY_MIN_INTERVAL_SECONDS = _read_int_env("INDICATOR_NOTIFY_MIN_INTERVAL_SECONDS", 6, 1)
+PREDICTION_CONFIRMATION_COUNT = _read_int_env("PREDICTION_CONFIRMATION_COUNT", 2, 1)
+ALERT_COOLDOWN_SECONDS = _read_int_env("ALERT_COOLDOWN_SECONDS", 900, 0)
 PUSH_EXCLUDED_FIELDS = {
     "candle_pattern",
     "rsi_14",
@@ -57,6 +59,8 @@ PUSH_EXCLUDED_FIELDS = {
 
 BASE_DIR = Path(__file__).resolve().parent
 SUBSCRIPTIONS_FILE = BASE_DIR / "tools" / "reports" / "webpush_subscriptions.json"
+PREDICTION_STATE_FILE = BASE_DIR / "tools" / "reports" / "prediction_state.json"
+ALERT_STATE_FILE = BASE_DIR / "tools" / "reports" / "alert_state.json"
 VAPID_PUBLIC_KEY = os.getenv("VAPID_PUBLIC_KEY", "")
 VAPID_PRIVATE_KEY = os.getenv("VAPID_PRIVATE_KEY", "")
 VAPID_CLAIMS_SUBJECT = os.getenv("VAPID_CLAIMS_SUBJECT", "mailto:alerts@example.com")
@@ -159,6 +163,21 @@ def _load_subscriptions():
         return data if isinstance(data, list) else []
     except Exception:
         return []
+
+
+def _load_json_file(path, default):
+    try:
+        if not path.exists():
+            return default
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else default
+    except Exception:
+        return default
+
+
+def _save_json_file(path, payload):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
 
 
 def _save_subscriptions(subscriptions):
@@ -384,6 +403,62 @@ def _compute_trade_guidance(ta_data, sentiment_label, confidence):
     return shared_compute_trade_guidance(ta_data, sentiment_label, confidence)
 
 
+def _stabilize_prediction(prediction, ta_data):
+    raw_verdict = prediction.get("verdict", "Neutral")
+    raw_confidence = int(prediction.get("confidence", 50) or 50)
+    no_trade_reason = prediction.get("noTradeReason") or ""
+    event_risk_active = bool((ta_data.get("event_risk") or {}).get("active"))
+    state = _load_json_file(
+        PREDICTION_STATE_FILE,
+        {
+            "stable_verdict": "Neutral",
+            "last_raw_verdict": "Neutral",
+            "raw_streak": 0,
+        },
+    )
+
+    last_raw = state.get("last_raw_verdict", "Neutral")
+    raw_streak = int(state.get("raw_streak", 0) or 0)
+    if raw_verdict == last_raw:
+        raw_streak += 1
+    else:
+        raw_streak = 1
+
+    stable_verdict = state.get("stable_verdict", "Neutral")
+    stable_confidence = int(state.get("stable_confidence", 50) or 50)
+
+    if no_trade_reason or event_risk_active:
+        stable_verdict = "Neutral"
+        stable_confidence = min(raw_confidence, 60)
+    elif raw_verdict == "Neutral":
+        if raw_streak >= PREDICTION_CONFIRMATION_COUNT:
+            stable_verdict = "Neutral"
+            stable_confidence = min(raw_confidence, 60)
+    elif raw_streak >= PREDICTION_CONFIRMATION_COUNT:
+        stable_verdict = raw_verdict
+        stable_confidence = raw_confidence
+    else:
+        stable_confidence = min(raw_confidence, 58)
+
+    state.update(
+        {
+            "stable_verdict": stable_verdict,
+            "stable_confidence": stable_confidence,
+            "last_raw_verdict": raw_verdict,
+            "raw_streak": raw_streak,
+            "updated_at": int(time.time()),
+        }
+    )
+    _save_json_file(PREDICTION_STATE_FILE, state)
+    stabilized = dict(prediction)
+    stabilized["rawVerdict"] = raw_verdict
+    stabilized["verdict"] = stable_verdict
+    stabilized["confidence"] = stable_confidence
+    stabilized["confirmationCount"] = raw_streak
+    stabilized["confirmed"] = raw_streak >= PREDICTION_CONFIRMATION_COUNT and raw_verdict == stable_verdict
+    return stabilized
+
+
 def _extract_indicator_snapshot(payload):
     """Build a compact snapshot used to detect indicator changes."""
     ta_data = payload.get("TechnicalAnalysis", {}) if isinstance(payload, dict) else {}
@@ -449,7 +524,10 @@ def _build_prediction_response():
             "SentimentalAnalysis": sa_data,
         }, 502
 
-    prediction = compute_prediction_from_ta(ta_data, sentiment_summary)
+    prediction = _stabilize_prediction(
+        compute_prediction_from_ta(ta_data, sentiment_summary),
+        ta_data,
+    )
 
     return {
         "status": "success",
@@ -488,6 +566,21 @@ def _indicator_monitor_loop():
                         and _is_material_change(notification_changes)
                         and (now_ts - last_emit_ts >= NOTIFY_MIN_INTERVAL_SECONDS)
                     ):
+                        alert_state = _load_json_file(
+                            ALERT_STATE_FILE,
+                            {"last_alert_verdict": "", "last_alert_ts": 0},
+                        )
+                        verdict = str(payload.get("verdict", "Neutral"))
+                        should_alert = verdict in {"Bullish", "Bearish"}
+                        if should_alert:
+                            last_alert_verdict = str(alert_state.get("last_alert_verdict", ""))
+                            last_alert_ts = int(alert_state.get("last_alert_ts", 0) or 0)
+                            if verdict == last_alert_verdict and (now_ts - last_alert_ts) < ALERT_COOLDOWN_SECONDS:
+                                should_alert = False
+                        if not should_alert:
+                            last_snapshot = current_snapshot
+                            continue
+
                         if _monitor_state["clients"] > 0:
                             socketio.emit(
                                 "indicator_change",
@@ -513,6 +606,10 @@ def _indicator_monitor_loop():
                             verdict=payload.get("verdict"),
                             confidence=payload.get("confidence"),
                             trade_guidance=payload.get("TradeGuidance"),
+                        )
+                        _save_json_file(
+                            ALERT_STATE_FILE,
+                            {"last_alert_verdict": verdict, "last_alert_ts": now_ts},
                         )
                         last_emit_ts = now_ts
                 last_snapshot = current_snapshot

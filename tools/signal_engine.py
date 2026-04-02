@@ -37,6 +37,12 @@ DEFAULT_STRATEGY_PARAMS = {
     "volume_unavailable_penalty": 5.0,
     "mixed_alignment_penalty": 6.0,
     "neutral_confidence_cap": 63,
+    "sr_reaction_weight": 1.6,
+    "sr_proximity_weight": 0.5,
+    "trigger_min_score": 1.3,
+    "no_trade_adx_threshold": 18,
+    "no_trade_confidence_cap": 60,
+    "event_risk_penalty": 15.0,
     "mtf_intervals": ["15min", "1h", "4h"],
 }
 
@@ -288,6 +294,8 @@ def compute_prediction_from_ta(ta_data, sentiment_summary=None):
     alignment_label = mtf.get("alignment_label", "Mixed / Low Alignment")
     pa_struct = (ta_data.get("price_action") or {}).get("structure", "Consolidating")
     pa_pattern = (ta_data.get("price_action") or {}).get("latest_candle_pattern", "None")
+    support_resistance = ta_data.get("support_resistance", {}) if isinstance(ta_data.get("support_resistance"), dict) else {}
+    event_risk = ta_data.get("event_risk", {}) if isinstance(ta_data.get("event_risk"), dict) else {}
     rsi = ta_data.get("rsi_14", 50)
     trend_base_weight = float(strategy_params.get("trend_base_weight", 2.5))
     alignment_weight = float(strategy_params.get("alignment_weight", 1.2))
@@ -310,78 +318,103 @@ def compute_prediction_from_ta(ta_data, sentiment_summary=None):
     volume_unavailable_penalty = float(strategy_params.get("volume_unavailable_penalty", 5.0))
     mixed_alignment_penalty = float(strategy_params.get("mixed_alignment_penalty", 6.0))
     neutral_confidence_cap = float(strategy_params.get("neutral_confidence_cap", 63))
-    bull_score = 0.0
-    bear_score = 0.0
+    sr_reaction_weight = float(strategy_params.get("sr_reaction_weight", 1.6))
+    sr_proximity_weight = float(strategy_params.get("sr_proximity_weight", 0.5))
+    trigger_min_score = float(strategy_params.get("trigger_min_score", 1.3))
+    no_trade_adx_threshold = float(strategy_params.get("no_trade_adx_threshold", 18))
+    no_trade_confidence_cap = float(strategy_params.get("no_trade_confidence_cap", 60))
+    event_risk_penalty = float(strategy_params.get("event_risk_penalty", 15.0))
+
+    bull_setup = 0.0
+    bear_setup = 0.0
+    bull_trigger = 0.0
+    bear_trigger = 0.0
+    no_trade_reasons = []
 
     if trend == "Bullish":
-        bull_score += trend_base_weight
+        bull_setup += trend_base_weight
     elif trend == "Bearish":
-        bear_score += trend_base_weight
+        bear_setup += trend_base_weight
 
     if alignment_score > 0:
-        bull_score += min(alignment_score, 3) * alignment_weight
+        bull_setup += min(alignment_score, 3) * alignment_weight
     elif alignment_score < 0:
-        bear_score += min(abs(alignment_score), 3) * alignment_weight
+        bear_setup += min(abs(alignment_score), 3) * alignment_weight
 
     adx_trending_threshold = float(strategy_params.get("adx_trending_threshold", 22))
     if regime == "Trending" and adx_14 >= adx_trending_threshold:
         if trend == "Bullish":
-            bull_score += trend_regime_bonus
+            bull_setup += trend_regime_bonus
         elif trend == "Bearish":
-            bear_score += trend_regime_bonus
+            bear_setup += trend_regime_bonus
     elif regime == "Weak Trend":
         if trend == "Bullish":
-            bull_score += weak_trend_bonus
+            bull_setup += weak_trend_bonus
         elif trend == "Bearish":
-            bear_score += weak_trend_bonus
+            bear_setup += weak_trend_bonus
 
     if "Accumulation" in volume:
-        bull_score += strong_volume_weight
+        bull_setup += strong_volume_weight
     elif "Buying Bias" in volume:
-        bull_score += bias_volume_weight
+        bull_setup += bias_volume_weight
     if "Distribution" in volume:
-        bear_score += strong_volume_weight
+        bear_setup += strong_volume_weight
     elif "Selling Bias" in volume:
-        bear_score += bias_volume_weight
+        bear_setup += bias_volume_weight
 
     if "Bullish Breakout" in pa_struct:
-        bull_score += breakout_weight
+        bull_trigger += breakout_weight
     elif "Bearish Breakdown" in pa_struct:
-        bear_score += breakout_weight
+        bear_trigger += breakout_weight
     elif "Bullish Structure" in pa_struct or "Bullish Drift" in pa_struct or "Bullish Pressure" in pa_struct:
-        bull_score += structure_weight
+        bull_trigger += structure_weight
     elif "Bearish Structure" in pa_struct or "Bearish Drift" in pa_struct or "Bearish Pressure" in pa_struct:
-        bear_score += structure_weight
+        bear_trigger += structure_weight
 
     if "Bullish Engulfing" in pa_pattern:
-        bull_score += engulfing_weight
+        bull_trigger += engulfing_weight
     elif "Bearish Engulfing" in pa_pattern:
-        bear_score += engulfing_weight
+        bear_trigger += engulfing_weight
     elif "Bullish Hammer" in pa_pattern:
-        bull_score += reversal_candle_weight
+        bull_trigger += reversal_candle_weight
     elif "Bearish Shooting Star" in pa_pattern:
-        bear_score += reversal_candle_weight
+        bear_trigger += reversal_candle_weight
 
     rsi_oversold = float(strategy_params.get("rsi_oversold", 20))
     rsi_overbought = float(strategy_params.get("rsi_overbought", 70))
     bullish_rsi_warning = min(rsi_oversold + rsi_warning_band, 50)
     bearish_rsi_warning = max(rsi_overbought - rsi_warning_band, 50)
     if rsi < rsi_oversold:
-        bull_score += rsi_extreme_weight
+        bull_trigger += rsi_extreme_weight
     elif rsi < bullish_rsi_warning:
-        bull_score += rsi_warning_weight
+        bull_trigger += rsi_warning_weight
     if rsi > rsi_overbought:
-        bear_score += rsi_extreme_weight
+        bear_trigger += rsi_extreme_weight
     elif rsi > bearish_rsi_warning:
-        bear_score += rsi_warning_weight
+        bear_trigger += rsi_warning_weight
 
+    sr_reaction = support_resistance.get("reaction", "None")
+    support_distance_pct = support_resistance.get("support_distance_pct")
+    resistance_distance_pct = support_resistance.get("resistance_distance_pct")
+    if sr_reaction == "Bullish Support Rejection" or sr_reaction == "Bullish Breakout Through Resistance":
+        bull_trigger += sr_reaction_weight
+    elif sr_reaction == "Bearish Resistance Rejection" or sr_reaction == "Bearish Breakdown Through Support":
+        bear_trigger += sr_reaction_weight
+
+    if isinstance(support_distance_pct, (int, float)) and support_distance_pct <= 0.2:
+        bull_setup += sr_proximity_weight
+    if isinstance(resistance_distance_pct, (int, float)) and resistance_distance_pct <= 0.2:
+        bear_setup += sr_proximity_weight
+
+    bull_score = bull_setup + bull_trigger
+    bear_score = bear_setup + bear_trigger
     score_diff = bull_score - bear_score
     score_margin = abs(score_diff)
     evidence_total = bull_score + bear_score
 
-    if score_diff >= verdict_margin_threshold:
+    if score_diff >= verdict_margin_threshold and bull_trigger >= trigger_min_score:
         verdict = "Bullish"
-    elif score_diff <= -verdict_margin_threshold:
+    elif score_diff <= -verdict_margin_threshold and bear_trigger >= trigger_min_score:
         verdict = "Bearish"
 
     base_conf = 50 + (score_margin * confidence_margin_multiplier) + (evidence_total * confidence_evidence_multiplier)
@@ -396,20 +429,42 @@ def compute_prediction_from_ta(ta_data, sentiment_summary=None):
         penalty += volume_unavailable_penalty
     if alignment_label == "Mixed / Low Alignment":
         penalty += mixed_alignment_penalty
+    if event_risk.get("active"):
+        penalty += event_risk_penalty
+        no_trade_reasons.append("Major macro event window is active.")
+    if regime == "Range-Bound" and alignment_label == "Mixed / Low Alignment":
+        no_trade_reasons.append("Range-bound regime with mixed alignment.")
+    if adx_14 < no_trade_adx_threshold:
+        no_trade_reasons.append("Trend strength is too weak.")
+    if verdict == "Neutral" and max(bull_trigger, bear_trigger) < trigger_min_score:
+        no_trade_reasons.append("No clean trigger is present.")
 
     confidence = base_conf - penalty
-    if verdict == "Neutral":
+    if no_trade_reasons:
+        verdict = "Neutral"
+        confidence = min(confidence, no_trade_confidence_cap)
+    elif verdict == "Neutral":
         confidence = min(confidence, neutral_confidence_cap)
     confidence = round(min(max(confidence, 50), 95))
 
+    trade_guidance = compute_trade_guidance(
+        ta_data,
+        sentiment_summary.get("label", "Neutral"),
+        confidence,
+    )
+    if no_trade_reasons:
+        trade_guidance["sellLevel"] = "Weak"
+        trade_guidance["buyLevel"] = "Weak"
+        trade_guidance["summary"] = no_trade_reasons[0]
+
     return {
+        "raw_verdict": "Bullish" if score_diff >= verdict_margin_threshold else ("Bearish" if score_diff <= -verdict_margin_threshold else "Neutral"),
         "verdict": verdict,
         "confidence": confidence,
-        "TradeGuidance": compute_trade_guidance(
-            ta_data,
-            sentiment_summary.get("label", "Neutral"),
-            confidence,
-        ),
+        "noTradeReason": no_trade_reasons[0] if no_trade_reasons else "",
+        "setupScore": round(max(bull_setup, bear_setup), 2),
+        "triggerScore": round(max(bull_trigger, bear_trigger), 2),
+        "TradeGuidance": trade_guidance,
     }
 
 

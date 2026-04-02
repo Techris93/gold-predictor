@@ -14,6 +14,7 @@ import json
 import os
 import re
 import time
+from datetime import datetime, timezone
 import xml.etree.ElementTree as ET
 from html import unescape
 from dotenv import load_dotenv
@@ -95,6 +96,8 @@ def _load_json_config(relative_path, fallback):
 
 ACTIVE_STRATEGY_PARAMS = _load_json_config("config/strategy_params.json", DEFAULT_STRATEGY_PARAMS)
 LAST_SUCCESSFUL_TA = None
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+EVENT_RISK_CONFIG_PATH = os.path.join(BASE_DIR, "config", "event_risk_windows.json")
 
 RSS_FEEDS = [
     ("Google News Gold", "https://news.google.com/rss/search?q=gold%20OR%20XAUUSD%20OR%20%22Federal%20Reserve%22%20OR%20inflation&hl=en-US&gl=US&ceid=US:en"),
@@ -253,6 +256,106 @@ def _fetch_mtf_trends(td_symbol, h1_trend):
             "m15": m15.get("source", "unknown"),
             "h4": h4.get("source", "unknown"),
         },
+    }
+
+
+def _load_event_risk_windows():
+    try:
+        with open(EVENT_RISK_CONFIG_PATH, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        windows = payload.get("windows", []) if isinstance(payload, dict) else []
+        return windows if isinstance(windows, list) else []
+    except Exception:
+        return []
+
+
+def _event_risk_context(now_ts):
+    active = []
+    upcoming = []
+    for window in _load_event_risk_windows():
+        if not isinstance(window, dict):
+            continue
+        try:
+            start = datetime.fromisoformat(str(window.get("start")).replace("Z", "+00:00"))
+            end = datetime.fromisoformat(str(window.get("end")).replace("Z", "+00:00"))
+        except Exception:
+            continue
+        start_ts = int(start.replace(tzinfo=start.tzinfo or timezone.utc).timestamp())
+        end_ts = int(end.replace(tzinfo=end.tzinfo or timezone.utc).timestamp())
+        if start_ts <= now_ts <= end_ts:
+            active.append(window)
+        elif now_ts < start_ts:
+            upcoming.append((start_ts, window))
+
+    next_event = None
+    if upcoming:
+        upcoming.sort(key=lambda item: item[0])
+        next_event = upcoming[0][1]
+
+    return {
+        "active": bool(active),
+        "active_events": active[:3],
+        "next_event": next_event,
+    }
+
+
+def _support_resistance_snapshot(df, latest, prev):
+    if df.empty:
+        return {
+            "nearest_support": None,
+            "nearest_resistance": None,
+            "support_distance_pct": None,
+            "resistance_distance_pct": None,
+            "reaction": "None",
+        }
+
+    latest_close = float(latest["Close"])
+    price_levels = []
+
+    by_day = df[["High", "Low"]].copy()
+    by_day["session_day"] = by_day.index.date
+    daily = by_day.groupby("session_day").agg({"High": "max", "Low": "min"})
+    if len(daily) >= 2:
+        previous_day = daily.iloc[-2]
+        price_levels.append(("Previous Day High", float(previous_day["High"]), "resistance"))
+        price_levels.append(("Previous Day Low", float(previous_day["Low"]), "support"))
+
+    lookback = df.iloc[-24:] if len(df) >= 24 else df
+    if not lookback.empty:
+        price_levels.append(("Recent Swing High", float(lookback["High"].max()), "resistance"))
+        price_levels.append(("Recent Swing Low", float(lookback["Low"].min()), "support"))
+
+    supports = [(name, value) for name, value, kind in price_levels if kind == "support" and value <= latest_close]
+    resistances = [(name, value) for name, value, kind in price_levels if kind == "resistance" and value >= latest_close]
+    nearest_support = max(supports, key=lambda item: item[1]) if supports else None
+    nearest_resistance = min(resistances, key=lambda item: item[1]) if resistances else None
+
+    support_distance_pct = ((latest_close - nearest_support[1]) / latest_close * 100.0) if nearest_support else None
+    resistance_distance_pct = ((nearest_resistance[1] - latest_close) / latest_close * 100.0) if nearest_resistance else None
+
+    reaction = "None"
+    candle_range = max(float(latest["High"] - latest["Low"]), 1e-8)
+    bullish_close = latest["Close"] > latest["Open"] and latest["Close"] > prev["Close"]
+    bearish_close = latest["Close"] < latest["Open"] and latest["Close"] < prev["Close"]
+
+    if nearest_support and support_distance_pct is not None and support_distance_pct <= 0.18 and bullish_close:
+        reaction = "Bullish Support Rejection"
+    elif nearest_resistance and resistance_distance_pct is not None and resistance_distance_pct <= 0.18 and bearish_close:
+        reaction = "Bearish Resistance Rejection"
+    elif candle_range > 0:
+        breakout_up = nearest_resistance and latest["Close"] > nearest_resistance[1] and latest["Close"] > latest["Open"]
+        breakout_down = nearest_support and latest["Close"] < nearest_support[1] and latest["Close"] < latest["Open"]
+        if breakout_up:
+            reaction = "Bullish Breakout Through Resistance"
+        elif breakout_down:
+            reaction = "Bearish Breakdown Through Support"
+
+    return {
+        "nearest_support": {"label": nearest_support[0], "price": round(nearest_support[1], 2)} if nearest_support else None,
+        "nearest_resistance": {"label": nearest_resistance[0], "price": round(nearest_resistance[1], 2)} if nearest_resistance else None,
+        "support_distance_pct": round(support_distance_pct, 3) if support_distance_pct is not None else None,
+        "resistance_distance_pct": round(resistance_distance_pct, 3) if resistance_distance_pct is not None else None,
+        "reaction": reaction,
     }
 
 def get_technical_analysis():
@@ -489,6 +592,8 @@ def get_technical_analysis():
                 "structure": pa_structure,
                 "latest_candle_pattern": candle_pattern
             },
+            "support_resistance": _support_resistance_snapshot(df, latest, prev),
+            "event_risk": _event_risk_context(int(time.time())),
             "volume_analysis": {
                 "cmf_14": round(latest['CMF_14'], 4) if has_volume else "N/A",
                 "obv_trend": ("Rising" if obv_rising else "Falling") if has_volume else "N/A",
