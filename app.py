@@ -420,14 +420,14 @@ def _evaluate_decision_status(verdict, confidence, ta_data, trade_guidance):
     buy_checks = [
         verdict == "Bullish" and confidence >= 70,
         trend == "Bullish" and has_bullish_structure,
-        bullish_alignment or "mixed" not in alignment.lower(),
+        bullish_alignment,
         not has_doji_like_pattern and not no_clean_trigger,
         buy_level in {"Watch", "Strong"} and exit_level in {"Low", "Medium"},
     ]
     sell_checks = [
         verdict == "Bearish" and confidence >= 70,
         trend == "Bearish" and has_bearish_structure,
-        bearish_alignment or "mixed" not in alignment.lower(),
+        bearish_alignment,
         not has_doji_like_pattern and not no_clean_trigger,
         sell_level in {"Watch", "Strong"} and exit_level in {"Low", "Medium"},
     ]
