@@ -22,7 +22,7 @@
       "name": "FOMC Statement / Press Conference",
       "start": "2026-04-29T17:15:00Z",
       "end": "2026-04-29T19:30:00Z",
-      "reason": "Federal Reserve FOMC meeting April 28-29, 2026. Statement and press conference on April 29."
+      "reason": "Federal Reserve FOMC statement and press conference window for April 29, 2026."
     },
     {
       "name": "NFP / Employment Situation",
@@ -64,7 +64,19 @@
       "name": "FOMC Statement / Press Conference",
       "start": "2026-06-17T17:15:00Z",
       "end": "2026-06-17T19:30:00Z",
-      "reason": "Federal Reserve FOMC meeting June 16-17, 2026. Statement and press conference on June 17."
+      "reason": "Federal Reserve FOMC statement and press conference window for June 17, 2026."
+    },
+    {
+      "name": "FOMC Statement / Press Conference",
+      "start": "2026-07-29T17:15:00Z",
+      "end": "2026-07-29T19:30:00Z",
+      "reason": "Federal Reserve FOMC statement and press conference window for July 29, 2026."
+    },
+    {
+      "name": "FOMC Statement / Press Conference",
+      "start": "2026-09-16T17:15:00Z",
+      "end": "2026-09-16T19:30:00Z",
+      "reason": "Federal Reserve FOMC statement and press conference window for September 16, 2026."
     }
   ]
 }
