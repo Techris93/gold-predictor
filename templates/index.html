@@ -769,6 +769,12 @@
               Evaluating checklist...
             </div>
           </div>
+          <div class="decision-status" style="margin-top: 0.85rem;">
+            <div class="decision-status-label">Execution Permission</div>
+            <div class="decision-status-value wait" id="execution-permission">
+              Evaluating market state...
+            </div>
+          </div>
           <div class="decision-grid">
             <div class="decision-block">
               <div class="decision-heading buy">Buy Only When</div>
@@ -1935,6 +1941,29 @@
           const checklistClass = checklist.status || checklist.statusClass || "wait";
           decisionStatusEl.innerText = checklistText;
           decisionStatusEl.className = `decision-status-value ${checklistClass}`;
+        }
+
+        const executionPermissionEl = document.getElementById("execution-permission");
+        if (executionPermissionEl) {
+          let permissionText = "No trade. Conditions are not clean enough yet.";
+          let permissionClass = "wait";
+
+          if (marketActionStateText === "LONG_ACTIVE" && checklist.status === "buy") {
+            permissionText = "Entry Allowed: buy conditions are confirmed.";
+            permissionClass = "buy";
+          } else if (marketActionStateText === "SHORT_ACTIVE" && checklist.status === "sell") {
+            permissionText = "Entry Allowed: sell conditions are confirmed.";
+            permissionClass = "sell";
+          } else if (marketActionStateText === "SETUP_LONG" || marketActionStateText === "SETUP_SHORT") {
+            permissionText = "Watchlist Only: setup is forming, but execution is not confirmed yet.";
+            permissionClass = "wait";
+          } else if (marketActionStateText === "EXIT_RISK" || checklist.status === "exit") {
+            permissionText = "Exit Recommended: active position quality is deteriorating.";
+            permissionClass = "exit";
+          }
+
+          executionPermissionEl.innerText = permissionText;
+          executionPermissionEl.className = `decision-status-value ${permissionClass}`;
         }
 
         suppressNextUiChangeNotification = false;
