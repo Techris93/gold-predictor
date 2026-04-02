@@ -927,48 +927,7 @@
 
       let hideLoaderTimer = null;
       let priceFlashTimer = null;
-      let lastRenderedPredictionSnapshot = null;
       let suppressNextUiChangeNotification = false;
-
-      function buildClientPredictionSnapshot(data) {
-        const ta = data?.TechnicalAnalysis || {};
-        const regime = ta.volatility_regime || {};
-        const mtf = ta.multi_timeframe || {};
-        const pa = ta.price_action || {};
-        const sentiment = data?.SentimentSummary || {};
-        const trade = data?.TradeGuidance || {};
-
-        return {
-          verdict: data?.verdict ?? null,
-          confidence: data?.confidence ?? null,
-          sentiment_label: sentiment.label || null,
-          trend: ta.ema_trend || null,
-          market_structure: pa.structure || null,
-          candle_pattern: pa.latest_candle_pattern || null,
-          market_regime: regime.market_regime || null,
-          alignment: mtf.alignment_label || null,
-          trade_sell_setup: trade.sellLevel || null,
-          trade_buy_setup: trade.buyLevel || null,
-          trade_exit_warning: trade.exitLevel || null,
-        };
-      }
-
-      function diffPredictionSnapshots(prevSnapshot, nextSnapshot) {
-        const changes = {};
-        const keys = new Set([
-          ...Object.keys(prevSnapshot || {}),
-          ...Object.keys(nextSnapshot || {}),
-        ]);
-        keys.forEach((key) => {
-          if ((prevSnapshot || {})[key] !== (nextSnapshot || {})[key]) {
-            changes[key] = {
-              previous: (prevSnapshot || {})[key],
-              current: (nextSnapshot || {})[key],
-            };
-          }
-        });
-        return changes;
-      }
 
       async function fetchPrediction() {
         const loader = document.getElementById("loading-screen");
@@ -1681,15 +1640,6 @@
           showInlineError("Malformed server response");
           return;
         }
-        const nextSnapshot = buildClientPredictionSnapshot(data);
-        const uiChanges = diffPredictionSnapshots(
-          lastRenderedPredictionSnapshot,
-          nextSnapshot,
-        );
-        const shouldNotifyFromUi =
-          lastRenderedPredictionSnapshot &&
-          Object.keys(uiChanges).length > 0 &&
-          !suppressNextUiChangeNotification;
 
         // Update Price
         const ta = data.TechnicalAnalysis;
@@ -1895,24 +1845,7 @@
           decisionStatusEl.className = `decision-status-value ${checklistClass}`;
         }
 
-        if (shouldNotifyFromUi) {
-          const changeText = summarizeChanges(uiChanges);
-          showPushToast(
-            "Prediction Updated",
-            `${changeText} | Verdict: ${data.verdict} (${data.confidence}%)`,
-          );
-          if ("Notification" in window && Notification.permission === "granted") {
-            new Notification(
-              "XAUUSD Indicator Update",
-              {
-              body: `${changeText} | Verdict: ${data.verdict} (${data.confidence}%)`,
-              },
-            );
-          }
-        }
-
         suppressNextUiChangeNotification = false;
-        lastRenderedPredictionSnapshot = nextSnapshot;
       }
 
       // Fetch on load
