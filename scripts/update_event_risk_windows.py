@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from html import unescape
@@ -180,6 +181,32 @@ def fetch_bls_windows(now_et: datetime, horizon_days: int) -> list[dict[str, str
     return windows
 
 
+def load_existing_bls_windows(output_path: Path, now_utc: datetime, horizon_days: int) -> list[dict[str, str]]:
+    if not output_path.exists():
+        return []
+
+    try:
+        payload = json.loads(output_path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+    end_cutoff = now_utc + timedelta(days=horizon_days)
+    known_names = {config.name for config in BLS_WINDOWS}
+    preserved: list[dict[str, str]] = []
+
+    for item in payload.get("windows", []):
+        if item.get("name") not in known_names:
+            continue
+        try:
+            start_dt = datetime.strptime(item["start"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        except Exception:
+            continue
+        if now_utc <= start_dt <= end_cutoff:
+            preserved.append(item)
+
+    return preserved
+
+
 def _month_number(month_label: str) -> int:
     cleaned = month_label.replace(".", "").strip()
     try:
@@ -264,9 +291,20 @@ def fetch_fomc_windows(now_et: datetime, horizon_days: int) -> list[dict[str, st
     return windows
 
 
-def build_windows(horizon_days: int) -> dict[str, list[dict[str, str]]]:
+def build_windows(horizon_days: int, output_path: Path) -> dict[str, list[dict[str, str]]]:
     now_et = datetime.now(tz=ET)
-    windows = fetch_bls_windows(now_et=now_et, horizon_days=horizon_days)
+    now_utc = now_et.astimezone(timezone.utc)
+
+    try:
+        windows = fetch_bls_windows(now_et=now_et, horizon_days=horizon_days)
+    except Exception as exc:
+        windows = load_existing_bls_windows(output_path=output_path, now_utc=now_utc, horizon_days=horizon_days)
+        warning = (
+            "Warning: failed to refresh BLS windows automatically; "
+            f"preserving existing future BLS windows instead. Error: {exc}"
+        )
+        print(warning, file=sys.stderr)
+
     windows.extend(fetch_fomc_windows(now_et=now_et, horizon_days=horizon_days))
     windows.sort(key=lambda item: item["start"])
     return {"windows": windows}
@@ -296,7 +334,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    payload = build_windows(horizon_days=args.horizon_days)
+    payload = build_windows(horizon_days=args.horizon_days, output_path=args.output)
 
     if args.stdout:
         print(json.dumps(payload, indent=2))
