@@ -5,6 +5,7 @@ import os
 import threading
 import time
 from pathlib import Path
+import requests
 from tools import predict_gold
 from tools.signal_engine import (
     classify_market_sentiment as shared_classify_market_sentiment,
@@ -43,7 +44,7 @@ def _read_int_env(name, default, minimum):
     return max(minimum, value)
 
 
-MONITOR_INTERVAL_SECONDS = _read_int_env("INDICATOR_MONITOR_INTERVAL_SECONDS", 5, 3)
+MONITOR_INTERVAL_SECONDS = _read_int_env("INDICATOR_MONITOR_INTERVAL_SECONDS", 3, 2)
 NOTIFY_MIN_INTERVAL_SECONDS = _read_int_env("INDICATOR_NOTIFY_MIN_INTERVAL_SECONDS", 6, 1)
 PUSH_EXCLUDED_FIELDS = {
     "candle_pattern",
@@ -59,9 +60,14 @@ SUBSCRIPTIONS_FILE = BASE_DIR / "tools" / "reports" / "webpush_subscriptions.jso
 VAPID_PUBLIC_KEY = os.getenv("VAPID_PUBLIC_KEY", "")
 VAPID_PRIVATE_KEY = os.getenv("VAPID_PRIVATE_KEY", "")
 VAPID_CLAIMS_SUBJECT = os.getenv("VAPID_CLAIMS_SUBJECT", "mailto:alerts@example.com")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+TELEGRAM_THREAD_ID = os.getenv("TELEGRAM_THREAD_ID", "").strip()
 CHANGE_SUMMARY_ORDER = [
     "verdict",
     "confidence",
+    "fast_direction",
+    "fast_direction_change",
     "sentiment_label",
     "trend",
     "market_structure",
@@ -212,6 +218,8 @@ def _summarize_changes_for_push(changes):
     labels = {
         "verdict": "Verdict",
         "confidence": "Confidence",
+        "fast_direction": "Fast Direction",
+        "fast_direction_change": "Fast Flip",
         "trend": "Trend",
         "sentiment_label": "Sentiment",
         "market_structure": "Structure",
@@ -238,6 +246,59 @@ def _classify_market_sentiment(news_list):
     return shared_classify_market_sentiment(news_list)
 
 
+def _telegram_enabled():
+    return bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)
+
+
+def _has_background_alert_channels():
+    return _has_push_subscribers() or _telegram_enabled()
+
+
+def _send_telegram_notification(changes, verdict, confidence, trade_guidance):
+    if not _telegram_enabled():
+        return
+
+    fast_flip = None
+    if isinstance(changes, dict):
+        fast_flip = changes.get("fast_direction_change", {}).get("current")
+
+    title = "XAUUSD Indicator Update"
+    if fast_flip and fast_flip != "None":
+        title = f"XAUUSD Fast Direction Flip: {fast_flip}"
+
+    change_summary = _summarize_changes_for_push(changes)
+    trade_summary = ""
+    if isinstance(trade_guidance, dict):
+        trade_summary = trade_guidance.get("summary") or ""
+
+    lines = [
+        title,
+        f"Verdict: {verdict} ({confidence}%)",
+        change_summary,
+    ]
+    if trade_summary:
+        lines.append(trade_summary)
+
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": "\n".join(line for line in lines if line),
+        "disable_web_page_preview": True,
+    }
+    if TELEGRAM_THREAD_ID:
+        payload["message_thread_id"] = TELEGRAM_THREAD_ID
+
+    try:
+        response = requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+            json=payload,
+            timeout=10,
+        )
+        response.raise_for_status()
+    except Exception:
+        # Keep the monitor loop alive even if Telegram is unavailable.
+        return
+
+
 def _send_web_push_notifications(changes, verdict, confidence, trade_guidance):
     if webpush is None or not VAPID_PUBLIC_KEY or not VAPID_PRIVATE_KEY:
         return
@@ -245,6 +306,13 @@ def _send_web_push_notifications(changes, verdict, confidence, trade_guidance):
     subscriptions = _load_subscriptions()
     if not subscriptions:
         return
+
+    fast_flip = None
+    if isinstance(changes, dict):
+        fast_flip = changes.get("fast_direction_change", {}).get("current")
+    title = "XAUUSD Indicator Update"
+    if fast_flip and fast_flip != "None":
+        title = f"XAUUSD Fast Direction Flip: {fast_flip}"
 
     change_summary = _summarize_changes_for_push(changes)
     trade_summary = ""
@@ -255,7 +323,7 @@ def _send_web_push_notifications(changes, verdict, confidence, trade_guidance):
         body_parts.append(trade_summary)
     body = " | ".join(part for part in body_parts if part)
     payload = {
-        "title": "XAUUSD Indicator Update",
+        "title": title,
         "body": body,
         "verdict": verdict,
         "confidence": confidence,
@@ -293,6 +361,8 @@ def _is_material_change(changes):
     always_material = {
         "verdict",
         "confidence",
+        "fast_direction",
+        "fast_direction_change",
         "sentiment_label",
         "trend",
         "market_structure",
@@ -347,6 +417,8 @@ def _extract_indicator_snapshot(payload):
     return {
         "verdict": payload.get("verdict"),
         "confidence": payload.get("confidence"),
+        "fast_direction": (ta_data.get("fast_signal") or {}).get("direction"),
+        "fast_direction_change": (ta_data.get("fast_signal") or {}).get("direction_change"),
         "sentiment_label": sentiment_summary.get("label"),
         "trend": ta_data.get("ema_trend"),
         "market_structure": pa.get("structure"),
@@ -421,7 +493,7 @@ def _indicator_monitor_loop():
     while True:
         try:
             # Skip polling only when there are no live viewers and no background push subscribers.
-            if _monitor_state["clients"] <= 0 and not _has_push_subscribers():
+            if _monitor_state["clients"] <= 0 and not _has_background_alert_channels():
                 socketio.sleep(2)
                 continue
 
@@ -432,6 +504,12 @@ def _indicator_monitor_loop():
                     changes = _diff_snapshot(last_snapshot, current_snapshot)
                     notification_changes = _filter_notification_changes(changes)
                     now_ts = int(time.time())
+                    fast_flip = notification_changes.get("fast_direction_change", {}).get("current")
+                    alert_title = "Indicator Update"
+                    alert_message = "Indicators changed"
+                    if fast_flip and fast_flip != "None":
+                        alert_title = f"Fast Direction Flip: {fast_flip}"
+                        alert_message = f"Fast direction changed: {fast_flip}"
                     if (
                         notification_changes
                         and _is_material_change(notification_changes)
@@ -441,7 +519,8 @@ def _indicator_monitor_loop():
                             socketio.emit(
                                 "indicator_change",
                                 {
-                                    "message": "Indicators changed",
+                                    "message": alert_message,
+                                    "title": alert_title,
                                     "changes": notification_changes,
                                     "snapshot": current_snapshot,
                                     "verdict": payload.get("verdict"),
@@ -451,6 +530,12 @@ def _indicator_monitor_loop():
                             )
 
                         _send_web_push_notifications(
+                            changes=notification_changes,
+                            verdict=payload.get("verdict"),
+                            confidence=payload.get("confidence"),
+                            trade_guidance=payload.get("TradeGuidance"),
+                        )
+                        _send_telegram_notification(
                             changes=notification_changes,
                             verdict=payload.get("verdict"),
                             confidence=payload.get("confidence"),

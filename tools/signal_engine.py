@@ -37,6 +37,16 @@ DEFAULT_STRATEGY_PARAMS = {
     "volume_unavailable_penalty": 5.0,
     "mixed_alignment_penalty": 6.0,
     "neutral_confidence_cap": 63,
+    "fast_interval": "5min",
+    "fast_ema_short": 5,
+    "fast_ema_long": 13,
+    "fast_rsi_window": 7,
+    "fast_breakout_lookback": 6,
+    "fast_momentum_bars": 3,
+    "fast_momentum_threshold_pct": 0.12,
+    "fast_signal_min_score": 3,
+    "fast_signal_weight": 1.6,
+    "fast_flip_bonus": 1.2,
     "mtf_intervals": ["15min", "1h", "4h"],
 }
 
@@ -288,6 +298,9 @@ def compute_prediction_from_ta(ta_data, sentiment_summary=None):
     alignment_label = mtf.get("alignment_label", "Mixed / Low Alignment")
     pa_struct = (ta_data.get("price_action") or {}).get("structure", "Consolidating")
     pa_pattern = (ta_data.get("price_action") or {}).get("latest_candle_pattern", "None")
+    fast_signal = ta_data.get("fast_signal", {}) if isinstance(ta_data.get("fast_signal"), dict) else {}
+    fast_direction = fast_signal.get("direction", "Neutral")
+    fast_changed = bool(fast_signal.get("changed"))
     rsi = ta_data.get("rsi_14", 50)
     trend_base_weight = float(strategy_params.get("trend_base_weight", 2.5))
     alignment_weight = float(strategy_params.get("alignment_weight", 1.2))
@@ -310,6 +323,8 @@ def compute_prediction_from_ta(ta_data, sentiment_summary=None):
     volume_unavailable_penalty = float(strategy_params.get("volume_unavailable_penalty", 5.0))
     mixed_alignment_penalty = float(strategy_params.get("mixed_alignment_penalty", 6.0))
     neutral_confidence_cap = float(strategy_params.get("neutral_confidence_cap", 63))
+    fast_signal_weight = float(strategy_params.get("fast_signal_weight", 1.6))
+    fast_flip_bonus = float(strategy_params.get("fast_flip_bonus", 1.2))
 
     bull_score = 0.0
     bear_score = 0.0
@@ -375,6 +390,15 @@ def compute_prediction_from_ta(ta_data, sentiment_summary=None):
         bear_score += rsi_extreme_weight
     elif rsi > bearish_rsi_warning:
         bear_score += rsi_warning_weight
+
+    if fast_direction == "Bullish":
+        bull_score += fast_signal_weight
+        if fast_changed:
+            bull_score += fast_flip_bonus
+    elif fast_direction == "Bearish":
+        bear_score += fast_signal_weight
+        if fast_changed:
+            bear_score += fast_flip_bonus
 
     score_diff = bull_score - bear_score
     score_margin = abs(score_diff)

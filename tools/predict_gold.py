@@ -74,6 +74,16 @@ DEFAULT_STRATEGY_PARAMS = {
     "volume_unavailable_penalty": 5.0,
     "mixed_alignment_penalty": 6.0,
     "neutral_confidence_cap": 63,
+    "fast_interval": "5min",
+    "fast_ema_short": 5,
+    "fast_ema_long": 13,
+    "fast_rsi_window": 7,
+    "fast_breakout_lookback": 6,
+    "fast_momentum_bars": 3,
+    "fast_momentum_threshold_pct": 0.12,
+    "fast_signal_min_score": 3,
+    "fast_signal_weight": 1.6,
+    "fast_flip_bonus": 1.2,
     "mtf_intervals": ["15min", "1h", "4h"],
 }
 
@@ -254,6 +264,209 @@ def _fetch_mtf_trends(td_symbol, h1_trend):
             "h4": h4.get("source", "unknown"),
         },
     }
+
+
+def _resolve_fast_direction(close_value, ema_fast, ema_slow, ema_slope, rsi_value, momentum_pct, breakout_side, min_score):
+    bullish_score = 0
+    bearish_score = 0
+    triggers = []
+
+    if close_value > ema_fast:
+        bullish_score += 1
+        triggers.append("price above fast EMA")
+    elif close_value < ema_fast:
+        bearish_score += 1
+        triggers.append("price below fast EMA")
+
+    if ema_fast > ema_slow:
+        bullish_score += 1
+        triggers.append("fast EMA above slow EMA")
+    elif ema_fast < ema_slow:
+        bearish_score += 1
+        triggers.append("fast EMA below slow EMA")
+
+    if ema_slope > 0:
+        bullish_score += 1
+        triggers.append("fast EMA slope rising")
+    elif ema_slope < 0:
+        bearish_score += 1
+        triggers.append("fast EMA slope falling")
+
+    if rsi_value >= 55:
+        bullish_score += 1
+        triggers.append("fast RSI bullish")
+    elif rsi_value <= 45:
+        bearish_score += 1
+        triggers.append("fast RSI bearish")
+
+    if momentum_pct > 0:
+        bullish_score += 1
+        triggers.append("short-term momentum up")
+    elif momentum_pct < 0:
+        bearish_score += 1
+        triggers.append("short-term momentum down")
+
+    if breakout_side == "bullish":
+        bullish_score += 1
+        triggers.append("recent range breakout up")
+    elif breakout_side == "bearish":
+        bearish_score += 1
+        triggers.append("recent range breakout down")
+
+    direction = "Neutral"
+    strength = max(bullish_score, bearish_score)
+    if bullish_score >= min_score and bullish_score > bearish_score:
+        direction = "Bullish"
+    elif bearish_score >= min_score and bearish_score > bullish_score:
+        direction = "Bearish"
+
+    return {
+        "direction": direction,
+        "strength": strength,
+        "bullish_score": bullish_score,
+        "bearish_score": bearish_score,
+        "triggers": triggers,
+    }
+
+
+def _fetch_fast_signal(td_symbol):
+    if not td_client:
+        return {
+            "interval": ACTIVE_STRATEGY_PARAMS.get("fast_interval", "5min"),
+            "direction": "Neutral",
+            "previous_direction": "Neutral",
+            "direction_change": "None",
+            "changed": False,
+            "strength": 0,
+            "bullish_score": 0,
+            "bearish_score": 0,
+            "momentum_pct": 0.0,
+            "ema_fast": 0.0,
+            "ema_slow": 0.0,
+            "rsi_fast": 50.0,
+            "triggers": [],
+            "source": "none",
+        }
+
+    interval = str(ACTIVE_STRATEGY_PARAMS.get("fast_interval", "5min"))
+    ema_short = int(ACTIVE_STRATEGY_PARAMS.get("fast_ema_short", 5))
+    ema_long = int(ACTIVE_STRATEGY_PARAMS.get("fast_ema_long", 13))
+    rsi_window = int(ACTIVE_STRATEGY_PARAMS.get("fast_rsi_window", 7))
+    breakout_lookback = int(ACTIVE_STRATEGY_PARAMS.get("fast_breakout_lookback", 6))
+    momentum_bars = int(ACTIVE_STRATEGY_PARAMS.get("fast_momentum_bars", 3))
+    momentum_threshold_pct = float(ACTIVE_STRATEGY_PARAMS.get("fast_momentum_threshold_pct", 0.12))
+    min_score = int(ACTIVE_STRATEGY_PARAMS.get("fast_signal_min_score", 3))
+
+    try:
+        ts = td_client.time_series(symbol=td_symbol, interval=interval, outputsize=120)
+        df_fast = ts.as_pandas()
+        if df_fast.empty or "close" not in df_fast.columns:
+            raise ValueError("fast interval returned no close values")
+
+        close_col = pd.to_numeric(df_fast["close"], errors="coerce").sort_index().dropna()
+        if len(close_col) < max(ema_long + 2, momentum_bars + 2, breakout_lookback + 2):
+            raise ValueError("fast interval has insufficient bars")
+
+        ema_fast_series = ta.trend.EMAIndicator(close_col, window=ema_short).ema_indicator()
+        ema_slow_series = ta.trend.EMAIndicator(close_col, window=ema_long).ema_indicator()
+        rsi_series = ta.momentum.RSIIndicator(close_col, window=rsi_window).rsi()
+
+        latest_close = float(close_col.iloc[-1])
+        previous_close = float(close_col.iloc[-(momentum_bars + 1)])
+        momentum_pct = ((latest_close - previous_close) / previous_close * 100.0) if previous_close else 0.0
+        if abs(momentum_pct) < momentum_threshold_pct:
+            momentum_pct = 0.0
+
+        ema_fast_latest = float(ema_fast_series.iloc[-1])
+        ema_fast_prev = float(ema_fast_series.iloc[-2])
+        ema_slow_latest = float(ema_slow_series.iloc[-1])
+        rsi_latest = float(rsi_series.iloc[-1]) if not pd.isna(rsi_series.iloc[-1]) else 50.0
+        ema_slope = ema_fast_latest - ema_fast_prev
+
+        recent_high = float(close_col.iloc[-(breakout_lookback + 1):-1].max())
+        recent_low = float(close_col.iloc[-(breakout_lookback + 1):-1].min())
+        breakout_side = None
+        if latest_close > recent_high:
+            breakout_side = "bullish"
+        elif latest_close < recent_low:
+            breakout_side = "bearish"
+
+        current_signal = _resolve_fast_direction(
+            latest_close,
+            ema_fast_latest,
+            ema_slow_latest,
+            ema_slope,
+            rsi_latest,
+            momentum_pct,
+            breakout_side,
+            min_score,
+        )
+
+        prev_index = -2
+        prev_close_value = float(close_col.iloc[prev_index])
+        prior_anchor = float(close_col.iloc[-(momentum_bars + 2)])
+        prev_momentum_pct = ((prev_close_value - prior_anchor) / prior_anchor * 100.0) if prior_anchor else 0.0
+        if abs(prev_momentum_pct) < momentum_threshold_pct:
+            prev_momentum_pct = 0.0
+        prev_breakout_side = None
+        prev_recent_high = float(close_col.iloc[-(breakout_lookback + 2):-2].max())
+        prev_recent_low = float(close_col.iloc[-(breakout_lookback + 2):-2].min())
+        if prev_close_value > prev_recent_high:
+            prev_breakout_side = "bullish"
+        elif prev_close_value < prev_recent_low:
+            prev_breakout_side = "bearish"
+
+        prev_signal = _resolve_fast_direction(
+            prev_close_value,
+            float(ema_fast_series.iloc[-2]),
+            float(ema_slow_series.iloc[-2]),
+            float(ema_fast_series.iloc[-2] - ema_fast_series.iloc[-3]),
+            float(rsi_series.iloc[-2]) if not pd.isna(rsi_series.iloc[-2]) else 50.0,
+            prev_momentum_pct,
+            prev_breakout_side,
+            min_score,
+        )
+
+        previous_direction = prev_signal["direction"]
+        changed = previous_direction != current_signal["direction"]
+        direction_change = (
+            f"{previous_direction} -> {current_signal['direction']}"
+            if changed else "None"
+        )
+
+        return {
+            "interval": interval,
+            "direction": current_signal["direction"],
+            "previous_direction": previous_direction,
+            "direction_change": direction_change,
+            "changed": changed,
+            "strength": current_signal["strength"],
+            "bullish_score": current_signal["bullish_score"],
+            "bearish_score": current_signal["bearish_score"],
+            "momentum_pct": round(momentum_pct, 3),
+            "ema_fast": round(ema_fast_latest, 2),
+            "ema_slow": round(ema_slow_latest, 2),
+            "rsi_fast": round(rsi_latest, 2),
+            "triggers": current_signal["triggers"][:4],
+            "source": "twelvedata",
+        }
+    except Exception:
+        return {
+            "interval": interval,
+            "direction": "Neutral",
+            "previous_direction": "Neutral",
+            "direction_change": "None",
+            "changed": False,
+            "strength": 0,
+            "bullish_score": 0,
+            "bearish_score": 0,
+            "momentum_pct": 0.0,
+            "ema_fast": 0.0,
+            "ema_slow": 0.0,
+            "rsi_fast": 50.0,
+            "triggers": [],
+            "source": "twelvedata",
+        }
 
 def get_technical_analysis():
     """Fetches gold price/technical data from Twelve Data only."""
@@ -457,6 +670,8 @@ def get_technical_analysis():
         # Multi-timeframe trend confirmation (15m + 1h + 4h) from Twelve Data only.
         mtf = _fetch_mtf_trends(td_symbol=td_symbol, h1_trend=ema_trend)
 
+        fast_signal = _fetch_fast_signal(td_symbol)
+
         result = {
             "data_source": data_source,
             "last_updated_at": int(time.time()),
@@ -489,6 +704,7 @@ def get_technical_analysis():
                 "structure": pa_structure,
                 "latest_candle_pattern": candle_pattern
             },
+            "fast_signal": fast_signal,
             "volume_analysis": {
                 "cmf_14": round(latest['CMF_14'], 4) if has_volume else "N/A",
                 "obv_trend": ("Rising" if obv_rising else "Falling") if has_volume else "N/A",

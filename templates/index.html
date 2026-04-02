@@ -500,6 +500,14 @@
           <span class="metric-value" id="ta-trend">---</span>
         </div>
         <div class="metric-row">
+          <span class="metric-label">Fast Direction (5m)</span>
+          <span class="metric-value" id="ta-fast-direction">---</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Fast Flip Status</span>
+          <span class="metric-value" id="ta-fast-flip">---</span>
+        </div>
+        <div class="metric-row">
           <span class="metric-label">RSI Momentum (14)</span>
           <span class="metric-value" id="ta-rsi">---</span>
         </div>
@@ -776,6 +784,8 @@
         return {
           verdict: data?.verdict ?? null,
           confidence: data?.confidence ?? null,
+          fast_direction: ta.fast_signal?.direction || null,
+          fast_direction_change: ta.fast_signal?.direction_change || null,
           sentiment_label: sentiment.label || null,
           trend: ta.ema_trend || null,
           market_structure: pa.structure || null,
@@ -912,6 +922,8 @@
         const labels = {
           verdict: "Verdict",
           confidence: "Confidence",
+          fast_direction: "Fast Direction",
+          fast_direction_change: "Fast Flip",
           trend: "Trend",
           market_structure: "Market Structure",
           candle_pattern: "Candle Pattern",
@@ -926,6 +938,8 @@
         const preferredOrder = [
           "verdict",
           "confidence",
+          "fast_direction",
+          "fast_direction_change",
           "trend",
           "market_structure",
           "candle_pattern",
@@ -986,14 +1000,15 @@
           const changeText = summarizeChanges(payload?.changes || {});
           const verdict = payload?.verdict || "Neutral";
           const confidence = payload?.confidence ?? "N/A";
+          const title = payload?.title || "Indicator Update";
 
           showPushToast(
-            "Indicator Update",
+            title,
             `${changeText} | Verdict: ${verdict} (${confidence}%)`,
           );
 
           if ("Notification" in window && Notification.permission === "granted") {
-            new Notification("XAUUSD Indicator Update", {
+            new Notification(`XAUUSD ${title}`, {
               body: `${changeText} | Verdict: ${verdict} (${confidence}%)`,
             });
           }
@@ -1560,6 +1575,19 @@
         trendEl.innerText = ta.ema_trend;
         trendEl.className = `metric-value ${ta.ema_trend === "Bullish" ? "value-bullish" : ta.ema_trend === "Bearish" ? "value-bearish" : ""}`;
 
+        const fastSignal = ta.fast_signal || {};
+        const fastDirectionEl = document.getElementById("ta-fast-direction");
+        const fastDirection = fastSignal.direction || "Neutral";
+        fastDirectionEl.innerText = fastSignal.interval
+          ? `${fastDirection} (${fastSignal.interval})`
+          : fastDirection;
+        fastDirectionEl.className = `metric-value ${fastDirection === "Bullish" ? "value-bullish" : fastDirection === "Bearish" ? "value-bearish" : ""}`;
+
+        const fastFlipEl = document.getElementById("ta-fast-flip");
+        const fastFlip = fastSignal.direction_change || "None";
+        fastFlipEl.innerText = fastFlip;
+        fastFlipEl.className = `metric-value ${fastFlip.includes("Bullish") ? "value-bullish" : fastFlip.includes("Bearish") ? "value-bearish" : ""}`;
+
         // Update Price Action
         const paStructureEl = document.getElementById("pa-structure");
         paStructureEl.innerText = ta.price_action.structure;
@@ -1627,13 +1655,18 @@
         if (shouldNotifyFromUi) {
           const changeText = summarizeChanges(uiChanges);
           showPushToast(
-            "Prediction Updated",
+            fastFlip && fastFlip !== "None" ? `Fast Direction Flip: ${fastFlip}` : "Prediction Updated",
             `${changeText} | Verdict: ${data.verdict} (${data.confidence}%)`,
           );
           if ("Notification" in window && Notification.permission === "granted") {
-            new Notification("XAUUSD Indicator Update", {
+            new Notification(
+              fastFlip && fastFlip !== "None"
+                ? `XAUUSD Fast Direction Flip: ${fastFlip}`
+                : "XAUUSD Indicator Update",
+              {
               body: `${changeText} | Verdict: ${data.verdict} (${data.confidence}%)`,
-            });
+              },
+            );
           }
         }
 
