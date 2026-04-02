@@ -1041,6 +1041,7 @@
         if (entries.length === 0) return "No indicator fields changed.";
 
         const labels = {
+          decision_read: "Current Read",
           verdict: "Verdict",
           confidence: "Confidence",
           trend: "Trend",
@@ -1117,16 +1118,23 @@
           const changeText = summarizeChanges(payload?.changes || {});
           const verdict = payload?.verdict || "Neutral";
           const confidence = payload?.confidence ?? "N/A";
-          const title = payload?.title || "Indicator Update";
+          const title = payload?.title || "Current Read Changed";
+          const decisionText =
+            payload?.decision_status && typeof payload.decision_status === "object"
+              ? payload.decision_status.text || ""
+              : "";
+          const body = decisionText
+            ? `${changeText} | ${decisionText}`
+            : `${changeText} | Verdict: ${verdict} (${confidence}%)`;
 
           showPushToast(
             title,
-            `${changeText} | Verdict: ${verdict} (${confidence}%)`,
+            body,
           );
 
           if ("Notification" in window && Notification.permission === "granted") {
             new Notification(`XAUUSD ${title}`, {
-              body: `${changeText} | Verdict: ${verdict} (${confidence}%)`,
+              body,
             });
           }
 

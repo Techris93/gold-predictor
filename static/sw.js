@@ -11,12 +11,12 @@ self.addEventListener("push", (event) => {
   try {
     data = event.data ? event.data.json() : {};
   } catch (_) {
-    data = { title: "XAUUSD Indicator Update", body: "Indicators changed" };
+    data = { title: "XAUUSD Current Read Changed", body: "Current read changed" };
   }
 
-  const title = data.title || "XAUUSD Indicator Update";
+  const title = data.title || "XAUUSD Current Read Changed";
   const options = {
-    body: data.body || "Indicators changed",
+    body: data.body || "Current read changed",
     icon: "/static/favicon.png",
     badge: "/static/favicon.png",
     data: {
