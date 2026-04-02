@@ -26,9 +26,9 @@ from zoneinfo import ZoneInfo
 import requests
 
 
-BLS_ICS_URL = "https://www.bls.gov/schedule/news_release/bls.ics"
 FOMC_CALENDAR_URL = "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
 ET = ZoneInfo("America/New_York")
+CT = ZoneInfo("America/Chicago")
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
@@ -38,8 +38,8 @@ DEFAULT_OUTPUT = PROJECT_ROOT / "config" / "event_risk_windows.json"
 @dataclass(frozen=True)
 class WindowConfig:
     name: str
-    summary_match: str
-    release_time_et: tuple[int, int]
+    source_name: str
+    fred_release_id: int
     start_pad_minutes: int
     end_pad_minutes: int
     reason_template: str
@@ -48,27 +48,36 @@ class WindowConfig:
 BLS_WINDOWS = [
     WindowConfig(
         name="NFP / Employment Situation",
-        summary_match="Employment Situation",
-        release_time_et=(8, 30),
+        source_name="Employment Situation",
+        fred_release_id=50,
         start_pad_minutes=30,
         end_pad_minutes=75,
-        reason_template="BLS Employment Situation release scheduled 08:30 ET on {date_label}.",
+        reason_template=(
+            "Employment Situation release date from the St. Louis Fed FRED release calendar "
+            "for {date_label}; FRED notes dates are published by the source."
+        ),
     ),
     WindowConfig(
         name="CPI",
-        summary_match="Consumer Price Index",
-        release_time_et=(8, 30),
+        source_name="Consumer Price Index",
+        fred_release_id=10,
         start_pad_minutes=30,
         end_pad_minutes=75,
-        reason_template="BLS Consumer Price Index release scheduled 08:30 ET on {date_label}.",
+        reason_template=(
+            "Consumer Price Index release date from the St. Louis Fed FRED release calendar "
+            "for {date_label}; FRED notes dates are published by the source."
+        ),
     ),
     WindowConfig(
         name="PPI",
-        summary_match="Producer Price Index",
-        release_time_et=(8, 30),
+        source_name="Producer Price Index",
+        fred_release_id=46,
         start_pad_minutes=30,
         end_pad_minutes=75,
-        reason_template="BLS Producer Price Index release scheduled 08:30 ET on {date_label}.",
+        reason_template=(
+            "Producer Price Index release date from the St. Louis Fed FRED release calendar "
+            "for {date_label}; FRED notes dates are published by the source."
+        ),
     ),
 ]
 
@@ -86,48 +95,6 @@ def _strip_html(raw_html: str) -> list[str]:
     return lines
 
 
-def _parse_ics_datetime(value: str) -> datetime:
-    value = value.strip()
-    if "T" in value:
-        value = value.rstrip("Z")
-        dt = datetime.strptime(value, "%Y%m%dT%H%M%S")
-        return dt.replace(tzinfo=timezone.utc)
-    dt = datetime.strptime(value, "%Y%m%d")
-    return dt.replace(tzinfo=ET)
-
-
-def _parse_ics_events(raw_ics: str) -> list[dict[str, str]]:
-    events: list[dict[str, str]] = []
-    current: dict[str, str] | None = None
-    current_key: str | None = None
-
-    for raw_line in raw_ics.splitlines():
-        line = raw_line.rstrip("\r")
-        if line == "BEGIN:VEVENT":
-            current = {}
-            current_key = None
-            continue
-        if line == "END:VEVENT":
-            if current:
-                events.append(current)
-            current = None
-            current_key = None
-            continue
-        if current is None:
-            continue
-        if line.startswith((" ", "\t")) and current_key:
-            current[current_key] += line[1:]
-            continue
-
-        if ":" not in line:
-            continue
-        key, value = line.split(":", 1)
-        current_key = key.split(";", 1)[0]
-        current[current_key] = value
-
-    return events
-
-
 def _format_window(start_et: datetime, config: WindowConfig, reason: str) -> dict[str, str]:
     start_utc = (start_et - timedelta(minutes=config.start_pad_minutes)).astimezone(timezone.utc)
     end_utc = (start_et + timedelta(minutes=config.end_pad_minutes)).astimezone(timezone.utc)
@@ -139,44 +106,72 @@ def _format_window(start_et: datetime, config: WindowConfig, reason: str) -> dic
     }
 
 
-def fetch_bls_windows(now_et: datetime, horizon_days: int) -> list[dict[str, str]]:
-    response = requests.get(BLS_ICS_URL, timeout=30)
-    response.raise_for_status()
-    events = _parse_ics_events(response.text)
-    end_cutoff = now_et + timedelta(days=horizon_days)
+def _fred_release_url(release_id: int, year: int) -> str:
+    return f"https://fred.stlouisfed.org/releases/calendar?rid={release_id}&y={year}"
 
-    windows: list[dict[str, str]] = []
-    for event in events:
-        summary = event.get("SUMMARY", "")
-        dt_start_raw = event.get("DTSTART")
-        if not summary or not dt_start_raw:
+
+def _extract_fred_release_datetimes(raw_html: str, release_name: str, target_year: int) -> list[datetime]:
+    lines = _strip_html(raw_html)
+    year_marker = str(target_year)
+    date_pattern = re.compile(
+        rf"^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday) "
+        rf"([A-Za-z]+) (\d{{1,2}}), {target_year}(?: Updated)?$"
+    )
+    time_pattern = re.compile(r"^(\d{1,2}:\d{2})\s*(am|pm)$", re.IGNORECASE)
+
+    if year_marker not in lines:
+        return []
+
+    release_datetimes: list[datetime] = []
+    for idx, line in enumerate(lines):
+        date_match = date_pattern.match(line)
+        if not date_match or idx + 1 >= len(lines):
             continue
 
-        parsed_start = _parse_ics_datetime(dt_start_raw)
-        if parsed_start.tzinfo != ET:
-            parsed_start = parsed_start.astimezone(ET)
+        time_match = time_pattern.match(lines[idx + 1])
+        if not time_match:
+            continue
 
-        for config in BLS_WINDOWS:
-            if config.summary_match not in summary:
-                continue
+        release_line = lines[idx + 2] if idx + 2 < len(lines) else ""
+        if release_name not in release_line:
+            continue
 
-            release_dt = parsed_start.replace(
-                hour=config.release_time_et[0],
-                minute=config.release_time_et[1],
-                second=0,
-                microsecond=0,
+        month_name = date_match.group(2)
+        day = int(date_match.group(3))
+        time_label = f"{time_match.group(1)} {time_match.group(2).lower()}"
+        release_dt_ct = datetime.strptime(
+            f"{target_year} {month_name} {day} {time_label}",
+            "%Y %B %d %I:%M %p",
+        ).replace(tzinfo=CT)
+        release_datetimes.append(release_dt_ct.astimezone(ET))
+
+    return release_datetimes
+
+
+def fetch_bls_windows(now_et: datetime, horizon_days: int) -> list[dict[str, str]]:
+    end_cutoff = now_et + timedelta(days=horizon_days)
+    years = range(now_et.year, end_cutoff.year + 1)
+    windows: list[dict[str, str]] = []
+
+    for config in BLS_WINDOWS:
+        for year in years:
+            response = requests.get(_fred_release_url(config.fred_release_id, year), timeout=30)
+            response.raise_for_status()
+            release_datetimes = _extract_fred_release_datetimes(
+                raw_html=response.text,
+                release_name=config.source_name,
+                target_year=year,
             )
-            if release_dt < now_et or release_dt > end_cutoff:
-                continue
-
-            windows.append(
-                _format_window(
-                    start_et=release_dt,
-                    config=config,
-                    reason=config.reason_template.format(date_label=release_dt.strftime("%B %-d, %Y")),
+            for release_dt in release_datetimes:
+                if release_dt < now_et or release_dt > end_cutoff:
+                    continue
+                windows.append(
+                    _format_window(
+                        start_et=release_dt,
+                        config=config,
+                        reason=config.reason_template.format(date_label=release_dt.strftime("%B %-d, %Y")),
+                    )
                 )
-            )
-            break
 
     return windows
 
@@ -300,7 +295,7 @@ def build_windows(horizon_days: int, output_path: Path) -> dict[str, list[dict[s
     except Exception as exc:
         windows = load_existing_bls_windows(output_path=output_path, now_utc=now_utc, horizon_days=horizon_days)
         warning = (
-            "Warning: failed to refresh BLS windows automatically; "
+            "Warning: failed to refresh BLS windows from the FRED release calendar; "
             f"preserving existing future BLS windows instead. Error: {exc}"
         )
         print(warning, file=sys.stderr)
