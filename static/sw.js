@@ -11,10 +11,10 @@ self.addEventListener("push", (event) => {
   try {
     data = event.data ? event.data.json() : {};
   } catch (_) {
-    data = { title: "XAUUSD Current Read Changed", body: "Current read changed" };
+    data = { title: "XAUUSD Execution Permission Changed", body: "Execution permission changed" };
   }
 
-  const title = data.title || "XAUUSD Current Read Changed";
+  const title = data.title || "XAUUSD Execution Permission Changed";
   const options = {
     body: data.body || "Current read changed",
     icon: "/static/favicon.png",

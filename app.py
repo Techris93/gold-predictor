@@ -84,7 +84,7 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 TELEGRAM_THREAD_ID = os.getenv("TELEGRAM_THREAD_ID", "").strip()
 CHANGE_SUMMARY_ORDER = [
-    "decision_read",
+    "execution_permission",
 ]
 SENTIMENT_WEIGHTED_SIGNALS = [
     {
@@ -236,7 +236,7 @@ def _filter_notification_changes(changes):
 
 def _summarize_changes_for_push(changes):
     labels = {
-        "decision_read": "Current Read",
+        "execution_permission": "Execution Permission",
     }
     ordered_keys = [key for key in CHANGE_SUMMARY_ORDER if key in changes]
     ordered_keys.extend(key for key in changes if key not in ordered_keys)
@@ -246,7 +246,7 @@ def _summarize_changes_for_push(changes):
         prev = val.get("previous") if isinstance(val, dict) else None
         cur = val.get("current") if isinstance(val, dict) else None
         parts.append(f"{labels.get(key, key)}: {prev} -> {cur}")
-    return " | ".join(parts) if parts else "Current read changed"
+    return " | ".join(parts) if parts else "Execution permission changed"
 
 
 def _classify_market_sentiment(news_list):
@@ -261,26 +261,26 @@ def _has_background_alert_channels():
     return _has_push_subscribers() or _telegram_enabled()
 
 
-def _send_telegram_notification(changes, verdict, confidence, trade_guidance, decision_status):
+def _send_telegram_notification(changes, verdict, confidence, trade_guidance, decision_status, execution_permission):
     if not _telegram_enabled():
         return
 
-    title = "XAUUSD Current Read Changed"
+    title = "XAUUSD Execution Permission Changed"
 
     change_summary = _summarize_changes_for_push(changes)
     trade_summary = ""
     if isinstance(trade_guidance, dict):
         trade_summary = trade_guidance.get("summary") or ""
-    decision_text = ""
-    if isinstance(decision_status, dict):
-        decision_text = str(decision_status.get("text") or "").strip()
+    permission_text = ""
+    if isinstance(execution_permission, dict):
+        permission_text = str(execution_permission.get("text") or "").strip()
 
     lines = [
         title,
         change_summary,
     ]
-    if decision_text:
-        lines.append(decision_text)
+    if permission_text:
+        lines.append(permission_text)
     else:
         lines.append(f"Verdict: {verdict} ({confidence}%)")
     if trade_summary:
@@ -306,7 +306,7 @@ def _send_telegram_notification(changes, verdict, confidence, trade_guidance, de
         return
 
 
-def _send_web_push_notifications(changes, verdict, confidence, trade_guidance, decision_status):
+def _send_web_push_notifications(changes, verdict, confidence, trade_guidance, decision_status, execution_permission):
     if webpush is None or not VAPID_PUBLIC_KEY or not VAPID_PRIVATE_KEY:
         return
 
@@ -314,18 +314,18 @@ def _send_web_push_notifications(changes, verdict, confidence, trade_guidance, d
     if not subscriptions:
         return
 
-    title = "XAUUSD Current Read Changed"
+    title = "XAUUSD Execution Permission Changed"
 
     change_summary = _summarize_changes_for_push(changes)
     trade_summary = ""
     if isinstance(trade_guidance, dict):
         trade_summary = trade_guidance.get("summary") or ""
-    decision_text = ""
-    if isinstance(decision_status, dict):
-        decision_text = str(decision_status.get("text") or "").strip()
+    permission_text = ""
+    if isinstance(execution_permission, dict):
+        permission_text = str(execution_permission.get("text") or "").strip()
     body_parts = [change_summary]
-    if decision_text:
-        body_parts.append(decision_text)
+    if permission_text:
+        body_parts.append(permission_text)
     else:
         body_parts.append(f"Verdict: {verdict} ({confidence}%)")
     if trade_summary:
@@ -338,6 +338,7 @@ def _send_web_push_notifications(changes, verdict, confidence, trade_guidance, d
         "confidence": confidence,
         "trade_guidance": trade_guidance,
         "decision_status": decision_status,
+        "execution_permission": execution_permission,
         "url": "/",
         "ts": int(time.time()),
     }
@@ -533,6 +534,35 @@ def _evaluate_decision_status(verdict, confidence, ta_data, trade_guidance):
     }
 
 
+def _evaluate_execution_permission(decision_status, market_state):
+    action_state = str((market_state or {}).get("action_state") or "WAIT")
+    decision_kind = str((decision_status or {}).get("status") or "wait")
+
+    text = "No trade. Conditions are not clean enough yet."
+    status = "no_trade"
+
+    if action_state in {"LONG_ACTIVE", "SHORT_ACTIVE"} and decision_kind in {"buy", "sell"}:
+        text = (
+            "Entry Allowed: buy conditions are confirmed."
+            if action_state == "LONG_ACTIVE"
+            else "Entry Allowed: sell conditions are confirmed."
+        )
+        status = "entry_allowed"
+    elif action_state in {"SETUP_LONG", "SETUP_SHORT"}:
+        text = "Watchlist Only: setup is forming, but execution is not confirmed yet."
+        status = "watchlist_only"
+    elif action_state == "EXIT_RISK" or decision_kind == "exit":
+        text = "Exit Recommended: active position quality is deteriorating."
+        status = "exit_recommended"
+
+    return {
+        "text": text,
+        "status": status,
+        "actionState": action_state,
+        "decisionStatus": decision_kind,
+    }
+
+
 def _stabilize_decision_status(decision_status):
     raw_status = str((decision_status or {}).get("status") or "wait")
     raw_text = str((decision_status or {}).get("text") or "Stand aside.")
@@ -682,9 +712,7 @@ def _extract_indicator_snapshot(payload):
     sentiment_summary = payload.get("SentimentSummary", {}) if isinstance(payload, dict) else {}
 
     return {
-        "verdict": payload.get("verdict"),
-        "confidence": payload.get("confidence"),
-        "decision_read": ((payload.get("DecisionStatus") or {}).get("text")),
+        "execution_permission": ((payload.get("ExecutionPermission") or {}).get("text")),
     }
 
 
@@ -736,6 +764,10 @@ def _build_prediction_response():
         trade_guidance=prediction["TradeGuidance"],
     )
     decision_status = _stabilize_decision_status(decision_status)
+    execution_permission = _evaluate_execution_permission(
+        decision_status=decision_status,
+        market_state=prediction.get("MarketState", {}),
+    )
 
     return {
         "status": "success",
@@ -747,6 +779,7 @@ def _build_prediction_response():
         "TradeGuidance": prediction["TradeGuidance"],
         "MarketState": prediction.get("MarketState", {}),
         "DecisionStatus": decision_status,
+        "ExecutionPermission": execution_permission,
     }, 200
 
 
@@ -769,8 +802,8 @@ def _indicator_monitor_loop():
                     changes = _diff_snapshot(last_snapshot, current_snapshot)
                     notification_changes = _filter_notification_changes(changes)
                     now_ts = int(time.time())
-                    alert_title = "Current Read Changed"
-                    alert_message = "Current read changed"
+                    alert_title = "Execution Permission Changed"
+                    alert_message = "Execution permission changed"
                     if (
                         notification_changes
                         and _is_material_change(notification_changes)
@@ -778,23 +811,24 @@ def _indicator_monitor_loop():
                     ):
                         alert_state = _load_json_file(
                             ALERT_STATE_FILE,
-                            {"last_decision_read": "", "last_alert_ts": 0},
+                            {"last_execution_permission": "", "last_alert_ts": 0},
                         )
                         decision_payload = payload.get("DecisionStatus") or {}
-                        decision_read = str(((payload.get("DecisionStatus") or {}).get("text")) or "")
-                        decision_kind = str(decision_payload.get("status") or "wait")
+                        execution_permission_payload = payload.get("ExecutionPermission") or {}
+                        execution_permission = str(execution_permission_payload.get("text") or "")
+                        permission_status = str(execution_permission_payload.get("status") or "no_trade")
                         decision_confirmed = bool(decision_payload.get("confirmed"))
                         should_alert = bool(
-                            decision_read
-                            and "decision_read" in notification_changes
+                            execution_permission
+                            and "execution_permission" in notification_changes
                             and decision_confirmed
                         )
-                        if should_alert and decision_kind not in {"buy", "sell"}:
-                            should_alert = NOTIFY_EXIT_READS and decision_kind == "exit"
+                        if should_alert and permission_status == "exit_recommended":
+                            should_alert = NOTIFY_EXIT_READS
                         if should_alert:
-                            last_decision_read = str(alert_state.get("last_decision_read", ""))
+                            last_execution_permission = str(alert_state.get("last_execution_permission", ""))
                             last_alert_ts = int(alert_state.get("last_alert_ts", 0) or 0)
-                            if decision_read == last_decision_read and (now_ts - last_alert_ts) < ALERT_COOLDOWN_SECONDS:
+                            if execution_permission == last_execution_permission and (now_ts - last_alert_ts) < ALERT_COOLDOWN_SECONDS:
                                 should_alert = False
                         if not should_alert:
                             last_snapshot = current_snapshot
@@ -811,6 +845,7 @@ def _indicator_monitor_loop():
                                     "verdict": payload.get("verdict"),
                                     "confidence": payload.get("confidence"),
                                     "decision_status": payload.get("DecisionStatus"),
+                                    "execution_permission": payload.get("ExecutionPermission"),
                                     "timestamp": now_ts,
                                 },
                             )
@@ -821,6 +856,7 @@ def _indicator_monitor_loop():
                             confidence=payload.get("confidence"),
                             trade_guidance=payload.get("TradeGuidance"),
                             decision_status=payload.get("DecisionStatus"),
+                            execution_permission=payload.get("ExecutionPermission"),
                         )
                         _send_telegram_notification(
                             changes=notification_changes,
@@ -828,10 +864,11 @@ def _indicator_monitor_loop():
                             confidence=payload.get("confidence"),
                             trade_guidance=payload.get("TradeGuidance"),
                             decision_status=payload.get("DecisionStatus"),
+                            execution_permission=payload.get("ExecutionPermission"),
                         )
                         _save_json_file(
                             ALERT_STATE_FILE,
-                            {"last_decision_read": decision_read, "last_alert_ts": now_ts},
+                            {"last_execution_permission": execution_permission, "last_alert_ts": now_ts},
                         )
                         last_emit_ts = now_ts
                 last_snapshot = current_snapshot

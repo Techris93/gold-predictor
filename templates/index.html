@@ -1087,7 +1087,7 @@
         if (entries.length === 0) return "No indicator fields changed.";
 
         const labels = {
-          decision_read: "Current Read",
+          execution_permission: "Execution Permission",
           verdict: "Verdict",
           confidence: "Confidence",
           trend: "Trend",
@@ -1102,19 +1102,7 @@
           atr_percent: "ATR%",
         };
         const preferredOrder = [
-          "verdict",
-          "confidence",
-          "trend",
-          "market_structure",
-          "candle_pattern",
-          "market_regime",
-          "alignment",
-          "trade_sell_setup",
-          "trade_buy_setup",
-          "trade_exit_warning",
-          "rsi_14",
-          "adx_14",
-          "atr_percent",
+          "execution_permission",
         ];
         const orderedEntries = preferredOrder
           .filter((key) => key in (changes || {}))
@@ -1164,13 +1152,13 @@
           const changeText = summarizeChanges(payload?.changes || {});
           const verdict = payload?.verdict || "Neutral";
           const confidence = payload?.confidence ?? "N/A";
-          const title = payload?.title || "Current Read Changed";
-          const decisionText =
-            payload?.decision_status && typeof payload.decision_status === "object"
-              ? payload.decision_status.text || ""
+          const title = payload?.title || "Execution Permission Changed";
+          const executionPermissionText =
+            payload?.execution_permission && typeof payload.execution_permission === "object"
+              ? payload.execution_permission.text || ""
               : "";
-          const body = decisionText
-            ? `${changeText} | ${decisionText}`
+          const body = executionPermissionText
+            ? `${changeText} | ${executionPermissionText}`
             : `${changeText} | Verdict: ${verdict} (${confidence}%)`;
 
           showPushToast(
@@ -1945,20 +1933,18 @@
 
         const executionPermissionEl = document.getElementById("execution-permission");
         if (executionPermissionEl) {
-          let permissionText = "No trade. Conditions are not clean enough yet.";
+          const executionPermission =
+            data.ExecutionPermission && typeof data.ExecutionPermission === "object"
+              ? data.ExecutionPermission
+              : {};
+          let permissionText = executionPermission.text || "No Trade";
           let permissionClass = "wait";
+          const permissionStatus = executionPermission.status || "no_trade";
 
-          if (marketActionStateText === "LONG_ACTIVE" && checklist.status === "buy") {
-            permissionText = "Entry Allowed: buy conditions are confirmed.";
-            permissionClass = "buy";
-          } else if (marketActionStateText === "SHORT_ACTIVE" && checklist.status === "sell") {
-            permissionText = "Entry Allowed: sell conditions are confirmed.";
-            permissionClass = "sell";
-          } else if (marketActionStateText === "SETUP_LONG" || marketActionStateText === "SETUP_SHORT") {
-            permissionText = "Watchlist Only: setup is forming, but execution is not confirmed yet.";
-            permissionClass = "wait";
-          } else if (marketActionStateText === "EXIT_RISK" || checklist.status === "exit") {
-            permissionText = "Exit Recommended: active position quality is deteriorating.";
+          if (permissionStatus === "entry_allowed") {
+            permissionClass =
+              marketActionStateText === "SHORT_ACTIVE" ? "sell" : "buy";
+          } else if (permissionStatus === "exit_recommended") {
             permissionClass = "exit";
           }
 
