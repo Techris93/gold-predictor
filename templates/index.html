@@ -847,6 +847,10 @@
             <span class="metric-value" id="ar-promote">---</span>
           </div>
           <div class="metric-row">
+            <span class="metric-label">Active Strategy</span>
+            <span class="metric-value" id="ar-active-strategy">---</span>
+          </div>
+          <div class="metric-row">
             <span class="metric-label">Last Swarm Run</span>
             <span class="metric-value" id="ar-updated" style="font-size: 0.8rem"
               >---</span
@@ -1249,14 +1253,17 @@
         const scoreEl = document.getElementById("ar-score");
         const passRateEl = document.getElementById("ar-pass-rate");
         const promoteEl = document.getElementById("ar-promote");
+        const activeStrategyEl = document.getElementById("ar-active-strategy");
         const updatedEl = document.getElementById("ar-updated");
+        const latestRunPromoted = Boolean(data.latest_run_promote);
+        const hasActivePromotedStrategy = Boolean(data.has_active_promoted_strategy);
 
         if (statusEl) {
           statusEl.innerText = "Loaded";
           statusEl.className = "metric-value value-bullish";
         }
         if (toggleStatusEl) {
-          toggleStatusEl.innerText = data.promote ? "Promoted" : "Loaded";
+          toggleStatusEl.innerText = hasActivePromotedStrategy ? "Promoted" : "Loaded";
         }
         if (scoreEl) {
           scoreEl.innerText =
@@ -1280,13 +1287,20 @@
           passRateEl.innerText = `${emaText} · ${rsiText} · ${cmfText}`;
         }
         if (promoteEl) {
-          promoteEl.innerText = data.promote ? "Promoted" : "Hold";
-          promoteEl.className = `metric-value ${data.promote ? "value-bullish" : "value-bearish"}`;
+          promoteEl.innerText = latestRunPromoted ? "Promoted" : "Not Promoted";
+          promoteEl.className = `metric-value ${latestRunPromoted ? "value-bullish" : "value-bearish"}`;
           promoteEl.title = data.promotion_reason || "";
         }
+        if (activeStrategyEl) {
+          activeStrategyEl.innerText = hasActivePromotedStrategy
+            ? "Promoted strategy available"
+            : "No promoted strategy saved";
+          activeStrategyEl.className = `metric-value ${hasActivePromotedStrategy ? "value-bullish" : "value-bearish"}`;
+          activeStrategyEl.title = data.active_strategy_reason || "";
+        }
         if (updatedEl) {
-          updatedEl.innerText = data.generated_at
-            ? new Date(data.generated_at).toLocaleString()
+          updatedEl.innerText = data.latest_generated_at
+            ? new Date(data.latest_generated_at).toLocaleString()
             : "N/A";
         }
       }

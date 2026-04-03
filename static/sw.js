@@ -16,7 +16,7 @@ self.addEventListener("push", (event) => {
 
   const title = data.title || "XAUUSD Execution Permission Changed";
   const options = {
-    body: data.body || "Current read changed",
+    body: data.body || "Execution permission changed",
     icon: "/static/favicon.png",
     badge: "/static/favicon.png",
     data: {
