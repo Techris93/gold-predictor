@@ -413,10 +413,26 @@ def _compute_trade_guidance(ta_data, sentiment_label, confidence):
 def _evaluate_decision_status(verdict, confidence, ta_data, trade_guidance):
     market_state = (ta_data or {}).get("_prediction_market_state") or {}
     action_state = str(market_state.get("action_state") or "")
-    action = str(market_state.get("action") or "")
-    regime = str(market_state.get("regime") or "")
-    tradeability = str(market_state.get("tradeability") or "")
-    scores = market_state.get("scores") or {}
+    trend = str((ta_data or {}).get("ema_trend") or "Neutral")
+    price_action = (ta_data or {}).get("price_action") or {}
+    mtf = (ta_data or {}).get("multi_timeframe") or {}
+    structure = str(price_action.get("structure") or "")
+    pattern = str(price_action.get("latest_candle_pattern") or "")
+    alignment = str(mtf.get("alignment_label") or "Mixed / Low Alignment")
+    summary = str((trade_guidance or {}).get("summary") or "")
+    buy_level = str((trade_guidance or {}).get("buyLevel") or "Weak")
+    sell_level = str((trade_guidance or {}).get("sellLevel") or "Weak")
+    exit_level = str((trade_guidance or {}).get("exitLevel") or "Low")
+    has_bullish_structure = bool(re.search(r"bullish|breakout|continuation", structure, re.IGNORECASE))
+    has_bearish_structure = bool(re.search(r"bearish|breakdown|rejection", structure, re.IGNORECASE))
+    has_doji_like_pattern = bool(re.search(r"doji|indecision|spinning top", pattern, re.IGNORECASE))
+    no_clean_trigger = "no clean trigger" in summary.lower()
+    bullish_alignment = "bullish" in alignment.lower() and "mixed" not in alignment.lower()
+    bearish_alignment = "bearish" in alignment.lower() and "mixed" not in alignment.lower()
+    structure_conflict = (
+        (trend == "Bullish" and "bearish" in structure.lower())
+        or (trend == "Bearish" and "bullish" in structure.lower())
+    )
     if action_state:
         text = "Stand aside. Checklist does not support a clean trade yet."
         status = "wait"
@@ -437,25 +453,25 @@ def _evaluate_decision_status(verdict, confidence, ta_data, trade_guidance):
             status = "exit"
 
         buy_checks = [
-            action_state in {"SETUP_LONG", "LONG_ACTIVE"},
-            action_state == "LONG_ACTIVE",
-            market_state.get("directional_bias") == "Bullish",
-            tradeability in {"Medium", "High"},
-            float(scores.get("stability", 0.0) or 0.0) >= 60.0,
+            verdict == "Bullish" and confidence >= 70,
+            trend == "Bullish" and has_bullish_structure,
+            bullish_alignment,
+            not has_doji_like_pattern and not no_clean_trigger,
+            buy_level in {"Watch", "Strong"} and exit_level in {"Low", "Medium"},
         ]
         sell_checks = [
-            action_state in {"SETUP_SHORT", "SHORT_ACTIVE"},
-            action_state == "SHORT_ACTIVE",
-            market_state.get("directional_bias") == "Bearish",
-            tradeability in {"Medium", "High"},
-            float(scores.get("stability", 0.0) or 0.0) >= 60.0,
+            verdict == "Bearish" and confidence >= 70,
+            trend == "Bearish" and has_bearish_structure,
+            bearish_alignment,
+            not has_doji_like_pattern and not no_clean_trigger,
+            sell_level in {"Watch", "Strong"} and exit_level in {"Low", "Medium"},
         ]
         exit_checks = [
-            action_state == "EXIT_RISK",
-            regime in {"event-risk", "range", "transition", "unstable"},
-            action == "exit" or tradeability == "Low",
-            float(scores.get("exit_risk", 0.0) or 0.0) >= 6.0,
-            float(scores.get("stability", 0.0) or 0.0) < 65.0,
+            verdict == "Neutral" or "mixed" in alignment.lower() or no_clean_trigger,
+            exit_level == "High" or confidence < 60,
+            structure_conflict,
+            has_doji_like_pattern,
+            buy_level == "Weak" and sell_level == "Weak",
         ]
         return {
             "text": text,
@@ -464,28 +480,6 @@ def _evaluate_decision_status(verdict, confidence, ta_data, trade_guidance):
             "sellChecks": sell_checks,
             "exitChecks": exit_checks,
         }
-
-    trend = str((ta_data or {}).get("ema_trend") or "Neutral")
-    price_action = (ta_data or {}).get("price_action") or {}
-    mtf = (ta_data or {}).get("multi_timeframe") or {}
-    structure = str(price_action.get("structure") or "")
-    pattern = str(price_action.get("latest_candle_pattern") or "")
-    alignment = str(mtf.get("alignment_label") or "Mixed / Low Alignment")
-    summary = str((trade_guidance or {}).get("summary") or "")
-    buy_level = str((trade_guidance or {}).get("buyLevel") or "Weak")
-    sell_level = str((trade_guidance or {}).get("sellLevel") or "Weak")
-    exit_level = str((trade_guidance or {}).get("exitLevel") or "Low")
-
-    has_bullish_structure = bool(re.search(r"bullish|breakout|continuation", structure, re.IGNORECASE))
-    has_bearish_structure = bool(re.search(r"bearish|breakdown|rejection", structure, re.IGNORECASE))
-    has_doji_like_pattern = bool(re.search(r"doji|indecision|spinning top", pattern, re.IGNORECASE))
-    no_clean_trigger = "no clean trigger" in summary.lower()
-    bullish_alignment = "bullish" in alignment.lower() and "mixed" not in alignment.lower()
-    bearish_alignment = "bearish" in alignment.lower() and "mixed" not in alignment.lower()
-    structure_conflict = (
-        (trend == "Bullish" and "bearish" in structure.lower())
-        or (trend == "Bearish" and "bullish" in structure.lower())
-    )
 
     buy_checks = [
         verdict == "Bullish" and confidence >= 70,
