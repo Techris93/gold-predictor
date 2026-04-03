@@ -9,9 +9,7 @@ from pathlib import Path
 import requests
 from tools import predict_gold
 from tools.signal_engine import (
-    classify_market_sentiment as shared_classify_market_sentiment,
     compute_prediction_from_ta,
-    compute_trade_guidance as shared_compute_trade_guidance,
 )
 
 try:
@@ -86,78 +84,6 @@ TELEGRAM_THREAD_ID = os.getenv("TELEGRAM_THREAD_ID", "").strip()
 CHANGE_SUMMARY_ORDER = [
     "execution_permission",
 ]
-SENTIMENT_WEIGHTED_SIGNALS = [
-    {
-        "terms": [
-            "safe haven",
-            "geopolitical",
-            "war",
-            "conflict",
-            "middle east tension",
-            "risk-off",
-        ],
-        "weight": 2,
-        "side": "bull",
-    },
-    {
-        "terms": [
-            "gold rises",
-            "gold rise",
-            "higher",
-            "rebound",
-            "gains",
-            "surges",
-            "bullish",
-            "buy",
-            "demand",
-            "record high",
-            "inflows",
-            "strong demand",
-        ],
-        "weight": 1,
-        "side": "bull",
-    },
-    {
-        "terms": [
-            "dollar rises",
-            "dollar rise",
-            "stronger dollar",
-            "dollar strength",
-            "dollar index rises",
-            "dxy rises",
-            "yields rise",
-            "yield rises",
-            "treasury yields rise",
-            "real yields rise",
-            "hawkish fed",
-            "hawkish",
-            "rate hike",
-            "rates stay high",
-            "higher rates",
-        ],
-        "weight": 2,
-        "side": "bear",
-    },
-    {
-        "terms": [
-            "gold lower",
-            "gold falls",
-            "gold fall",
-            "drops",
-            "drop",
-            "slips",
-            "bearish",
-            "sell",
-            "outflows",
-            "profit-taking",
-            "weaker",
-        ],
-        "weight": 1,
-        "side": "bear",
-    },
-]
-
-
 def _load_subscriptions():
     if not SUBSCRIPTIONS_FILE.exists():
         return []
@@ -247,10 +173,6 @@ def _summarize_changes_for_push(changes):
         cur = val.get("current") if isinstance(val, dict) else None
         parts.append(f"{labels.get(key, key)}: {prev} -> {cur}")
     return " | ".join(parts) if parts else "Execution permission changed"
-
-
-def _classify_market_sentiment(news_list):
-    return shared_classify_market_sentiment(news_list)
 
 
 def _telegram_enabled():
@@ -404,10 +326,6 @@ def _is_material_change(changes):
             return True
 
     return False
-
-
-def _compute_trade_guidance(ta_data, sentiment_label, confidence):
-    return shared_compute_trade_guidance(ta_data, sentiment_label, confidence)
 
 
 def _evaluate_decision_status(verdict, confidence, ta_data, trade_guidance):
@@ -703,8 +621,6 @@ def _extract_indicator_snapshot(payload):
     regime = ta_data.get("volatility_regime", {}) if isinstance(ta_data, dict) else {}
     mtf = ta_data.get("multi_timeframe", {}) if isinstance(ta_data, dict) else {}
     trade_guidance = payload.get("TradeGuidance", {}) if isinstance(payload, dict) else {}
-    sentiment_summary = payload.get("SentimentSummary", {}) if isinstance(payload, dict) else {}
-
     return {
         "execution_permission": ((payload.get("ExecutionPermission") or {}).get("text")),
     }
@@ -726,15 +642,8 @@ def _diff_snapshot(prev_snapshot, cur_snapshot):
 def _build_prediction_response():
     """Central prediction builder used by both HTTP and websocket monitor."""
     ta_data = predict_gold.get_technical_analysis()
-    sa_data = predict_gold.get_sentiment_analysis()
-
     if not isinstance(ta_data, dict):
         ta_data = {"error": "Technical analysis payload is invalid."}
-
-    if not isinstance(sa_data, list):
-        sa_data = []
-
-    sentiment_summary = _classify_market_sentiment(sa_data)
 
     if ta_data.get("error"):
         return {
@@ -743,11 +652,10 @@ def _build_prediction_response():
             "verdict": "Neutral",
             "confidence": 50,
             "TechnicalAnalysis": ta_data,
-            "SentimentalAnalysis": sa_data,
         }, 502
 
     prediction = _stabilize_prediction(
-        compute_prediction_from_ta(ta_data, sentiment_summary),
+        compute_prediction_from_ta(ta_data),
         ta_data,
     )
     ta_data["_prediction_market_state"] = prediction.get("MarketState", {})
@@ -768,8 +676,6 @@ def _build_prediction_response():
         "verdict": prediction["verdict"],
         "confidence": prediction["confidence"],
         "TechnicalAnalysis": ta_data,
-        "SentimentalAnalysis": sa_data,
-        "SentimentSummary": sentiment_summary,
         "TradeGuidance": prediction["TradeGuidance"],
         "MarketState": prediction.get("MarketState", {}),
         "DecisionStatus": decision_status,

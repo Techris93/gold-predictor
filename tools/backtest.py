@@ -1,13 +1,15 @@
 import json
 import os
 import sys
-import yfinance as yf
 import pandas as pd
 import numpy as np
+from dotenv import load_dotenv
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
+
+load_dotenv(os.path.join(BASE_DIR, ".env"))
 
 from tools.signal_engine import (
     build_ta_payload_from_row,
@@ -15,6 +17,7 @@ from tools.signal_engine import (
     normalize_strategy_params,
     prepare_historical_features,
 )
+from tools.twelvedata_market_data import fetch_history
 
 DEFAULT_BACKTEST_PARAMS = {
     "ema_short": 20,
@@ -77,11 +80,10 @@ def generate_signals(df):
     enriched = prepare_historical_features(df, params)
     signals = pd.Series('Neutral', index=enriched.index)
     states = []
-    sentiment_summary = {"label": "Neutral"}
 
     for i in range(len(enriched)):
         ta_payload = build_ta_payload_from_row(enriched.iloc[i], params)
-        prediction = compute_prediction_from_ta(ta_payload, sentiment_summary)
+        prediction = compute_prediction_from_ta(ta_payload)
         verdict = prediction["verdict"]
         if verdict == 'Bullish':
             signals.iloc[i] = 'Buy'
@@ -174,13 +176,12 @@ def summarize_transition_metrics(df, states):
         "avg_time_to_reversal": round(float(np.mean(reversal_lengths)), 2) if reversal_lengths else 0.0,
     }
 
-def run_backtest(ticker="GC=F", period="2y", interval="1h"):
+def run_backtest(ticker="XAU/USD", period="2y", interval="1h"):
     print(f"Fetching {period} of {interval} data for {ticker}...")
-    gold = yf.Ticker(ticker)
-    df = gold.history(period=period, interval=interval)
-
-    if df.empty:
-        print("Failed to fetch historical data.")
+    try:
+        df = fetch_history(period=period, interval=interval, ticker=ticker)
+    except Exception as exc:
+        print(f"Failed to fetch historical data from Twelve Data: {exc}")
         return
 
     print(f"Loaded {len(df)} historical candles.")

@@ -50,7 +50,6 @@ DEFAULT_STRATEGY_PARAMS = {
     "structure_quality_weight": 0.20,
     "trigger_quality_weight": 0.15,
     "volume_quality_weight": 0.10,
-    "sentiment_quality_weight": 0.05,
     "stability_flip_penalty": 12.0,
     "stability_conflict_penalty": 10.0,
     "stability_mixed_alignment_penalty": 10.0,
@@ -64,77 +63,6 @@ DEFAULT_STRATEGY_PARAMS = {
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 CONFIDENCE_CALIBRATION_FILE = BASE_DIR / "tools" / "reports" / "confidence_calibration.json"
-
-SENTIMENT_WEIGHTED_SIGNALS = [
-    {
-        "terms": [
-            "safe haven",
-            "geopolitical",
-            "war",
-            "conflict",
-            "middle east tension",
-            "risk-off",
-        ],
-        "weight": 2,
-        "side": "bull",
-    },
-    {
-        "terms": [
-            "gold rises",
-            "gold rise",
-            "higher",
-            "rebound",
-            "gains",
-            "surges",
-            "bullish",
-            "buy",
-            "demand",
-            "record high",
-            "inflows",
-            "strong demand",
-        ],
-        "weight": 1,
-        "side": "bull",
-    },
-    {
-        "terms": [
-            "dollar rises",
-            "dollar rise",
-            "stronger dollar",
-            "dollar strength",
-            "dollar index rises",
-            "dxy rises",
-            "yields rise",
-            "yield rises",
-            "treasury yields rise",
-            "real yields rise",
-            "hawkish fed",
-            "hawkish",
-            "rate hike",
-            "rates stay high",
-            "higher rates",
-        ],
-        "weight": 2,
-        "side": "bear",
-    },
-    {
-        "terms": [
-            "gold lower",
-            "gold falls",
-            "gold fall",
-            "drops",
-            "drop",
-            "slips",
-            "bearish",
-            "sell",
-            "outflows",
-            "profit-taking",
-            "weaker",
-        ],
-        "weight": 1,
-        "side": "bear",
-    },
-]
 
 
 def normalize_strategy_params(params=None):
@@ -175,54 +103,7 @@ def _calibrate_confidence(raw_confidence, regime_label, directional_bias, tradea
     return int(raw_confidence), "heuristic", bucket
 
 
-def classify_market_sentiment(news_list):
-    if not isinstance(news_list, list):
-        news_list = []
-
-    bullish_score = 0
-    bearish_score = 0
-    driver_counts = {}
-
-    for news in news_list:
-        title = str((news or {}).get("title", "")).lower()
-        for signal_group in SENTIMENT_WEIGHTED_SIGNALS:
-            for term in signal_group["terms"]:
-                if term in title:
-                    if signal_group["side"] == "bull":
-                        bullish_score += signal_group["weight"]
-                    else:
-                        bearish_score += signal_group["weight"]
-                    driver_counts[term] = driver_counts.get(term, 0) + 1
-
-    net_score = bullish_score - bearish_score
-    label = "Neutral"
-    if net_score >= 2:
-        label = "Bullish"
-    elif net_score <= -1:
-        label = "Bearish"
-
-    intensity = abs(net_score)
-    confidence_band = "Low"
-    if intensity >= 6:
-        confidence_band = "High"
-    elif intensity >= 3:
-        confidence_band = "Medium"
-
-    top_drivers = [
-        term for term, _count in sorted(driver_counts.items(), key=lambda item: item[1], reverse=True)[:3]
-    ]
-
-    return {
-        "label": label,
-        "confidenceBand": confidence_band,
-        "bullishScore": bullish_score,
-        "bearishScore": bearish_score,
-        "netScore": net_score,
-        "topDrivers": top_drivers,
-    }
-
-
-def compute_trade_guidance(ta_data, sentiment_label, confidence):
+def compute_trade_guidance(ta_data, confidence):
     if not isinstance(ta_data, dict):
         return {
             "sellLevel": "Weak",
@@ -269,11 +150,6 @@ def compute_trade_guidance(ta_data, sentiment_label, confidence):
     if rsi < 45:
         sell_score += 1
     elif rsi > 55:
-        buy_score += 1
-
-    if sentiment_label == "Bearish":
-        sell_score += 1
-    elif sentiment_label == "Bullish":
         buy_score += 1
 
     if confidence >= 75:
@@ -323,15 +199,14 @@ def compute_trade_guidance(ta_data, sentiment_label, confidence):
     }
 
 
-def compute_prediction_from_ta(ta_data, sentiment_summary=None):
+def compute_prediction_from_ta(ta_data):
     if not isinstance(ta_data, dict):
         return {
             "verdict": "Neutral",
             "confidence": 50,
-            "TradeGuidance": compute_trade_guidance({}, "Neutral", 50),
+            "TradeGuidance": compute_trade_guidance({}, 50),
         }
 
-    sentiment_summary = sentiment_summary if isinstance(sentiment_summary, dict) else {}
     strategy_params = normalize_strategy_params(ta_data.get("active_strategy_params"))
 
     verdict = "Neutral"
@@ -470,7 +345,6 @@ def compute_prediction_from_ta(ta_data, sentiment_summary=None):
     structure_quality_weight = float(strategy_params.get("structure_quality_weight", 0.20))
     trigger_quality_weight = float(strategy_params.get("trigger_quality_weight", 0.15))
     volume_quality_weight = float(strategy_params.get("volume_quality_weight", 0.10))
-    sentiment_quality_weight = float(strategy_params.get("sentiment_quality_weight", 0.05))
     stability_flip_penalty = float(strategy_params.get("stability_flip_penalty", 12.0))
     stability_conflict_penalty = float(strategy_params.get("stability_conflict_penalty", 10.0))
     stability_mixed_alignment_penalty = float(strategy_params.get("stability_mixed_alignment_penalty", 10.0))
@@ -527,15 +401,12 @@ def compute_prediction_from_ta(ta_data, sentiment_summary=None):
     structure_quality = 80.0 if any(token in pa_struct for token in ["Breakout", "Breakdown", "Bullish Drift", "Bearish Drift", "Bullish Structure", "Bearish Structure"]) else 35.0
     trigger_quality = min(100.0, max(bull_trigger, bear_trigger) * 20.0)
     volume_quality = 75.0 if "Strong" in volume else 55.0 if "Bias" in volume else 40.0
-    sentiment_quality = 70.0 if sentiment_summary.get("label") in {"Bullish", "Bearish"} else 45.0
-
     tradeability_score = (
         regime_quality * regime_quality_weight
         + alignment_quality * alignment_quality_weight
         + structure_quality * structure_quality_weight
         + trigger_quality * trigger_quality_weight
         + volume_quality * volume_quality_weight
-        + sentiment_quality * sentiment_quality_weight
     )
     tradeability_score = max(0.0, min(100.0, tradeability_score * (stability_score / 100.0)))
 
@@ -621,7 +492,6 @@ def compute_prediction_from_ta(ta_data, sentiment_summary=None):
 
     trade_guidance = compute_trade_guidance(
         ta_data,
-        sentiment_summary.get("label", "Neutral"),
         confidence,
     )
     if no_trade_reasons:
@@ -676,7 +546,6 @@ def compute_prediction_from_ta(ta_data, sentiment_summary=None):
                 "structure_quality": round(structure_quality, 2),
                 "trigger_quality": round(trigger_quality, 2),
                 "volume_quality": round(volume_quality, 2),
-                "sentiment_quality": round(sentiment_quality, 2),
             },
             "confidence_mode": confidence_mode,
             "confidence_bucket": confidence_bucket,

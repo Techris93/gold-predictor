@@ -2,14 +2,14 @@
 """
 autoresearch_loop.py
 
-Autonomous strategy research loop for XAUUSD/GC=F.
+Autonomous strategy research loop for XAU/USD via Twelve Data.
 This script performs parameter search with walk-forward evaluation and
 risk-aware scoring, then emits a promotion recommendation.
 
 Usage examples:
   python tools/autoresearch_loop.py
   python tools/autoresearch_loop.py --period 730d --max-runs 40
-  python tools/autoresearch_loop.py --ticker GC=F --interval 1h --max-runs 10
+  python tools/autoresearch_loop.py --ticker XAU/USD --interval 1h --max-runs 10
 """
 
 from __future__ import annotations
@@ -28,7 +28,12 @@ from typing import Dict, List, Tuple
 import numpy as np
 import pandas as pd
 import ta
-import yfinance as yf
+from dotenv import load_dotenv
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(BASE_DIR / ".env")
+
+from tools.twelvedata_market_data import fetch_history as fetch_td_history
 
 
 @dataclass(frozen=True)
@@ -50,18 +55,7 @@ class StrategyParams:
 
 
 def fetch_history(ticker: str, period: str, interval: str) -> pd.DataFrame:
-    df = yf.Ticker(ticker).history(period=period, interval=interval)
-    if df.empty:
-        raise RuntimeError("No historical data fetched from yfinance.")
-
-    for col in ["Open", "High", "Low", "Close", "Volume"]:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-
-    df = df.dropna(subset=["Open", "High", "Low", "Close"])
-    if df.empty:
-        raise RuntimeError("Historical data is empty after numeric cleanup.")
-    return df
+    return fetch_td_history(period=period, interval=interval, ticker=ticker)
 
 
 def compute_indicators(df: pd.DataFrame, p: StrategyParams) -> pd.DataFrame:
@@ -462,7 +456,7 @@ def maybe_commit_promoted_result(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Autoresearch walk-forward optimizer for XAUUSD strategy.")
-    parser.add_argument("--ticker", default="GC=F")
+    parser.add_argument("--ticker", default="XAU/USD")
     parser.add_argument("--period", default="730d")
     parser.add_argument("--interval", default="1h")
     parser.add_argument("--train-bars", type=int, default=1000)

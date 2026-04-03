@@ -4,15 +4,18 @@ import os
 import sys
 import subprocess
 import argparse
+import time
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timezone
 
 import pandas as pd
-import yfinance as yf
+from dotenv import load_dotenv
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
+
+load_dotenv(os.path.join(BASE_DIR, ".env"))
 
 from tools.signal_engine import (
     build_ta_payload_from_row,
@@ -20,18 +23,19 @@ from tools.signal_engine import (
     normalize_strategy_params,
     prepare_historical_features,
 )
+from tools.twelvedata_market_data import fetch_history as fetch_td_history
 STRATEGY_PARAMS_FILE = os.path.join(BASE_DIR, "config", "strategy_params.json")
 BACKTEST_PARAMS_FILE = os.path.join(BASE_DIR, "config", "backtest_params.json")
 LATEST_RESULT_FILE = os.path.join(BASE_DIR, "data", "swarm", "latest_result.json")
 PROMOTED_RESULT_FILE = os.path.join(BASE_DIR, "data", "swarm", "promoted_result.json")
 PROMOTION_DECISION_FILE = os.path.join(BASE_DIR, "data", "swarm", "promotion_decision.json")
 CONFIDENCE_CALIBRATION_FILE = os.path.join(BASE_DIR, "tools", "reports", "confidence_calibration.json")
+HISTORICAL_CACHE_DIR = os.path.join(BASE_DIR, "data", "swarm", "cache")
 
 NOTIFY_TELEGRAM_TARGET = os.environ.get("GOLD_PREDICTOR_NOTIFY_TELEGRAM", "623118122")
 NOTIFY_CHANNELS = [
     ("telegram", NOTIFY_TELEGRAM_TARGET),
 ]
-
 MIN_ROI_IMPROVEMENT = 1.5
 MIN_PASS_RATE = 0.30
 MAX_PASS_RATE_DROP = 0.03
@@ -86,11 +90,10 @@ def generate_signals_custom(df_or_enriched, params):
     else:
         enriched = prepare_historical_features(df_or_enriched, params)
     signals = pd.Series("Neutral", index=enriched.index)
-    sentiment_summary = {"label": "Neutral"}
 
     for i in range(len(enriched)):
         ta_payload = build_ta_payload_from_row(enriched.iloc[i], params)
-        verdict = compute_prediction_from_ta(ta_payload, sentiment_summary)["verdict"]
+        verdict = compute_prediction_from_ta(ta_payload)["verdict"]
         if verdict == "Bullish":
             signals.iloc[i] = "Buy"
         elif verdict == "Bearish":
@@ -250,6 +253,76 @@ def _read_json(file_path):
             return json.load(f)
     except Exception:
         return None
+
+
+def _cache_file_path(ticker, period, interval):
+    safe_ticker = ticker.replace("/", "_").replace("=", "_").replace("^", "")
+    safe_period = period.replace("/", "_")
+    safe_interval = interval.replace("/", "_")
+    return os.path.join(HISTORICAL_CACHE_DIR, f"{safe_ticker}_{safe_period}_{safe_interval}.csv")
+
+
+def _normalize_history_frame(frame):
+    if frame is None or not isinstance(frame, pd.DataFrame) or frame.empty:
+        return pd.DataFrame()
+
+    df = frame.copy()
+
+    if isinstance(df.columns, pd.MultiIndex):
+        try:
+            df.columns = df.columns.get_level_values(0)
+        except Exception:
+            df.columns = [col[0] if isinstance(col, tuple) else col for col in df.columns]
+
+    for col in ["Open", "High", "Low", "Close", "Volume"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    required = [col for col in ["Open", "High", "Low", "Close"] if col in df.columns]
+    if required:
+        df = df.dropna(subset=required)
+
+    return df
+
+
+def _load_cached_history(ticker, period, interval):
+    cache_path = _cache_file_path(ticker, period, interval)
+    if not os.path.exists(cache_path):
+        return None
+    try:
+        df = pd.read_csv(cache_path, index_col=0, parse_dates=True)
+        df = _normalize_history_frame(df)
+        return df if not df.empty else None
+    except Exception:
+        return None
+
+
+def _save_cached_history(ticker, period, interval, df):
+    cache_path = _cache_file_path(ticker, period, interval)
+    os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+    _normalize_history_frame(df).to_csv(cache_path)
+
+
+def _fetch_historical_data(ticker, period, interval, retries=2):
+    errors = []
+    for attempt in range(1, retries + 1):
+        try:
+            frame = _normalize_history_frame(fetch_td_history(period=period, interval=interval, ticker=ticker))
+            if isinstance(frame, pd.DataFrame) and not frame.empty:
+                _save_cached_history(ticker, period, interval, frame)
+                return frame, None
+            errors.append(f"Twelve Data attempt {attempt} returned no data")
+        except Exception as exc:
+            errors.append(f"Twelve Data attempt {attempt} failed: {exc}")
+
+        if attempt < retries:
+            time.sleep(2)
+
+    cached = _load_cached_history(ticker, period, interval)
+    if cached is not None and not cached.empty:
+        return cached, "Using cached historical data after Twelve Data fetch failure. " + "; ".join(errors)
+
+    return None, "; ".join(errors)
 
 
 def _build_predict_params(params):
@@ -577,16 +650,25 @@ def _evaluate_param_grid(df, valid_params, parallel=True):
     return results
 
 
-def run_swarm(reduced=False, serial=False, threshold_only=False, period="730d", interval="1h", ticker="GC=F"):
+def run_swarm(reduced=False, serial=False, threshold_only=False, period="730d", interval="1h", ticker="XAU/USD"):
     print("🐝 Igniting Autoresearch Swarm for Gold Strategy Optimization...", flush=True)
     print(f"Fetching historical data ({period}, {interval} timeframe) for {ticker}...", flush=True)
 
-    df = yf.Ticker(ticker).history(period=period, interval=interval)
-    if df.empty:
-        message = "Gold predictor swarm run failed: historical data fetch returned no data, so no optimization or promotion decision was made."
+    df, fetch_error = _fetch_historical_data(ticker, period, interval)
+    if df is None or df.empty:
+        message = (
+            "Gold predictor swarm run failed: historical data fetch returned no data, "
+            "so no optimization or promotion decision was made. "
+            f"Ticker={ticker}, period={period}, interval={interval}. "
+            f"Details: {fetch_error or 'unknown fetch error'}"
+        )
         print("Failed to fetch historical data.", flush=True)
+        if fetch_error:
+            print(f"Fetch details: {fetch_error}", flush=True)
         _notify_user(message)
         return
+    if fetch_error:
+        print(f"Data warning: {fetch_error}", flush=True)
 
     valid_params = (
         _build_threshold_only_grid(reduced=reduced)
@@ -734,7 +816,7 @@ if __name__ == "__main__":
     parser.add_argument("--threshold-only", action="store_true", help="Keep indicator settings fixed and tune only live decision thresholds.")
     parser.add_argument("--period", default="730d", help="Historical window to fetch, for example 365d or 730d.")
     parser.add_argument("--interval", default="1h", help="Candle interval to fetch, for example 1h.")
-    parser.add_argument("--ticker", default="GC=F", help="Market symbol to backtest against.")
+    parser.add_argument("--ticker", default="XAU/USD", help="Market symbol to backtest against.")
     args = parser.parse_args()
     try:
         run_swarm(

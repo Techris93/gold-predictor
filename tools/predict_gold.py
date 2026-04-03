@@ -2,11 +2,10 @@
 """
 predict_gold.py
 Helper tool for the XAUUSD Prediction Agent.
-Uses Twelve Data for price/technical analysis and Yahoo Finance only for
-news headlines used in sentiment analysis.
+Uses Twelve Data for price and technical analysis.
 
 Prerequisites:
-    pip install yfinance pandas ta requests twelvedata python-dotenv
+    pip install pandas ta requests twelvedata python-dotenv
 """
 
 import sys
@@ -15,8 +14,6 @@ import os
 import re
 import time
 from datetime import datetime, timezone
-import xml.etree.ElementTree as ET
-from html import unescape
 from dotenv import load_dotenv
 
 # Load environment variables from .env
@@ -24,21 +21,15 @@ load_dotenv()
 
 try:
     import requests
-    import yfinance as yf
     import pandas as pd
     import ta
-    from twelvedata import TDClient
 except ImportError:
     print(json.dumps({
-        "error": "Missing dependencies. Please run: pip install yfinance pandas ta requests twelvedata python-dotenv"
+        "error": "Missing dependencies. Please run: pip install pandas ta requests twelvedata python-dotenv"
     }))
     sys.exit(1)
 
-# Initialize Twelve Data client for all market/technical data.
-TD_API_KEY = os.getenv("TWELVE_DATA_API_KEY")
-td_client = None
-if TD_API_KEY and TD_API_KEY != "your_twelve_data_api_key_here":
-    td_client = TDClient(apikey=TD_API_KEY)
+from tools.twelvedata_market_data import canonical_gold_symbol, get_td_client
 
 DEFAULT_STRATEGY_PARAMS = {
     "ema_short": 20,
@@ -99,83 +90,6 @@ LAST_SUCCESSFUL_TA = None
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 EVENT_RISK_CONFIG_PATH = os.path.join(BASE_DIR, "config", "event_risk_windows.json")
 
-RSS_FEEDS = [
-    ("Google News Gold", "https://news.google.com/rss/search?q=gold%20OR%20XAUUSD%20OR%20%22Federal%20Reserve%22%20OR%20inflation&hl=en-US&gl=US&ceid=US:en"),
-    ("Google News Commodities", "https://news.google.com/rss/search?q=gold%20price%20commodities%20yields%20dollar&hl=en-US&gl=US&ceid=US:en"),
-]
-
-BULLISH_TERMS = {
-    "gold rises": 2,
-    "gold rise": 2,
-    "gold gains": 2,
-    "gold gain": 2,
-    "gold jumps": 2,
-    "gold rally": 2,
-    "gold higher": 2,
-    "record high gold": 3,
-    "safe haven": 3,
-    "haven demand": 2,
-    "geopolitical tensions": 2,
-    "fed cuts": 3,
-    "rate cut": 3,
-    "rate cuts": 3,
-    "dovish": 2,
-    "easing inflation": 2,
-    "inflation cools": 2,
-    "soft inflation": 2,
-    "weaker dollar": 3,
-    "dollar falls": 3,
-    "dollar weakens": 3,
-    "yields fall": 3,
-    "yield falls": 3,
-    "real yields fall": 3,
-    "central bank buying": 3,
-    "buy gold": 2,
-    "bullish": 1,
-}
-
-BEARISH_TERMS = {
-    "gold falls": 2,
-    "gold fall": 2,
-    "gold drops": 2,
-    "gold drop": 2,
-    "gold slips": 2,
-    "gold declines": 2,
-    "gold lower": 2,
-    "gold plunge": 3,
-    "gold plunges": 3,
-    "price crash": 3,
-    "gold price crash": 3,
-    "worst week": 3,
-    "lower u.s. interest rates fade": 3,
-    "hopes for lower u.s. interest rates fade": 3,
-    "rate-cut bets": 2,
-    "rate cut bets": 2,
-    "usd rally": 3,
-    "fierce usd rally": 3,
-    "oil spike": 2,
-    "energy prices surge": 2,
-    "hawkish": 2,
-    "fed hikes": 3,
-    "rate hike": 3,
-    "rate hikes": 3,
-    "higher rates": 3,
-    "rates higher for longer": 3,
-    "sticky inflation": 2,
-    "hot inflation": 2,
-    "hot ppi": 3,
-    "stronger dollar": 3,
-    "dollar rises": 3,
-    "dollar strengthens": 3,
-    "yields rise": 3,
-    "yield rises": 3,
-    "real yields rise": 3,
-    "profit-taking": 1,
-    "sell gold": 2,
-    "outflows": 2,
-    "bearish": 1,
-}
-
 
 def _calc_trend_from_close(close_series):
     """Returns bullish/bearish/neutral trend from configured EMA stack."""
@@ -202,6 +116,7 @@ def _calc_trend_from_close(close_series):
 
 def _fetch_td_trend(symbol, interval, outputsize=200):
     """Fetches trend from Twelve Data timeframe data only."""
+    td_client = get_td_client()
     if not td_client:
         return {"trend": "Neutral", "data_points": 0, "source": "none"}
 
@@ -361,7 +276,8 @@ def _support_resistance_snapshot(df, latest, prev):
 def get_technical_analysis():
     """Fetches gold price/technical data from Twelve Data only."""
     global LAST_SUCCESSFUL_TA
-    td_symbol = "XAU/USD"  # Twelve Data symbol for all technical/price calculations
+    td_symbol = canonical_gold_symbol("XAU/USD")
+    td_client = get_td_client()
 
     if not td_client:
         return {"error": "TWELVE_DATA_API_KEY is missing or invalid. Twelve Data is required."}
@@ -607,156 +523,14 @@ def get_technical_analysis():
     except Exception as e:
         return _cached_ta(str(e))
 
-def _clean_headline(text):
-    text = unescape((text or "").strip())
-    text = re.sub(r"\s+", " ", text)
-    return text
-
-
-def _score_headline_sentiment(title):
-    title_lc = (title or "").lower()
-    bullish_score = sum(weight for term, weight in BULLISH_TERMS.items() if term in title_lc)
-    bearish_score = sum(weight for term, weight in BEARISH_TERMS.items() if term in title_lc)
-    net_score = bullish_score - bearish_score
-
-    label = "Neutral"
-    if net_score >= 2:
-        label = "Bullish"
-    elif net_score <= -2:
-        label = "Bearish"
-
-    matched_terms = [
-        term for term in list(BULLISH_TERMS.keys()) + list(BEARISH_TERMS.keys())
-        if term in title_lc
-    ][:4]
-
-    return {
-        "sentiment_label": label,
-        "sentiment_score": net_score,
-        "bullish_score": bullish_score,
-        "bearish_score": bearish_score,
-        "matched_terms": matched_terms,
-    }
-
-
-def _fetch_yahoo_sentiment_headlines(limit=5):
-    headlines = []
-    try:
-        gold = yf.Ticker("GLD")
-        news = gold.news
-        if news:
-            for article in news[:limit]:
-                content = article.get("content", article)
-                title = _clean_headline(content.get("title", "No Title"))
-                if not title:
-                    continue
-                entry = {
-                    "title": title,
-                    "publisher": content.get("provider", {}).get("displayName", "Yahoo Finance"),
-                    "link": content.get("clickThroughUrl", {}).get("url", "#"),
-                    "source_type": "yahoo_finance",
-                }
-                entry.update(_score_headline_sentiment(title))
-                headlines.append(entry)
-    except Exception:
-        pass
-    return headlines
-
-
-def _fetch_rss_sentiment_headlines(limit_per_feed=4):
-    headlines = []
-    headers = {"User-Agent": "gold-predictor/1.0 (+rss sentiment fetch)"}
-
-    for feed_name, feed_url in RSS_FEEDS:
-        try:
-            response = requests.get(feed_url, headers=headers, timeout=10)
-            response.raise_for_status()
-            root = ET.fromstring(response.content)
-            items = root.findall(".//item")[:limit_per_feed]
-
-            for item in items:
-                title = _clean_headline(item.findtext("title", default=""))
-                link = item.findtext("link", default="#") or "#"
-                publisher = item.findtext("source", default=feed_name) or feed_name
-                if not title:
-                    continue
-                entry = {
-                    "title": title,
-                    "publisher": publisher,
-                    "link": link,
-                    "source_type": "rss",
-                    "feed": feed_name,
-                }
-                entry.update(_score_headline_sentiment(title))
-                headlines.append(entry)
-        except Exception:
-            continue
-
-    return headlines
-
-
-def _dedupe_sentiment_headlines(headlines, limit=10):
-    deduped = []
-    seen = set()
-
-    for item in headlines:
-        title_key = re.sub(r"[^a-z0-9]+", " ", (item.get("title") or "").lower()).strip()
-        if not title_key or title_key in seen:
-            continue
-        seen.add(title_key)
-        deduped.append(item)
-        if len(deduped) >= limit:
-            break
-
-    return deduped
-
-
-def get_sentiment_analysis():
-    """Fetches Yahoo + RSS headlines and applies simple local sentiment scoring."""
-    try:
-        yahoo_headlines = _fetch_yahoo_sentiment_headlines(limit=5)
-        rss_headlines = _fetch_rss_sentiment_headlines(limit_per_feed=4)
-        combined = yahoo_headlines + rss_headlines
-        deduped = _dedupe_sentiment_headlines(combined, limit=10)
-
-        if not deduped:
-            return [{
-                "title": "No recent gold news found.",
-                "publisher": "System",
-                "link": "#",
-                "source_type": "system",
-                "sentiment_label": "Neutral",
-                "sentiment_score": 0,
-                "bullish_score": 0,
-                "bearish_score": 0,
-                "matched_terms": [],
-            }]
-
-        return deduped
-    except Exception as e:
-        return [{
-            "title": f"Sentiment Query Error: {str(e)}",
-            "publisher": "Error",
-            "link": "#",
-            "source_type": "system",
-            "sentiment_label": "Neutral",
-            "sentiment_score": 0,
-            "bullish_score": 0,
-            "bearish_score": 0,
-            "matched_terms": [],
-        }]
-
 def main():
     ta_data = get_technical_analysis()
-    sa_data = get_sentiment_analysis()
-    
+
     output = {
         # TechnicalAnalysis comes from Twelve Data market data.
         "TechnicalAnalysis": ta_data,
-        # SentimentalAnalysis is populated from Yahoo Finance headlines only.
-        "SentimentalAnalysis": sa_data,
         "FundamentalAnalysis": {
-            "note": "For FA (Inflation, Fed Rates, DXY), the agent should ideally query FRED or analyze the news headlines provided."
+            "note": "For macro context such as inflation, Fed rates, and DXY, query dedicated macro data sources separately."
         }
     }
     

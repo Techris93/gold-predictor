@@ -701,30 +701,6 @@
           <span class="metric-value" id="ms-scores" style="font-size: 0.78rem; text-align: right; max-width: 56%; line-height: 1.5; white-space: normal;">---</span>
         </div>
       </div>
-      <div class="ar-card" style="margin-bottom: 2rem">
-        <button
-          type="button"
-          class="ar-toggle"
-          id="sentiment-toggle"
-          aria-expanded="false"
-          aria-controls="sa-headlines"
-        >
-          <span class="ar-heading-wrap">
-            <span class="ar-heading">Market Sentiment</span>
-            <span class="ar-subtext">Tap to expand sentiment details</span>
-          </span>
-          <span class="ar-toggle-meta">
-            <span class="ar-toggle-badge" id="sentiment-toggle-status">Hidden</span>
-            <svg class="ar-chevron" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-              <path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
-            </svg>
-          </span>
-        </button>
-        <div id="sa-headlines" hidden>
-          <!-- Sentiment summary loaded via JS -->
-        </div>
-      </div>
-
       <div style="margin-bottom: 2rem">
         <div
           style="
@@ -1200,28 +1176,6 @@
         });
       }
 
-      function setSentimentExpanded(expanded) {
-        const toggle = document.getElementById("sentiment-toggle");
-        const panel = document.getElementById("sa-headlines");
-        const status = document.getElementById("sentiment-toggle-status");
-        if (!toggle || !panel) return;
-        toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
-        panel.hidden = !expanded;
-        if (status) {
-          status.innerText = expanded ? "Visible" : "Hidden";
-        }
-      }
-
-      function initSentimentToggle() {
-        const toggle = document.getElementById("sentiment-toggle");
-        if (!toggle || toggle.dataset.bound === "1") return;
-        toggle.dataset.bound = "1";
-        toggle.addEventListener("click", () => {
-          const expanded = toggle.getAttribute("aria-expanded") === "true";
-          setSentimentExpanded(!expanded);
-        });
-      }
-
       async function fetchAutoresearchSummary() {
         try {
           const response = await fetch("/api/autoresearch/latest");
@@ -1305,215 +1259,6 @@
         }
       }
 
-      function classifyMarketSentiment(newsList) {
-        const weightedSignals = [
-          {
-            terms: [
-              "safe haven",
-              "geopolitical",
-              "war",
-              "conflict",
-              "middle east tension",
-              "risk-off",
-            ],
-            weight: 2,
-            side: "bull",
-          },
-          {
-            terms: [
-              "gold rises",
-              "gold rise",
-              "higher",
-              "rebound",
-              "gains",
-              "surges",
-              "bullish",
-              "buy",
-              "demand",
-              "record high",
-              "inflows",
-              "strong demand",
-            ],
-            weight: 1,
-            side: "bull",
-          },
-          {
-            terms: [
-              "dollar rises",
-              "dollar rise",
-              "stronger dollar",
-              "dollar strength",
-              "dollar index rises",
-              "dxy rises",
-              "yields rise",
-              "yield rises",
-              "treasury yields rise",
-              "real yields rise",
-              "hawkish fed",
-              "hawkish",
-              "rate hike",
-              "rates stay high",
-              "higher rates",
-            ],
-            weight: 2,
-            side: "bear",
-          },
-          {
-            terms: [
-              "gold lower",
-              "gold falls",
-              "gold fall",
-              "drops",
-              "drop",
-              "slips",
-              "bearish",
-              "sell",
-              "outflows",
-              "profit-taking",
-              "weaker",
-            ],
-            weight: 1,
-            side: "bear",
-          },
-        ];
-
-        let bullishScore = 0;
-        let bearishScore = 0;
-        const driverCounts = {};
-
-        const registerDriver = (term) => {
-          driverCounts[term] = (driverCounts[term] || 0) + 1;
-        };
-
-        newsList.forEach((news) => {
-          const title = ((news && news.title) || "").toLowerCase();
-          weightedSignals.forEach((signalGroup) => {
-            signalGroup.terms.forEach((term) => {
-              if (title.includes(term)) {
-                if (signalGroup.side === "bull")
-                  bullishScore += signalGroup.weight;
-                else bearishScore += signalGroup.weight;
-                registerDriver(term);
-              }
-            });
-          });
-        });
-
-        const netScore = bullishScore - bearishScore;
-        let label = "Neutral";
-        if (netScore >= 2) label = "Bullish";
-        else if (netScore <= -1) label = "Bearish";
-
-        const intensity = Math.abs(netScore);
-        let confidenceBand = "Low";
-        if (intensity >= 6) confidenceBand = "High";
-        else if (intensity >= 3) confidenceBand = "Medium";
-
-        const topDrivers = Object.entries(driverCounts)
-          .sort((a, b) => b[1] - a[1])
-          .slice(0, 3)
-          .map(([term]) => term);
-
-        return {
-          label,
-          confidenceBand,
-          bullishScore,
-          bearishScore,
-          netScore,
-          topDrivers,
-        };
-      }
-
-      function buildSentimentTooltip(sentiment, sourcesAnalyzed) {
-        const drivers =
-          sentiment.topDrivers.length > 0
-            ? sentiment.topDrivers.join(", ")
-            : "no strong drivers";
-        return `Model view: ${sentiment.label} | net ${sentiment.netScore} (bull ${sentiment.bullishScore} vs bear ${sentiment.bearishScore}) from ${sourcesAnalyzed} source(s). Top drivers: ${drivers}.`;
-      }
-
-      let sentimentDebugVisible = false;
-
-      function getSentimentBadgeClass(label) {
-        if (label === "Bullish") return "value-bullish";
-        if (label === "Bearish") return "value-bearish";
-        return "";
-      }
-
-      function updateSentimentDebugToggleLabel() {
-        const btn = document.getElementById("sentiment-debug-toggle");
-        if (!btn) return;
-        btn.textContent = sentimentDebugVisible ? "Hide Debug" : "Show Debug";
-      }
-
-      window.toggleSentimentDebug = function toggleSentimentDebug() {
-        sentimentDebugVisible = !sentimentDebugVisible;
-        updateSentimentDebugToggleLabel();
-        const debugEl = document.getElementById("sentiment-debug-panel");
-        if (debugEl) {
-          debugEl.style.display = sentimentDebugVisible ? "block" : "none";
-        }
-        if (sentimentDebugVisible) {
-          setSentimentExpanded(true);
-        }
-      };
-
-      function renderSentimentDebugList(newsList) {
-        if (!Array.isArray(newsList) || newsList.length === 0) {
-          return `
-            <div class="metric-row">
-              <span class="metric-label">Headline Debug</span>
-              <span class="metric-value" style="font-size: 0.8rem; text-align: right; max-width: 56%;">No sentiment headlines available</span>
-            </div>
-          `;
-        }
-
-        const rows = newsList
-          .map((item, index) => {
-            const label = item?.sentiment_label || "Neutral";
-            const labelClass = getSentimentBadgeClass(label);
-            const score = Number(item?.sentiment_score || 0);
-            const matchedTerms = Array.isArray(item?.matched_terms)
-              ? item.matched_terms
-              : [];
-            const source = item?.source_type || "unknown";
-            const publisher = item?.publisher || "Unknown";
-            const title = item?.title || "Untitled headline";
-            const termsText = matchedTerms.length
-              ? matchedTerms.join(", ")
-              : "none";
-
-            return `
-              <div style="margin-top: 0.9rem; padding-top: 0.9rem; border-top: 1px solid rgba(255,255,255,0.06);">
-                <div class="metric-row">
-                  <span class="metric-label">Headline ${index + 1}</span>
-                  <span class="metric-value ${labelClass}">${label} (${score > 0 ? "+" : ""}${score})</span>
-                </div>
-                <div class="metric-row">
-                  <span class="metric-label">Source</span>
-                  <span class="metric-value" style="font-size: 0.75rem; text-align: right; max-width: 56%;">${publisher} · ${source}</span>
-                </div>
-                <div class="metric-row">
-                  <span class="metric-label">Matched Terms</span>
-                  <span class="metric-value" style="font-size: 0.75rem; text-align: right; max-width: 56%;">${termsText}</span>
-                </div>
-                <div class="metric-row" style="align-items: flex-start; gap: 0.75rem;">
-                  <span class="metric-label">Title</span>
-                  <span class="metric-value" style="font-size: 0.75rem; text-align: right; max-width: 56%; line-height: 1.5; white-space: normal;">${title}</span>
-                </div>
-              </div>
-            `;
-          })
-          .join("");
-
-        return `
-          <div id="sentiment-debug-panel" style="display: ${sentimentDebugVisible ? "block" : "none"}; margin-top: 1rem; padding-top: 0.8rem; border-top: 1px solid rgba(255,215,0,0.12);">
-            <div style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 0.25rem;">Sentiment Debug</div>
-            ${rows}
-          </div>
-        `;
-      }
-
       function getGuidanceLevel(score) {
         if (score >= 6) return "Strong";
         if (score >= 4) return "Watch";
@@ -1527,7 +1272,7 @@
         return "";
       }
 
-      function computeTradeGuidance(ta, sentimentLabel, confidence) {
+      function computeTradeGuidance(ta, confidence) {
         const structure = ta.price_action?.structure || "Consolidating";
         const pattern = ta.price_action?.latest_candle_pattern || "None";
         const trend = ta.ema_trend || "Neutral";
@@ -1559,9 +1304,6 @@
 
         if (rsi < 45) sellScore += 1;
         else if (rsi > 55) buyScore += 1;
-
-        if (sentimentLabel === "Bearish") sellScore += 1;
-        else if (sentimentLabel === "Bullish") buyScore += 1;
 
         if (confidence >= 75) {
           if (sellScore > buyScore) sellScore += 1;
@@ -1753,66 +1495,6 @@
             ? "var(--gold-primary)"
             : "var(--text-muted)";
 
-        // Update market sentiment summary (no raw headline listing)
-        const newsList = Array.isArray(data.SentimentalAnalysis)
-          ? data.SentimentalAnalysis
-          : [];
-        const sentiment =
-          data.SentimentSummary && typeof data.SentimentSummary === "object"
-            ? data.SentimentSummary
-            : classifyMarketSentiment(newsList);
-        const sentimentTooltip = buildSentimentTooltip(
-          sentiment,
-          newsList.length,
-        );
-        const saContainer = document.getElementById("sa-headlines");
-        if (saContainer) {
-          saContainer.innerHTML = "";
-
-          const sentimentClass = getSentimentBadgeClass(sentiment.label);
-          const sentimentToggleStatusEl = document.getElementById("sentiment-toggle-status");
-          if (sentimentToggleStatusEl) {
-            sentimentToggleStatusEl.innerText = sentiment.label;
-            sentimentToggleStatusEl.className = `ar-toggle-badge ${sentimentClass}`;
-          }
-
-          const debugHtml = renderSentimentDebugList(newsList);
-
-          saContainer.innerHTML = `
-            <div class="metric-row">
-              <span class="metric-label">Overall Sentiment <span title="Hover the sentiment value for explanation" style="cursor: help; color: var(--gold-primary);">(i)</span></span>
-              <span id="sentiment-value" class="metric-value ${sentimentClass}">${sentiment.label}</span>
-            </div>
-            <div class="metric-row">
-              <span class="metric-label">Sentiment Strength</span>
-              <span class="metric-value">${sentiment.confidenceBand}</span>
-            </div>
-            <div class="metric-row">
-              <span class="metric-label">Weighted Bias Score</span>
-              <span class="metric-value">${sentiment.netScore}</span>
-            </div>
-            <div class="metric-row">
-              <span class="metric-label">Sources Analyzed</span>
-              <span class="metric-value">${newsList.length}</span>
-            </div>
-            <div class="metric-row">
-              <span class="metric-label">Top Drivers</span>
-              <span class="metric-value" style="font-size: 0.8rem; text-align: right; max-width: 52%;">
-                ${sentiment.topDrivers.length ? sentiment.topDrivers.join(", ") : "No strong drivers"}
-              </span>
-            </div>
-            ${debugHtml}
-          `;
-
-          const sentimentValueEl = document.getElementById("sentiment-value");
-          if (sentimentValueEl) {
-            sentimentValueEl.title = sentimentTooltip;
-            sentimentValueEl.style.cursor = "help";
-          }
-
-          updateSentimentDebugToggleLabel();
-        }
-
         // Update Verdict Badge
         const badge = document.getElementById("verdict-badge");
         badge.innerText = data.verdict;
@@ -1910,7 +1592,6 @@
             ? data.TradeGuidance
             : computeTradeGuidance(
                 ta,
-                sentiment.label,
                 Number(data.confidence || 0),
               );
 
@@ -1973,8 +1654,6 @@
       window.addEventListener("DOMContentLoaded", () => {
         initAutoresearchToggle();
         setAutoresearchExpanded(false);
-        initSentimentToggle();
-        setSentimentExpanded(false);
         syncAlertsButton();
         ensureServiceWorker().then(() => {
           if ("Notification" in window && Notification.permission === "granted") {
