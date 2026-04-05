@@ -36,6 +36,6 @@ if [[ ! -x "$PYTHON_EXEC" ]]; then
   exit 1
 fi
 
-"$PYTHON_EXEC" -u "$SCRIPT_PATH" --reduced --serial --period 365d --interval 1h --ticker XAU/USD
+"$PYTHON_EXEC" -u "$SCRIPT_PATH" --serial --period 365d --interval 1h --ticker XAU/USD
 
 echo ""
