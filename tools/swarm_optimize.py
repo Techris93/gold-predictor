@@ -5,6 +5,7 @@ import sys
 import subprocess
 import argparse
 import time
+import shutil
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timezone
 
@@ -220,13 +221,19 @@ def _write_confidence_calibration(best_result):
 
 
 def _notify_user(message):
+    openclaw_bin = (
+        os.environ.get("OPENCLAW_BIN")
+        or shutil.which("openclaw")
+        or os.path.expanduser("~/.npm-global/bin/openclaw")
+        or "/Users/chrixchange/.npm-global/bin/openclaw"
+    )
     for channel, target in NOTIFY_CHANNELS:
         if not target:
             continue
         try:
             subprocess.run(
                 [
-                    "openclaw",
+                    openclaw_bin,
                     "message",
                     "send",
                     "--channel",
