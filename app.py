@@ -82,6 +82,7 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 TELEGRAM_THREAD_ID = os.getenv("TELEGRAM_THREAD_ID", "").strip()
 CHANGE_SUMMARY_ORDER = [
+    "market_structure",
     "execution_permission",
 ]
 def _load_subscriptions():
@@ -162,6 +163,7 @@ def _filter_notification_changes(changes):
 
 def _summarize_changes_for_push(changes):
     labels = {
+        "market_structure": "Market Structure",
         "execution_permission": "Execution Permission",
     }
     ordered_keys = [key for key in CHANGE_SUMMARY_ORDER if key in changes]
@@ -622,6 +624,7 @@ def _extract_indicator_snapshot(payload):
     mtf = ta_data.get("multi_timeframe", {}) if isinstance(ta_data, dict) else {}
     trade_guidance = payload.get("TradeGuidance", {}) if isinstance(payload, dict) else {}
     return {
+        "market_structure": (pa.get("structure") if isinstance(pa, dict) else None),
         "execution_permission": ((payload.get("ExecutionPermission") or {}).get("text")),
     }
 
@@ -702,8 +705,6 @@ def _indicator_monitor_loop():
                     changes = _diff_snapshot(last_snapshot, current_snapshot)
                     notification_changes = _filter_notification_changes(changes)
                     now_ts = int(time.time())
-                    alert_title = "Execution Permission Changed"
-                    alert_message = "Execution permission changed"
                     if (
                         notification_changes
                         and _is_material_change(notification_changes)
@@ -711,28 +712,43 @@ def _indicator_monitor_loop():
                     ):
                         alert_state = _load_json_file(
                             ALERT_STATE_FILE,
-                            {"last_execution_permission": "", "last_alert_ts": 0},
+                            {"last_execution_permission": "", "last_market_structure": "", "last_alert_ts": 0},
                         )
                         decision_payload = payload.get("DecisionStatus") or {}
                         execution_permission_payload = payload.get("ExecutionPermission") or {}
                         execution_permission = str(execution_permission_payload.get("text") or "")
                         permission_status = str(execution_permission_payload.get("status") or "no_trade")
+                        market_structure = str(((payload.get("TechnicalAnalysis") or {}).get("price_action") or {}).get("structure") or "")
                         decision_confirmed = bool(decision_payload.get("confirmed"))
+                        market_structure_changed = "market_structure" in notification_changes and bool(market_structure)
+                        execution_permission_changed = "execution_permission" in notification_changes and bool(execution_permission)
                         should_alert = bool(
-                            execution_permission
-                            and "execution_permission" in notification_changes
-                            and decision_confirmed
+                            market_structure_changed
+                            or (execution_permission_changed and decision_confirmed)
                         )
                         if should_alert and permission_status == "exit_recommended":
                             should_alert = NOTIFY_EXIT_READS
                         if should_alert:
                             last_execution_permission = str(alert_state.get("last_execution_permission", ""))
+                            last_market_structure = str(alert_state.get("last_market_structure", ""))
                             last_alert_ts = int(alert_state.get("last_alert_ts", 0) or 0)
-                            if execution_permission == last_execution_permission and (now_ts - last_alert_ts) < ALERT_COOLDOWN_SECONDS:
+                            duplicate_execution = execution_permission_changed and execution_permission == last_execution_permission
+                            duplicate_structure = market_structure_changed and market_structure == last_market_structure
+                            if (duplicate_execution or duplicate_structure) and (now_ts - last_alert_ts) < ALERT_COOLDOWN_SECONDS:
                                 should_alert = False
                         if not should_alert:
                             last_snapshot = current_snapshot
                             continue
+
+                        if market_structure_changed and not execution_permission_changed:
+                            alert_title = "Market Structure Changed"
+                            alert_message = "Market structure changed"
+                        elif execution_permission_changed and not market_structure_changed:
+                            alert_title = "Execution Permission Changed"
+                            alert_message = "Execution permission changed"
+                        else:
+                            alert_title = "Market Structure / Execution Changed"
+                            alert_message = "Market structure or execution permission changed"
 
                         if _monitor_state["clients"] > 0:
                             socketio.emit(
@@ -768,7 +784,11 @@ def _indicator_monitor_loop():
                         )
                         _save_json_file(
                             ALERT_STATE_FILE,
-                            {"last_execution_permission": execution_permission, "last_alert_ts": now_ts},
+                            {
+                                "last_execution_permission": execution_permission,
+                                "last_market_structure": market_structure,
+                                "last_alert_ts": now_ts,
+                            },
                         )
                         last_emit_ts = now_ts
                 last_snapshot = current_snapshot
