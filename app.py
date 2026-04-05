@@ -860,6 +860,34 @@ def get_autoresearch_latest():
         except Exception as e:
             raise RuntimeError(f"Failed to read {path.name}: {e}") from e
 
+    def _best_params_from(report):
+        report = report or {}
+        if isinstance(report.get("best_params"), dict):
+            return report.get("best_params") or {}
+        best = report.get("best") or {}
+        if isinstance(best, dict) and isinstance(best.get("params"), dict):
+            return best.get("params") or {}
+        return {}
+
+    def _summary_from(report):
+        report = report or {}
+        if isinstance(report.get("summary"), dict):
+            return report.get("summary") or {}
+        best = report.get("best") or {}
+        if isinstance(best, dict) and isinstance(best.get("summary"), dict):
+            return best.get("summary") or {}
+        return {}
+
+    def _top_results_from(report):
+        report = report or {}
+        top_results = report.get("top_results")
+        if isinstance(top_results, list):
+            return top_results
+        top_five = report.get("top_5")
+        if isinstance(top_five, list):
+            return top_five
+        return []
+
     if promoted_report_path.exists() or swarm_report_path.exists():
         try:
             promoted_report = _read_report(promoted_report_path) if promoted_report_path.exists() else None
@@ -869,16 +897,16 @@ def get_autoresearch_latest():
             return jsonify({"status": "error", "message": str(e)}), 500
 
         display_report = promoted_report or latest_report or {}
-        best = display_report.get("best_params") or {}
-        latest_best = (latest_report or {}).get("best_params") or {}
-        latest_summary = (latest_report or {}).get("summary") or {}
-        display_summary = display_report.get("summary") or {}
-        top_results = (latest_report or {}).get("top_results") or display_report.get("top_results") or []
+        best = _best_params_from(display_report)
+        latest_best = _best_params_from(latest_report)
+        latest_summary = _summary_from(latest_report)
+        display_summary = _summary_from(display_report)
+        top_results = _top_results_from(latest_report) or _top_results_from(display_report)
         top_result = top_results[0] if isinstance(top_results, list) and top_results else {}
         roi = best.get("roi") or display_summary.get("roi")
         latest_generated_at = (latest_report or {}).get("generated_at")
         latest_run_promote = bool((latest_report or {}).get("promote"))
-        has_active_promoted_strategy = bool(promoted_report and (promoted_report.get("best_params") or {}))
+        has_active_promoted_strategy = bool(promoted_report and _best_params_from(promoted_report))
         decision_reason = (decision_report or {}).get("promotion_reason") or (latest_report or {}).get("promotion_reason")
         active_strategy_reason = (
             "Active promoted strategy is available."
@@ -897,6 +925,8 @@ def get_autoresearch_latest():
             "active_strategy_reason": active_strategy_reason,
             "best_params": best,
             "latest_best_params": latest_best,
+            "roi": roi,
+            "winning_ema": f"{best.get('ema_short', '-')}/{best.get('ema_long', '-')}",
             "median_score": roi,
             "pass_rate": display_summary.get("pass_rate"),
             "summary": {
@@ -930,16 +960,38 @@ def get_autoresearch_latest():
 
     best = report.get("best") or {}
     summary = best.get("summary") if isinstance(best, dict) else {}
+    best_params = _best_params_from(report)
+    roi = summary.get("roi") if isinstance(summary, dict) else None
+    promoted = bool(report.get("promote", False))
 
     return jsonify({
         "status": "success",
         "generated_at": report.get("generated_at"),
-        "promote": report.get("promote", False),
+        "latest_generated_at": report.get("generated_at"),
+        "promote": promoted,
+        "latest_run_promote": promoted,
+        "has_active_promoted_strategy": promoted,
         "promotion_reason": report.get("promotion_reason", ""),
-        "best_params": best.get("params", {}) if isinstance(best, dict) else {},
+        "active_strategy_reason": (
+            "Active promoted strategy is available."
+            if promoted
+            else "No promoted strategy has been saved yet."
+        ),
+        "best_params": best_params,
+        "roi": roi,
+        "winning_ema": f"{best_params.get('ema_short', '-')}/{best_params.get('ema_long', '-')}",
         "median_score": best.get("median_score") if isinstance(best, dict) else None,
         "pass_rate": best.get("pass_rate") if isinstance(best, dict) else None,
-        "summary": summary if isinstance(summary, dict) else {},
+        "summary": {
+            **(summary if isinstance(summary, dict) else {}),
+            "roi": roi,
+            "winning_ema": f"{best_params.get('ema_short', '-')}/{best_params.get('ema_long', '-')}",
+            "winning_rsi": f"{best_params.get('rsi_overbought', '-')}/{best_params.get('rsi_oversold', '-')}",
+            "winning_cmf": best_params.get("cmf_window"),
+            "latest_run_roi": roi,
+            "latest_run_promote": promoted,
+            "has_active_promoted_strategy": promoted,
+        },
     })
 
 @app.route('/api/predict')

@@ -19,6 +19,7 @@ import itertools
 import json
 import math
 import os
+import sys
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -31,9 +32,17 @@ import ta
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
 load_dotenv(BASE_DIR / ".env")
 
 from tools.twelvedata_market_data import fetch_history as fetch_td_history
+from tools.signal_engine import (
+    build_ta_payload_from_row,
+    compute_prediction_from_ta,
+    normalize_strategy_params,
+    prepare_historical_features,
+)
 
 
 @dataclass(frozen=True)
@@ -58,63 +67,47 @@ def fetch_history(ticker: str, period: str, interval: str) -> pd.DataFrame:
     return fetch_td_history(period=period, interval=interval, ticker=ticker)
 
 
+def _to_strategy_dict(p: StrategyParams) -> Dict[str, int]:
+    return {
+        "ema_short": p.ema_short,
+        "ema_long": p.ema_long,
+        "rsi_window": 14,
+        "rsi_overbought": p.rsi_overbought,
+        "rsi_oversold": p.rsi_oversold,
+        "adx_window": 14,
+        "adx_trending_threshold": 22,
+        "adx_weak_trend_threshold": 18,
+        "atr_window": 14,
+        "atr_trending_percent_threshold": 0.25,
+        "cmf_window": p.cmf_window,
+        "cmf_strong_buy_threshold": 0.10,
+        "cmf_strong_sell_threshold": -0.10,
+        "alignment_weight": 1.0,
+        "strong_volume_weight": 1.5,
+        "verdict_margin_threshold": 1.2,
+        "confidence_margin_multiplier": 8.0,
+        "rangebound_penalty": 8.0,
+        "mixed_alignment_penalty": 6.0,
+        "mtf_intervals": ["15min", "1h", "4h"],
+    }
+
+
 def compute_indicators(df: pd.DataFrame, p: StrategyParams) -> pd.DataFrame:
-    x = df.copy()
-    x["EMA_S"] = ta.trend.EMAIndicator(x["Close"], window=p.ema_short).ema_indicator()
-    x["EMA_L"] = ta.trend.EMAIndicator(x["Close"], window=p.ema_long).ema_indicator()
-    x["RSI"] = ta.momentum.RSIIndicator(x["Close"], window=14).rsi()
-
-    has_volume = "Volume" in x.columns and (x["Volume"].fillna(0) > 0).any()
-    if has_volume:
-        x["OBV"] = ta.volume.OnBalanceVolumeIndicator(x["Close"], x["Volume"]).on_balance_volume()
-        x["CMF"] = ta.volume.ChaikinMoneyFlowIndicator(
-            x["High"], x["Low"], x["Close"], x["Volume"], window=p.cmf_window
-        ).chaikin_money_flow()
-    else:
-        x["OBV"] = 0.0
-        x["CMF"] = 0.0
-
-    x = x.dropna()
-    return x
+    return prepare_historical_features(df, normalize_strategy_params(_to_strategy_dict(p)))
 
 
 def generate_signals(df: pd.DataFrame, p: StrategyParams) -> pd.Series:
-    signals = pd.Series("Neutral", index=df.index, dtype="object")
+    enriched = compute_indicators(df, p)
+    signals = pd.Series("Neutral", index=enriched.index, dtype="object")
+    strategy_params = normalize_strategy_params(_to_strategy_dict(p))
 
-    for i in range(2, len(df)):
-        cur = df.iloc[i]
-        prev = df.iloc[i - 1]
-        prev2 = df.iloc[i - 2]
-
-        bull_trend = cur["Close"] > cur["EMA_S"] > cur["EMA_L"]
-        bear_trend = cur["Close"] < cur["EMA_S"] < cur["EMA_L"]
-
-        obv_rising = cur["OBV"] > prev["OBV"]
-        cmf_bull = cur["CMF"] > 0
-        cmf_bear = cur["CMF"] < 0
-
-        pa_bull = cur["High"] > prev["High"] > prev2["High"] and cur["Low"] > prev["Low"] > prev2["Low"]
-        pa_bear = cur["High"] < prev["High"] < prev2["High"] and cur["Low"] < prev["Low"] < prev2["Low"]
-
-        bull_engulf = (
-            cur["Close"] > cur["Open"]
-            and prev["Close"] < prev["Open"]
-            and cur["Close"] > prev["Open"]
-            and cur["Open"] < prev["Close"]
-        )
-        bear_engulf = (
-            cur["Close"] < cur["Open"]
-            and prev["Close"] > prev["Open"]
-            and cur["Close"] < prev["Open"]
-            and cur["Open"] > prev["Close"]
-        )
-
-        rsi_oversold = cur["RSI"] < p.rsi_oversold
-        rsi_overbought = cur["RSI"] > p.rsi_overbought
-
-        if bull_trend and obv_rising and cmf_bull and (pa_bull or bull_engulf or rsi_oversold):
+    for i in range(len(enriched)):
+        ta_payload = build_ta_payload_from_row(enriched.iloc[i], strategy_params)
+        prediction = compute_prediction_from_ta(ta_payload)
+        verdict = prediction.get("verdict")
+        if verdict == "Bullish":
             signals.iloc[i] = "Buy"
-        elif bear_trend and (not obv_rising) and cmf_bear and (pa_bear or bear_engulf or rsi_overbought):
+        elif verdict == "Bearish":
             signals.iloc[i] = "Sell"
 
     return signals
@@ -480,7 +473,18 @@ def main() -> None:
         candidates = candidates[: args.max_runs]
     print(f"[autoresearch] testing {len(candidates)} parameter sets")
 
-    baseline_params = StrategyParams(20, 50, 70, 25, 14)
+    baseline_file = BASE_DIR / "config" / "strategy_params.json"
+    try:
+        active = json.loads(baseline_file.read_text(encoding="utf-8"))
+    except Exception:
+        active = {}
+    baseline_params = StrategyParams(
+        int(active.get("ema_short", 20)),
+        int(active.get("ema_long", 100)),
+        int(active.get("rsi_overbought", 70)),
+        int(active.get("rsi_oversold", 20)),
+        int(active.get("cmf_window", 14)),
+    )
     baseline = evaluate_params(
         base_df,
         baseline_params,
