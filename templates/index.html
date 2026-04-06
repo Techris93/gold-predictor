@@ -1381,6 +1381,14 @@
           /bullish|breakout|continuation/i.test(structure);
         const hasBearishStructure =
           /bearish|breakdown|rejection/i.test(structure);
+        const hasBullishTrigger =
+          /bullish|breakout|continuation|support rejection/i.test(
+            `${structure} ${pattern} ${summary}`,
+          );
+        const hasBearishTrigger =
+          /bearish|breakdown|rejection|resistance rejection/i.test(
+            `${structure} ${pattern} ${summary}`,
+          );
         const hasDojiLikePattern = /doji|indecision|spinning top/i.test(pattern);
         const noCleanTrigger = /no clean trigger/i.test(summary);
         const bullishAlignment = /bullish/i.test(alignment) && !/mixed/i.test(alignment);
@@ -1393,7 +1401,7 @@
           verdict === "Bullish" && confidence >= 70,
           trend === "Bullish" && hasBullishStructure,
           bullishAlignment,
-          !hasDojiLikePattern && !noCleanTrigger,
+          !hasDojiLikePattern && !noCleanTrigger && hasBullishTrigger,
           /watch|strong/i.test(buyLevel) && /low|medium/i.test(exitLevel),
         ];
 
@@ -1401,7 +1409,7 @@
           verdict === "Bearish" && confidence >= 70,
           trend === "Bearish" && hasBearishStructure,
           bearishAlignment,
-          !hasDojiLikePattern && !noCleanTrigger,
+          !hasDojiLikePattern && !noCleanTrigger && hasBearishTrigger,
           /watch|strong/i.test(sellLevel) && /low|medium/i.test(exitLevel),
         ];
 

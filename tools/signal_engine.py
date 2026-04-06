@@ -497,7 +497,12 @@ def compute_prediction_from_ta(ta_data):
     if no_trade_reasons:
         trade_guidance["sellLevel"] = "Weak"
         trade_guidance["buyLevel"] = "Weak"
-        trade_guidance["summary"] = no_trade_reasons[0]
+        if directional_bias == "Bearish":
+            trade_guidance["summary"] = f"Bearish bias is intact, but conditions are not clean enough for execution yet. {no_trade_reasons[0]}"
+        elif directional_bias == "Bullish":
+            trade_guidance["summary"] = f"Bullish bias is intact, but conditions are not clean enough for execution yet. {no_trade_reasons[0]}"
+        else:
+            trade_guidance["summary"] = no_trade_reasons[0]
 
     if action_state == "SETUP_LONG":
         trade_guidance["summary"] = "Long setup is forming, but trigger confirmation is still pending."
@@ -509,6 +514,23 @@ def compute_prediction_from_ta(ta_data):
         trade_guidance["summary"] = "Short setup confirmed with acceptable tradeability."
     elif action_state == "EXIT_RISK":
         trade_guidance["summary"] = "Exit risk is elevated; the active directional state is deteriorating."
+    elif action_state == "WAIT" and directional_bias in {"Bullish", "Bearish"}:
+        blockers = []
+        if tradeability_label == "Low":
+            blockers.append("tradeability is low")
+        if regime_label in {"unstable", "range", "event-risk", "transition"}:
+            blockers.append(f"regime is {regime_label}")
+        blocker_text = " and ".join(blockers)
+        if directional_bias == "Bearish" and trade_guidance["sellLevel"] in {"Watch", "Strong"}:
+            trade_guidance["summary"] = (
+                f"Sell bias is favored, but conditions are not clean enough for execution yet"
+                + (f" because {blocker_text}." if blocker_text else ".")
+            )
+        elif directional_bias == "Bullish" and trade_guidance["buyLevel"] in {"Watch", "Strong"}:
+            trade_guidance["summary"] = (
+                f"Buy bias is favored, but conditions are not clean enough for execution yet"
+                + (f" because {blocker_text}." if blocker_text else ".")
+            )
 
     return {
         "raw_verdict": "Bullish" if score_diff >= verdict_margin_threshold else ("Bearish" if score_diff <= -verdict_margin_threshold else "Neutral"),

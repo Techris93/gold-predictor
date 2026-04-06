@@ -345,6 +345,8 @@ def _evaluate_decision_status(verdict, confidence, ta_data, trade_guidance):
     exit_level = str((trade_guidance or {}).get("exitLevel") or "Low")
     has_bullish_structure = bool(re.search(r"bullish|breakout|continuation", structure, re.IGNORECASE))
     has_bearish_structure = bool(re.search(r"bearish|breakdown|rejection", structure, re.IGNORECASE))
+    has_bullish_trigger = bool(re.search(r"bullish|breakout|continuation|support rejection", f"{structure} {pattern} {summary}", re.IGNORECASE))
+    has_bearish_trigger = bool(re.search(r"bearish|breakdown|rejection|resistance rejection", f"{structure} {pattern} {summary}", re.IGNORECASE))
     has_doji_like_pattern = bool(re.search(r"doji|indecision|spinning top", pattern, re.IGNORECASE))
     no_clean_trigger = "no clean trigger" in summary.lower()
     bullish_alignment = "bullish" in alignment.lower() and "mixed" not in alignment.lower()
@@ -384,14 +386,14 @@ def _evaluate_decision_status(verdict, confidence, ta_data, trade_guidance):
             verdict == "Bullish" and confidence >= 70,
             trend == "Bullish" and has_bullish_structure,
             bullish_alignment,
-            not has_doji_like_pattern and not no_clean_trigger,
+            not has_doji_like_pattern and not no_clean_trigger and has_bullish_trigger,
             buy_level in {"Watch", "Strong"} and exit_level in {"Low", "Medium"},
         ]
         sell_checks = [
             verdict == "Bearish" and confidence >= 70,
             trend == "Bearish" and has_bearish_structure,
             bearish_alignment,
-            not has_doji_like_pattern and not no_clean_trigger,
+            not has_doji_like_pattern and not no_clean_trigger and has_bearish_trigger,
             sell_level in {"Watch", "Strong"} and exit_level in {"Low", "Medium"},
         ]
         exit_checks = [
@@ -441,14 +443,14 @@ def _evaluate_decision_status(verdict, confidence, ta_data, trade_guidance):
         verdict == "Bullish" and confidence >= 70,
         trend == "Bullish" and has_bullish_structure,
         bullish_alignment,
-        not has_doji_like_pattern and not no_clean_trigger,
+        not has_doji_like_pattern and not no_clean_trigger and has_bullish_trigger,
         buy_level in {"Watch", "Strong"} and exit_level in {"Low", "Medium"},
     ]
     sell_checks = [
         verdict == "Bearish" and confidence >= 70,
         trend == "Bearish" and has_bearish_structure,
         bearish_alignment,
-        not has_doji_like_pattern and not no_clean_trigger,
+        not has_doji_like_pattern and not no_clean_trigger and has_bearish_trigger,
         sell_level in {"Watch", "Strong"} and exit_level in {"Low", "Medium"},
     ]
     exit_checks = [
