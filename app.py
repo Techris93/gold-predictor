@@ -356,6 +356,13 @@ def _evaluate_decision_status(verdict, confidence, ta_data, trade_guidance):
     if action_state:
         text = "Stand aside. Checklist does not support a clean trade yet."
         status = "wait"
+        tradeability = str(market_state.get("tradeability") or "Low")
+        regime = str(market_state.get("regime") or "unstable")
+        blocked_reason = None
+        if tradeability.lower() == "low":
+            blocked_reason = "tradeability is still low"
+        elif regime.lower() in {"unstable", "range", "event-risk", "transition"}:
+            blocked_reason = f"the market regime is {regime.lower()}"
         if action_state == "SETUP_LONG":
             text = "Long setup forming. Bias is constructive, but trigger confirmation is still pending."
             status = "wait"
@@ -393,6 +400,22 @@ def _evaluate_decision_status(verdict, confidence, ta_data, trade_guidance):
             has_doji_like_pattern,
             buy_level == "Weak" and sell_level == "Weak",
         ]
+        buy_passed = sum(1 for item in buy_checks if item)
+        sell_passed = sum(1 for item in sell_checks if item)
+
+        if action_state == "WAIT":
+            if sell_passed >= 4 and sell_passed > buy_passed:
+                reason_suffix = f" because {blocked_reason}" if blocked_reason else ""
+                text = (
+                    "Watchlist Only: sell checklist is confirmed, but execution is blocked"
+                    f"{reason_suffix}."
+                )
+            elif buy_passed >= 4 and buy_passed > sell_passed:
+                reason_suffix = f" because {blocked_reason}" if blocked_reason else ""
+                text = (
+                    "Watchlist Only: buy checklist is confirmed, but execution is blocked"
+                    f"{reason_suffix}."
+                )
         return {
             "text": text,
             "status": status,
