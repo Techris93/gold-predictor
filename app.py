@@ -358,11 +358,12 @@ def _evaluate_decision_status(verdict, confidence, ta_data, trade_guidance):
         status = "wait"
         tradeability = str(market_state.get("tradeability") or "Low")
         regime = str(market_state.get("regime") or "unstable")
-        blocked_reason = None
+        blocked_reasons = []
         if tradeability.lower() == "low":
-            blocked_reason = "tradeability is still low"
-        elif regime.lower() in {"unstable", "range", "event-risk", "transition"}:
-            blocked_reason = f"the market regime is {regime.lower()}"
+            blocked_reasons.append("tradeability is still low")
+        if regime.lower() in {"unstable", "range", "event-risk", "transition"}:
+            blocked_reasons.append(f"the market regime is {regime.lower()}")
+        blocked_reason = " and ".join(blocked_reasons) if blocked_reasons else None
         if action_state == "SETUP_LONG":
             text = "Long setup forming. Bias is constructive, but trigger confirmation is still pending."
             status = "wait"
@@ -404,16 +405,28 @@ def _evaluate_decision_status(verdict, confidence, ta_data, trade_guidance):
         sell_passed = sum(1 for item in sell_checks if item)
 
         if action_state == "WAIT":
-            if sell_passed >= 4 and sell_passed > buy_passed:
+            if sell_passed == len(sell_checks) and sell_passed > buy_passed:
                 reason_suffix = f" because {blocked_reason}" if blocked_reason else ""
                 text = (
                     "Watchlist Only: sell checklist is confirmed, but execution is blocked"
                     f"{reason_suffix}."
                 )
-            elif buy_passed >= 4 and buy_passed > sell_passed:
+            elif buy_passed == len(buy_checks) and buy_passed > sell_passed:
                 reason_suffix = f" because {blocked_reason}" if blocked_reason else ""
                 text = (
                     "Watchlist Only: buy checklist is confirmed, but execution is blocked"
+                    f"{reason_suffix}."
+                )
+            elif sell_passed >= 3 and sell_passed > buy_passed:
+                reason_suffix = f" because {blocked_reason}" if blocked_reason else ""
+                text = (
+                    "Watchlist Only: sell conditions are mostly aligned, but execution is blocked"
+                    f"{reason_suffix}."
+                )
+            elif buy_passed >= 3 and buy_passed > sell_passed:
+                reason_suffix = f" because {blocked_reason}" if blocked_reason else ""
+                text = (
+                    "Watchlist Only: buy conditions are mostly aligned, but execution is blocked"
                     f"{reason_suffix}."
                 )
         return {
@@ -474,6 +487,9 @@ def _evaluate_decision_status(verdict, confidence, ta_data, trade_guidance):
 def _evaluate_execution_permission(decision_status, market_state):
     action_state = str((market_state or {}).get("action_state") or "WAIT")
     decision_kind = str((decision_status or {}).get("status") or "wait")
+    decision_text = str((decision_status or {}).get("text") or "")
+    tradeability = str((market_state or {}).get("tradeability") or "Low")
+    regime = str((market_state or {}).get("regime") or "unstable")
 
     text = "No trade. Conditions are not clean enough yet."
     status = "no_trade"
@@ -491,6 +507,18 @@ def _evaluate_execution_permission(decision_status, market_state):
     elif action_state == "EXIT_RISK" or decision_kind == "exit":
         text = "Exit Recommended: active position quality is deteriorating."
         status = "exit_recommended"
+    elif action_state == "WAIT" and decision_text.startswith("Watchlist Only:"):
+        blockers = []
+        if tradeability.lower() == "low":
+            blockers.append("low tradeability")
+        if regime.lower() in {"unstable", "range", "event-risk", "transition"}:
+            blockers.append(f"{regime.lower()} regime")
+        blocker_text = " and ".join(blockers)
+        if blocker_text:
+            text = f"Watchlist Only: entry is blocked by {blocker_text}."
+        else:
+            text = "Watchlist Only: setup is forming, but execution is not confirmed yet."
+        status = "watchlist_only"
 
     return {
         "text": text,

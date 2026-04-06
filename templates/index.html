@@ -1420,12 +1420,18 @@
         let statusText = "Stand aside. Checklist does not support a clean trade yet.";
         let statusClass = "wait";
 
-        if (buyPassed >= 4 && buyPassed > sellPassed && exitPassed < 3) {
-          statusText = "Safer to look for a buy. Most buy conditions are confirmed.";
+        if (buyPassed === buyChecks.length && buyPassed > sellPassed && exitPassed < 3) {
+          statusText = "Safer to look for a buy. Buy checklist is confirmed.";
           statusClass = "buy";
-        } else if (sellPassed >= 4 && sellPassed > buyPassed && exitPassed < 3) {
-          statusText = "Safer to look for a sell. Most sell conditions are confirmed.";
+        } else if (sellPassed === sellChecks.length && sellPassed > buyPassed && exitPassed < 3) {
+          statusText = "Safer to look for a sell. Sell checklist is confirmed.";
           statusClass = "sell";
+        } else if (buyPassed >= 3 && buyPassed > sellPassed && exitPassed < 3) {
+          statusText = "Watchlist Only: buy conditions are mostly aligned, but execution is not cleared yet.";
+          statusClass = "wait";
+        } else if (sellPassed >= 3 && sellPassed > buyPassed && exitPassed < 3) {
+          statusText = "Watchlist Only: sell conditions are mostly aligned, but execution is not cleared yet.";
+          statusClass = "wait";
         } else if (exitPassed >= 2) {
           statusText = "Safer to exit or stand aside. The checklist is flagging risk or indecision.";
           statusClass = "exit";
