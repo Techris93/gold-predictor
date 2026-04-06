@@ -1,12 +1,6 @@
 {
   "windows": [
     {
-      "name": "NFP / Employment Situation",
-      "start": "2026-04-03T12:00:00Z",
-      "end": "2026-04-03T13:45:00Z",
-      "reason": "Employment Situation release date from the St. Louis Fed FRED release calendar for April 3, 2026; FRED notes dates are published by the source."
-    },
-    {
       "name": "CPI",
       "start": "2026-04-10T12:00:00Z",
       "end": "2026-04-10T13:45:00Z",
@@ -131,6 +125,12 @@
       "start": "2026-09-16T17:15:00Z",
       "end": "2026-09-16T19:30:00Z",
       "reason": "Federal Reserve FOMC statement and press conference window for September 16, 2026."
+    },
+    {
+      "name": "NFP / Employment Situation",
+      "start": "2026-10-02T12:00:00Z",
+      "end": "2026-10-02T13:45:00Z",
+      "reason": "Employment Situation release date from the St. Louis Fed FRED release calendar for October 2, 2026; FRED notes dates are published by the source."
     }
   ]
 }
