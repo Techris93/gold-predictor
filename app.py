@@ -177,6 +177,53 @@ def _summarize_changes_for_push(changes):
     return " | ".join(parts) if parts else "Execution permission changed"
 
 
+def _normalize_notification_text(text):
+    return re.sub(r"[^a-z0-9]+", " ", str(text or "").lower()).strip()
+
+
+def _should_append_trade_summary(permission_text, trade_summary):
+    permission_text = str(permission_text or "").strip()
+    trade_summary = str(trade_summary or "").strip()
+    if not trade_summary:
+        return False
+    if not permission_text:
+        return True
+
+    permission_norm = _normalize_notification_text(permission_text)
+    trade_norm = _normalize_notification_text(trade_summary)
+    if not trade_norm or trade_norm == permission_norm:
+        return False
+
+    if trade_norm in permission_norm or permission_norm in trade_norm:
+        return False
+
+    tracked_phrases = (
+        "bullish",
+        "bearish",
+        "buy",
+        "sell",
+        "watchlist",
+        "no trade",
+        "exit",
+        "tradeability is low",
+        "low tradeability",
+        "regime is unstable",
+        "unstable regime",
+        "range regime",
+        "event risk",
+        "transition regime",
+        "no clean trigger",
+        "conditions are not clean enough",
+        "execution is blocked",
+    )
+    permission_markers = {phrase for phrase in tracked_phrases if phrase in permission_text.lower()}
+    trade_markers = {phrase for phrase in tracked_phrases if phrase in trade_summary.lower()}
+    if trade_markers and trade_markers.issubset(permission_markers):
+        return False
+
+    return True
+
+
 def _telegram_enabled():
     return bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)
 
@@ -198,16 +245,17 @@ def _send_telegram_notification(changes, verdict, confidence, trade_guidance, de
     permission_text = ""
     if isinstance(execution_permission, dict):
         permission_text = str(execution_permission.get("text") or "").strip()
+    has_permission_diff = isinstance(changes, dict) and "execution_permission" in changes
 
     lines = [
         title,
         change_summary,
     ]
-    if permission_text:
+    if permission_text and not has_permission_diff:
         lines.append(permission_text)
     else:
         lines.append(f"Verdict: {verdict} ({confidence}%)")
-    if trade_summary:
+    if _should_append_trade_summary(permission_text, trade_summary):
         lines.append(trade_summary)
 
     payload = {
@@ -247,12 +295,13 @@ def _send_web_push_notifications(changes, verdict, confidence, trade_guidance, d
     permission_text = ""
     if isinstance(execution_permission, dict):
         permission_text = str(execution_permission.get("text") or "").strip()
+    has_permission_diff = isinstance(changes, dict) and "execution_permission" in changes
     body_parts = [change_summary]
-    if permission_text:
+    if permission_text and not has_permission_diff:
         body_parts.append(permission_text)
     else:
         body_parts.append(f"Verdict: {verdict} ({confidence}%)")
-    if trade_summary:
+    if _should_append_trade_summary(permission_text, trade_summary):
         body_parts.append(trade_summary)
     body = " | ".join(part for part in body_parts if part)
     payload = {
