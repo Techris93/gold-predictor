@@ -62,7 +62,6 @@ ALERT_COOLDOWN_SECONDS = _read_int_env("ALERT_COOLDOWN_SECONDS", 900, 0)
 DECISION_FLIP_MIN_HOLD_SECONDS = _read_int_env("DECISION_FLIP_MIN_HOLD_SECONDS", 300, 0)
 NOTIFY_EXIT_READS = _read_bool_env("NOTIFY_EXIT_READS", True)
 PUSH_EXCLUDED_FIELDS = {
-    "candle_pattern",
     "rsi_14",
     "ema_20",
     "ema_50",
@@ -83,6 +82,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 TELEGRAM_THREAD_ID = os.getenv("TELEGRAM_THREAD_ID", "").strip()
 CHANGE_SUMMARY_ORDER = [
     "market_structure",
+    "candle_pattern",
     "execution_permission",
 ]
 def _load_subscriptions():
@@ -164,6 +164,7 @@ def _filter_notification_changes(changes):
 def _summarize_changes_for_push(changes):
     labels = {
         "market_structure": "Market Structure",
+        "candle_pattern": "Candle Pattern",
         "execution_permission": "Execution Permission",
     }
     ordered_keys = [key for key in CHANGE_SUMMARY_ORDER if key in changes]
@@ -175,6 +176,25 @@ def _summarize_changes_for_push(changes):
         cur = val.get("current") if isinstance(val, dict) else None
         parts.append(f"{labels.get(key, key)}: {prev} -> {cur}")
     return " | ".join(parts) if parts else "Execution permission changed"
+
+
+def _notification_title_for_changes(changes):
+    changed_keys = set((changes or {}).keys())
+    has_structure = "market_structure" in changed_keys
+    has_pattern = "candle_pattern" in changed_keys
+    has_permission = "execution_permission" in changed_keys
+
+    if has_structure and not has_pattern and not has_permission:
+        return "XAUUSD Market Structure Changed"
+    if has_pattern and not has_structure and not has_permission:
+        return "XAUUSD Candle Pattern Changed"
+    if has_permission and not has_structure and not has_pattern:
+        return "XAUUSD Execution Permission Changed"
+    if has_structure and has_pattern and not has_permission:
+        return "XAUUSD Price Action Changed"
+    if has_permission and (has_structure or has_pattern):
+        return "XAUUSD Structure / Execution Changed"
+    return "XAUUSD Execution Permission Changed"
 
 
 def _normalize_notification_text(text):
@@ -236,7 +256,7 @@ def _send_telegram_notification(changes, verdict, confidence, trade_guidance, de
     if not _telegram_enabled():
         return
 
-    title = "XAUUSD Execution Permission Changed"
+    title = _notification_title_for_changes(changes)
 
     change_summary = _summarize_changes_for_push(changes)
     trade_summary = ""
@@ -286,7 +306,7 @@ def _send_web_push_notifications(changes, verdict, confidence, trade_guidance, d
     if not subscriptions:
         return
 
-    title = "XAUUSD Execution Permission Changed"
+    title = _notification_title_for_changes(changes)
 
     change_summary = _summarize_changes_for_push(changes)
     trade_summary = ""
@@ -727,6 +747,7 @@ def _extract_indicator_snapshot(payload):
     trade_guidance = payload.get("TradeGuidance", {}) if isinstance(payload, dict) else {}
     return {
         "market_structure": (pa.get("structure") if isinstance(pa, dict) else None),
+        "candle_pattern": (pa.get("latest_candle_pattern") if isinstance(pa, dict) else None),
         "execution_permission": ((payload.get("ExecutionPermission") or {}).get("text")),
     }
 
@@ -814,18 +835,21 @@ def _indicator_monitor_loop():
                     ):
                         alert_state = _load_json_file(
                             ALERT_STATE_FILE,
-                            {"last_execution_permission": "", "last_market_structure": "", "last_alert_ts": 0},
+                            {"last_execution_permission": "", "last_market_structure": "", "last_candle_pattern": "", "last_alert_ts": 0},
                         )
                         decision_payload = payload.get("DecisionStatus") or {}
                         execution_permission_payload = payload.get("ExecutionPermission") or {}
                         execution_permission = str(execution_permission_payload.get("text") or "")
                         permission_status = str(execution_permission_payload.get("status") or "no_trade")
                         market_structure = str(((payload.get("TechnicalAnalysis") or {}).get("price_action") or {}).get("structure") or "")
+                        candle_pattern = str(((payload.get("TechnicalAnalysis") or {}).get("price_action") or {}).get("latest_candle_pattern") or "")
                         decision_confirmed = bool(decision_payload.get("confirmed"))
                         market_structure_changed = "market_structure" in notification_changes and bool(market_structure)
+                        candle_pattern_changed = "candle_pattern" in notification_changes and bool(candle_pattern)
                         execution_permission_changed = "execution_permission" in notification_changes and bool(execution_permission)
                         should_alert = bool(
                             market_structure_changed
+                            or candle_pattern_changed
                             or (execution_permission_changed and decision_confirmed)
                         )
                         if should_alert and permission_status == "exit_recommended":
@@ -833,24 +857,32 @@ def _indicator_monitor_loop():
                         if should_alert:
                             last_execution_permission = str(alert_state.get("last_execution_permission", ""))
                             last_market_structure = str(alert_state.get("last_market_structure", ""))
+                            last_candle_pattern = str(alert_state.get("last_candle_pattern", ""))
                             last_alert_ts = int(alert_state.get("last_alert_ts", 0) or 0)
                             duplicate_execution = execution_permission_changed and execution_permission == last_execution_permission
                             duplicate_structure = market_structure_changed and market_structure == last_market_structure
-                            if (duplicate_execution or duplicate_structure) and (now_ts - last_alert_ts) < ALERT_COOLDOWN_SECONDS:
+                            duplicate_pattern = candle_pattern_changed and candle_pattern == last_candle_pattern
+                            if (duplicate_execution or duplicate_structure or duplicate_pattern) and (now_ts - last_alert_ts) < ALERT_COOLDOWN_SECONDS:
                                 should_alert = False
                         if not should_alert:
                             last_snapshot = current_snapshot
                             continue
 
-                        if market_structure_changed and not execution_permission_changed:
+                        if market_structure_changed and not candle_pattern_changed and not execution_permission_changed:
                             alert_title = "Market Structure Changed"
                             alert_message = "Market structure changed"
-                        elif execution_permission_changed and not market_structure_changed:
+                        elif candle_pattern_changed and not market_structure_changed and not execution_permission_changed:
+                            alert_title = "Candle Pattern Changed"
+                            alert_message = "Candle pattern changed"
+                        elif execution_permission_changed and not market_structure_changed and not candle_pattern_changed:
                             alert_title = "Execution Permission Changed"
                             alert_message = "Execution permission changed"
+                        elif (market_structure_changed or candle_pattern_changed) and not execution_permission_changed:
+                            alert_title = "Price Action Changed"
+                            alert_message = "Price action changed"
                         else:
-                            alert_title = "Market Structure / Execution Changed"
-                            alert_message = "Market structure or execution permission changed"
+                            alert_title = "Structure / Execution Changed"
+                            alert_message = "Price action or execution permission changed"
 
                         if _monitor_state["clients"] > 0:
                             socketio.emit(
@@ -889,6 +921,7 @@ def _indicator_monitor_loop():
                             {
                                 "last_execution_permission": execution_permission,
                                 "last_market_structure": market_structure,
+                                "last_candle_pattern": candle_pattern,
                                 "last_alert_ts": now_ts,
                             },
                         )
