@@ -33,7 +33,8 @@ PROMOTION_DECISION_FILE = os.path.join(BASE_DIR, "data", "swarm", "promotion_dec
 CONFIDENCE_CALIBRATION_FILE = os.path.join(BASE_DIR, "tools", "reports", "confidence_calibration.json")
 HISTORICAL_CACHE_DIR = os.path.join(BASE_DIR, "data", "swarm", "cache")
 
-NOTIFY_TELEGRAM_TARGET = os.environ.get("GOLD_PREDICTOR_NOTIFY_TELEGRAM", "623118122")
+ENABLE_TELEGRAM_NOTIFICATIONS = os.environ.get("GOLD_PREDICTOR_ENABLE_TELEGRAM", "").strip().lower() in {"1", "true", "yes", "on"}
+NOTIFY_TELEGRAM_TARGET = os.environ.get("GOLD_PREDICTOR_NOTIFY_TELEGRAM", "623118122") if ENABLE_TELEGRAM_NOTIFICATIONS else ""
 NOTIFY_CHANNELS = [
     ("telegram", NOTIFY_TELEGRAM_TARGET),
 ]
