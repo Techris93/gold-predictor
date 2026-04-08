@@ -478,6 +478,9 @@ def get_technical_analysis():
             candle_pattern=candle_pattern,
             event_risk=result["event_risk"],
             cross_asset_context=cross_asset_context,
+            expansion_watch_threshold=float(ACTIVE_STRATEGY_PARAMS.get("expansion_watch_threshold", 48.0)),
+            high_breakout_threshold=float(ACTIVE_STRATEGY_PARAMS.get("high_breakout_threshold", 64.0)),
+            directional_expansion_threshold=float(ACTIVE_STRATEGY_PARAMS.get("directional_expansion_threshold", 78.0)),
         )
 
         LAST_SUCCESSFUL_TA = dict(result)

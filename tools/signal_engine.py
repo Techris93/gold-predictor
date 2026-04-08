@@ -774,5 +774,8 @@ def build_ta_payload_from_row(row, params=None):
             event_risk={
                 "active": bool(row.get("EVENT_ACTIVE", 0)),
             },
+            expansion_watch_threshold=float(strategy_params.get("expansion_watch_threshold", 48.0)),
+            high_breakout_threshold=float(strategy_params.get("high_breakout_threshold", 64.0)),
+            directional_expansion_threshold=float(strategy_params.get("directional_expansion_threshold", 78.0)),
         ),
     }

@@ -263,6 +263,9 @@ def compute_event_regime_snapshot(
     candle_pattern: str = "None",
     event_risk: dict | None = None,
     cross_asset_context: dict | None = None,
+    expansion_watch_threshold: float = 48.0,
+    high_breakout_threshold: float = 64.0,
+    directional_expansion_threshold: float = 78.0,
 ) -> dict:
     get_value = row.get if hasattr(row, "get") else lambda key, default=None: default
 
@@ -417,13 +420,13 @@ def compute_event_regime_snapshot(
     expected_range_expansion = round(atr_14 * (1.0 + max(0.0, atr_expansion_ratio - 1.0) + (0.35 if squeeze_on else 0.0)), 2)
 
     warning_ladder = "Normal"
-    if expansion_probability_30m >= 82 or (bar_velocity >= 1.1 and atr_expansion_ratio >= 1.2):
+    if expansion_probability_30m >= max(directional_expansion_threshold + 10.0, 80.0) or (bar_velocity >= 1.1 and atr_expansion_ratio >= 1.2):
         warning_ladder = "Active Momentum Event"
-    elif expansion_probability_60m >= 78 and breakout_bias != "Neutral":
+    elif expansion_probability_60m >= directional_expansion_threshold and breakout_bias != "Neutral":
         warning_ladder = "Directional Expansion Likely"
-    elif expansion_probability_60m >= 64:
+    elif expansion_probability_60m >= high_breakout_threshold:
         warning_ladder = "High Breakout Risk"
-    elif expansion_probability_60m >= 48:
+    elif expansion_probability_60m >= expansion_watch_threshold:
         warning_ladder = "Expansion Watch"
 
     event_regime = "normal"
