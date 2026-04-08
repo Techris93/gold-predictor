@@ -639,6 +639,165 @@ def _evaluate_execution_permission(decision_status, market_state):
     }
 
 
+def _evaluate_trade_playbook(decision_status, execution_permission, market_state, regime_state, trade_guidance):
+    decision_status = decision_status or {}
+    execution_permission = execution_permission or {}
+    market_state = market_state or {}
+    regime_state = regime_state or {}
+    trade_guidance = trade_guidance or {}
+
+    warning_ladder = str(regime_state.get("warning_ladder") or "Normal")
+    event_regime = str(regime_state.get("event_regime") or "normal")
+    breakout_bias = str(regime_state.get("breakout_bias") or "Neutral")
+    directional_bias = str(market_state.get("directional_bias") or "Neutral")
+    action_state = str(market_state.get("action_state") or "WAIT")
+    execution_status = str(execution_permission.get("status") or "no_trade")
+    decision_kind = str(decision_status.get("status") or "wait")
+    buy_level = str(trade_guidance.get("buyLevel") or "Weak")
+    sell_level = str(trade_guidance.get("sellLevel") or "Weak")
+    exit_level = str(trade_guidance.get("exitLevel") or "Low")
+
+    bullish_alignment = breakout_bias == "Bullish" and directional_bias == "Bullish"
+    bearish_alignment = breakout_bias == "Bearish" and directional_bias == "Bearish"
+    directional_alignment = bullish_alignment or bearish_alignment
+    active_long = action_state == "LONG_ACTIVE"
+    active_short = action_state == "SHORT_ACTIVE"
+    active_position = active_long or active_short
+    active_position_aligned = (
+        (active_long and breakout_bias == "Bullish")
+        or (active_short and breakout_bias == "Bearish")
+    )
+    reversal_risk = event_regime == "panic_reversal" or (
+        active_long and breakout_bias == "Bearish"
+    ) or (
+        active_short and breakout_bias == "Bullish"
+    )
+
+    stage = "stand_aside"
+    title = "Stand Aside"
+    text = "Let the normal directional engine do the work. No large-move setup needs action yet."
+    why = []
+    entry_readiness = "low"
+    exit_urgency = "low"
+
+    if execution_status == "exit_recommended" or reversal_risk:
+        stage = "exit"
+        title = "Exit / Reduce"
+        text = "Momentum or reversal risk is now working against the current position. Protect capital first."
+        why = [
+            f"Event regime: {event_regime.replace('_', ' ')}",
+            f"Breakout bias: {breakout_bias}",
+            f"Execution: {execution_permission.get('text') or 'Exit recommended'}",
+        ]
+        entry_readiness = "blocked"
+        exit_urgency = "high"
+    elif active_position and warning_ladder == "Active Momentum Event" and active_position_aligned:
+        stage = "hold"
+        title = "Hold Winner"
+        text = "Momentum is active and still aligned with the position. Favor holding over premature exits."
+        why = [
+            f"Warning ladder: {warning_ladder}",
+            f"Breakout bias: {breakout_bias}",
+            f"Action state: {action_state.replace('_', ' ')}",
+        ]
+        entry_readiness = "closed"
+        exit_urgency = "low"
+    elif warning_ladder == "Directional Expansion Likely":
+        if directional_alignment and execution_status == "entry_allowed" and decision_kind in {"buy", "sell"}:
+            stage = "enter"
+            title = "Enter With Confirmation"
+            text = "Large-move risk and the directional engine are aligned. This is the best early-entry state."
+            why = [
+                f"Breakout bias and directional bias align: {breakout_bias}",
+                f"Execution: {execution_permission.get('text') or 'Entry allowed'}",
+                f"Checklist status: {decision_status.get('text') or decision_kind}",
+            ]
+            entry_readiness = "high"
+            exit_urgency = "low"
+        elif directional_alignment:
+            stage = "stalk_entry"
+            title = "Stalk Entry"
+            text = "Directional expansion looks likely, but execution confirmation is still incomplete. Prepare trigger levels."
+            why = [
+                f"Warning ladder: {warning_ladder}",
+                f"Bias alignment: {breakout_bias}",
+                f"Execution: {execution_permission.get('text') or 'Watchlist only'}",
+            ]
+            entry_readiness = "medium"
+            exit_urgency = "low"
+        else:
+            stage = "prepare"
+            title = "Prepare For Expansion"
+            text = "Expansion risk is elevated, but direction is not aligned yet. Do not force an entry."
+            why = [
+                f"Warning ladder: {warning_ladder}",
+                f"Breakout bias: {breakout_bias}",
+                f"Directional bias: {directional_bias}",
+            ]
+            entry_readiness = "guarded"
+            exit_urgency = "low"
+    elif warning_ladder == "High Breakout Risk":
+        stage = "stalk_entry" if directional_alignment else "prepare"
+        title = "Stalk Breakout" if directional_alignment else "Prepare For Breakout"
+        text = (
+            "Move risk is elevated. Stalk the aligned side, but wait for the directional engine to fully confirm."
+            if directional_alignment
+            else "Move risk is elevated without a clean directional stack yet. Mark levels and stay patient."
+        )
+        why = [
+            f"Warning ladder: {warning_ladder}",
+            f"Breakout bias: {breakout_bias}",
+            f"Directional bias: {directional_bias}",
+        ]
+        entry_readiness = "medium" if directional_alignment else "guarded"
+        exit_urgency = "low"
+    elif warning_ladder == "Expansion Watch":
+        stage = "prepare"
+        title = "Prepare"
+        text = "Compression and regime context suggest a move may be forming. Prepare scenarios rather than entering early."
+        why = [
+            f"Event regime: {event_regime.replace('_', ' ')}",
+            f"Breakout bias: {breakout_bias}",
+        ]
+        entry_readiness = "guarded"
+        exit_urgency = "low"
+    elif execution_status == "entry_allowed" and decision_kind in {"buy", "sell"}:
+        stage = "enter"
+        title = "Enter On Normal Flow"
+        text = "The directional engine is already clear enough to trade, even without a major event regime."
+        why = [
+            f"Execution: {execution_permission.get('text') or 'Entry allowed'}",
+            f"Buy/Sell setup: {buy_level}/{sell_level}",
+            f"Exit warning: {exit_level}",
+        ]
+        entry_readiness = "high"
+        exit_urgency = "low"
+    elif execution_status == "watchlist_only":
+        stage = "prepare"
+        title = "Watchlist Only"
+        text = "The setup is forming, but execution remains blocked by tradeability, trigger quality, or regime quality."
+        why = [
+            f"Execution: {execution_permission.get('text') or 'Watchlist only'}",
+            f"Warning ladder: {warning_ladder}",
+        ]
+        entry_readiness = "guarded"
+        exit_urgency = "low"
+
+    return {
+        "stage": stage,
+        "title": title,
+        "text": text,
+        "why": why,
+        "entryReadiness": entry_readiness,
+        "exitUrgency": exit_urgency,
+        "warningLadder": warning_ladder,
+        "eventRegime": event_regime,
+        "breakoutBias": breakout_bias,
+        "directionalBias": directional_bias,
+        "alignment": "aligned" if directional_alignment else "mixed",
+    }
+
+
 def _stabilize_decision_status(decision_status):
     raw_status = str((decision_status or {}).get("status") or "wait")
     raw_text = str((decision_status or {}).get("text") or "Stand aside.")
@@ -838,6 +997,13 @@ def _build_prediction_response():
         decision_status=decision_status,
         market_state=prediction.get("MarketState", {}),
     )
+    trade_playbook = _evaluate_trade_playbook(
+        decision_status=decision_status,
+        execution_permission=execution_permission,
+        market_state=prediction.get("MarketState", {}),
+        regime_state=prediction.get("RegimeState", {}),
+        trade_guidance=prediction.get("TradeGuidance", {}),
+    )
 
     return {
         "status": "success",
@@ -849,6 +1015,7 @@ def _build_prediction_response():
         "RegimeState": prediction.get("RegimeState", {}),
         "DecisionStatus": decision_status,
         "ExecutionPermission": execution_permission,
+        "TradePlaybook": trade_playbook,
     }, 200
 
 

@@ -405,6 +405,38 @@
         color: var(--neutral);
       }
 
+      .decision-status-value.prepare {
+        color: var(--gold-primary);
+      }
+
+      .decision-status-value.hold {
+        color: var(--bullish);
+      }
+
+      .decision-status-value.stalk_entry {
+        color: #f2c94c;
+      }
+
+      .decision-status-value.enter {
+        color: var(--bullish);
+      }
+
+      .decision-status-value.stand_aside {
+        color: var(--neutral);
+      }
+
+      .playbook-why {
+        list-style: none;
+        display: grid;
+        gap: 0.38rem;
+      }
+
+      .playbook-why li {
+        color: var(--text-muted);
+        font-size: 0.8rem;
+        line-height: 1.35;
+      }
+
       .decision-points strong {
         color: var(--text-main);
         font-weight: 600;
@@ -789,6 +821,21 @@
             <div class="decision-status-value wait" id="execution-permission">
               Evaluating market state...
             </div>
+          </div>
+          <div class="decision-status" style="margin-top: 0.85rem;">
+            <div class="decision-status-label">Trade Playbook</div>
+            <div class="decision-status-value wait" id="trade-playbook-stage">
+              Building combined entry/exit playbook...
+            </div>
+          </div>
+          <div class="decision-block" style="margin-bottom: 0.85rem;">
+            <div class="decision-heading exit">Playbook Read</div>
+            <div class="metric-value" id="trade-playbook-text" style="font-size: 0.84rem; line-height: 1.5; font-weight: 500;">
+              Waiting for event-regime and directional alignment...
+            </div>
+            <ul class="playbook-why" id="trade-playbook-why" style="margin-top: 0.75rem;">
+              <li>Playbook rationale will appear here once the market state is loaded.</li>
+            </ul>
           </div>
           <div class="decision-grid">
             <div class="decision-block">
@@ -1730,6 +1777,34 @@
 
           executionPermissionEl.innerText = permissionText;
           executionPermissionEl.className = `decision-status-value ${permissionClass}`;
+        }
+
+        const playbook =
+          data.TradePlaybook && typeof data.TradePlaybook === "object"
+            ? data.TradePlaybook
+            : {};
+        const playbookStageEl = document.getElementById("trade-playbook-stage");
+        if (playbookStageEl) {
+          const playbookStage = playbook.stage || "stand_aside";
+          const playbookTitle = playbook.title || "Stand Aside";
+          playbookStageEl.innerText = playbookTitle;
+          playbookStageEl.className = `decision-status-value ${playbookStage}`;
+        }
+
+        const playbookTextEl = document.getElementById("trade-playbook-text");
+        if (playbookTextEl) {
+          playbookTextEl.innerText =
+            playbook.text || "No combined playbook is available yet.";
+        }
+
+        const playbookWhyEl = document.getElementById("trade-playbook-why");
+        if (playbookWhyEl) {
+          const whyItems = Array.isArray(playbook.why) ? playbook.why : [];
+          playbookWhyEl.innerHTML = whyItems.length
+            ? whyItems
+                .map((item) => `<li>${item}</li>`)
+                .join("")
+            : "<li>No playbook rationale is available yet.</li>";
         }
 
         suppressNextUiChangeNotification = false;
