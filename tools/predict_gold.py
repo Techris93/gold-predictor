@@ -92,8 +92,15 @@ def _load_json_config(relative_path, fallback):
 
 ACTIVE_STRATEGY_PARAMS = _load_json_config("config/strategy_params.json", DEFAULT_STRATEGY_PARAMS)
 LAST_SUCCESSFUL_TA = None
+LAST_TA_REFRESH_TS = 0
+LAST_CROSS_ASSET_CONTEXT = None
+LAST_CROSS_ASSET_TS = 0
+MTF_TREND_CACHE = {}
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 EVENT_RISK_CONFIG_PATH = os.path.join(BASE_DIR, "config", "event_risk_windows.json")
+TECHNICAL_ANALYSIS_CACHE_SECONDS = max(5, int(os.getenv("TECHNICAL_ANALYSIS_CACHE_SECONDS", "20")))
+MTF_CACHE_SECONDS = max(15, int(os.getenv("MTF_CACHE_SECONDS", "45")))
+CROSS_ASSET_CACHE_SECONDS = max(30, int(os.getenv("CROSS_ASSET_CACHE_SECONDS", "90")))
 
 
 def _calc_trend_from_close(close_series):
@@ -125,6 +132,12 @@ def _fetch_td_trend(symbol, interval, outputsize=200):
     if not td_client:
         return {"trend": "Neutral", "data_points": 0, "source": "none"}
 
+    cache_key = (str(symbol), str(interval), int(outputsize))
+    now_ts = int(time.time())
+    cached = MTF_TREND_CACHE.get(cache_key)
+    if cached and (now_ts - int(cached.get("ts", 0))) < MTF_CACHE_SECONDS:
+        return dict(cached.get("payload", {}))
+
     try:
         ts = td_client.time_series(symbol=symbol, interval=interval, outputsize=outputsize)
         df_tf = ts.as_pandas()
@@ -132,13 +145,31 @@ def _fetch_td_trend(symbol, interval, outputsize=200):
             return {"trend": "Neutral", "data_points": 0, "source": "twelvedata"}
 
         close = pd.to_numeric(df_tf['close'], errors='coerce').dropna().sort_index()
-        return {
+        payload = {
             "trend": _calc_trend_from_close(close),
             "data_points": int(len(close)),
             "source": "twelvedata",
         }
+        MTF_TREND_CACHE[cache_key] = {"ts": now_ts, "payload": payload}
+        return payload
     except Exception:
         return {"trend": "Neutral", "data_points": 0, "source": "twelvedata"}
+
+
+def _get_cached_cross_asset_context():
+    global LAST_CROSS_ASSET_CONTEXT, LAST_CROSS_ASSET_TS
+    now_ts = int(time.time())
+    if (
+        isinstance(LAST_CROSS_ASSET_CONTEXT, dict)
+        and (now_ts - LAST_CROSS_ASSET_TS) < CROSS_ASSET_CACHE_SECONDS
+    ):
+        return dict(LAST_CROSS_ASSET_CONTEXT)
+
+    context = fetch_cross_asset_context()
+    if isinstance(context, dict):
+        LAST_CROSS_ASSET_CONTEXT = dict(context)
+        LAST_CROSS_ASSET_TS = now_ts
+    return context
 
 
 def _fetch_mtf_trends(td_symbol, h1_trend):
@@ -280,7 +311,17 @@ def _support_resistance_snapshot(df, latest, prev):
 
 def get_technical_analysis():
     """Fetches gold price/technical data from Twelve Data only."""
-    global LAST_SUCCESSFUL_TA
+    global LAST_SUCCESSFUL_TA, LAST_TA_REFRESH_TS
+    now_ts = int(time.time())
+    if (
+        isinstance(LAST_SUCCESSFUL_TA, dict)
+        and (now_ts - LAST_TA_REFRESH_TS) < TECHNICAL_ANALYSIS_CACHE_SECONDS
+    ):
+        cached = dict(LAST_SUCCESSFUL_TA)
+        cached["served_from_cache"] = True
+        cached["cache_age_seconds"] = max(0, now_ts - LAST_TA_REFRESH_TS)
+        return cached
+
     td_symbol = canonical_gold_symbol("XAU/USD")
     td_client = get_td_client()
 
@@ -295,7 +336,7 @@ def get_technical_analysis():
             cached = dict(LAST_SUCCESSFUL_TA)
             cached["stale_data"] = True
             cached["data_warning"] = error_message
-            cached["fallback_served_at"] = int(time.time())
+            cached["fallback_served_at"] = now_ts
             cached["data_source"] = f"{cached.get('data_source', 'Twelve Data')} (Cached Fallback)"
             return cached
         return {"error": error_message}
@@ -426,8 +467,9 @@ def get_technical_analysis():
 
         result = {
             "data_source": data_source,
-            "last_updated_at": int(time.time()),
+            "last_updated_at": now_ts,
             "stale_data": False,
+            "served_from_cache": False,
             "current_price": round(latest['Close'], 2),
             "ema_trend": ema_trend,
             "ema_20": round(latest['EMA_20'], 2),
@@ -468,7 +510,7 @@ def get_technical_analysis():
         }
         df = annotate_event_regime_features(df, event_windows=_load_event_risk_windows())
         latest = df.iloc[-1]
-        cross_asset_context = fetch_cross_asset_context()
+        cross_asset_context = _get_cached_cross_asset_context()
         result["cross_asset_context"] = cross_asset_context
         result["event_regime"] = compute_event_regime_snapshot(
             latest,
@@ -484,6 +526,7 @@ def get_technical_analysis():
         )
 
         LAST_SUCCESSFUL_TA = dict(result)
+        LAST_TA_REFRESH_TS = now_ts
         return result
     except Exception as e:
         return _cached_ta(str(e))
