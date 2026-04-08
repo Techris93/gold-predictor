@@ -84,6 +84,8 @@ ENABLE_TELEGRAM_NOTIFICATIONS = _read_bool_env("GOLD_PREDICTOR_ENABLE_TELEGRAM",
 CHANGE_SUMMARY_ORDER = [
     "market_structure",
     "candle_pattern",
+    "verdict",
+    "confidence_bucket",
     "execution_permission",
 ]
 def _load_subscriptions():
@@ -166,6 +168,8 @@ def _summarize_changes_for_push(changes):
     labels = {
         "market_structure": "Market Structure",
         "candle_pattern": "Candle Pattern",
+        "verdict": "Verdict",
+        "confidence_bucket": "AI Confidence",
         "execution_permission": "Execution Permission",
     }
     ordered_keys = [key for key in CHANGE_SUMMARY_ORDER if key in changes]
@@ -183,23 +187,47 @@ def _notification_title_for_changes(changes):
     changed_keys = set((changes or {}).keys())
     has_structure = "market_structure" in changed_keys
     has_pattern = "candle_pattern" in changed_keys
+    has_verdict = "verdict" in changed_keys
+    has_confidence = "confidence_bucket" in changed_keys
     has_permission = "execution_permission" in changed_keys
 
+    if has_verdict and not has_structure and not has_pattern and not has_permission and not has_confidence:
+        return "XAUUSD Verdict Changed"
+    if has_confidence and not has_structure and not has_pattern and not has_permission and not has_verdict:
+        return "XAUUSD Confidence Changed"
     if has_structure and not has_pattern and not has_permission:
         return "XAUUSD Market Structure Changed"
     if has_pattern and not has_structure and not has_permission:
         return "XAUUSD Candle Pattern Changed"
     if has_permission and not has_structure and not has_pattern:
         return "XAUUSD Execution Permission Changed"
+    if (has_verdict or has_confidence) and not has_structure and not has_pattern and not has_permission:
+        return "XAUUSD State Changed"
     if has_structure and has_pattern and not has_permission:
         return "XAUUSD Price Action Changed"
-    if has_permission and (has_structure or has_pattern):
+    if has_permission and (has_structure or has_pattern or has_verdict or has_confidence):
         return "XAUUSD Structure / Execution Changed"
+    if has_verdict or has_confidence:
+        return "XAUUSD State Changed"
     return "XAUUSD Execution Permission Changed"
 
 
 def _normalize_notification_text(text):
     return re.sub(r"[^a-z0-9]+", " ", str(text or "").lower()).strip()
+
+
+def _confidence_bucket(confidence):
+    try:
+        value = int(confidence or 0)
+    except Exception:
+        value = 0
+    if value >= 85:
+        return "Very High"
+    if value >= 70:
+        return "High"
+    if value >= 60:
+        return "Guarded"
+    return "Low"
 
 
 def _should_append_trade_summary(permission_text, trade_summary):
@@ -365,6 +393,7 @@ def _is_material_change(changes):
 
     always_material = {
         "verdict",
+        "confidence_bucket",
         "trend",
         "market_structure",
         "market_regime",
@@ -749,6 +778,8 @@ def _extract_indicator_snapshot(payload):
     return {
         "market_structure": (pa.get("structure") if isinstance(pa, dict) else None),
         "candle_pattern": (pa.get("latest_candle_pattern") if isinstance(pa, dict) else None),
+        "verdict": payload.get("verdict"),
+        "confidence_bucket": _confidence_bucket(payload.get("confidence")),
         "execution_permission": ((payload.get("ExecutionPermission") or {}).get("text")),
     }
 
@@ -836,7 +867,14 @@ def _indicator_monitor_loop():
                     ):
                         alert_state = _load_json_file(
                             ALERT_STATE_FILE,
-                            {"last_execution_permission": "", "last_market_structure": "", "last_candle_pattern": "", "last_alert_ts": 0},
+                            {
+                                "last_execution_permission": "",
+                                "last_market_structure": "",
+                                "last_candle_pattern": "",
+                                "last_verdict": "",
+                                "last_confidence_bucket": "",
+                                "last_alert_ts": 0,
+                            },
                         )
                         decision_payload = payload.get("DecisionStatus") or {}
                         execution_permission_payload = payload.get("ExecutionPermission") or {}
@@ -844,13 +882,19 @@ def _indicator_monitor_loop():
                         permission_status = str(execution_permission_payload.get("status") or "no_trade")
                         market_structure = str(((payload.get("TechnicalAnalysis") or {}).get("price_action") or {}).get("structure") or "")
                         candle_pattern = str(((payload.get("TechnicalAnalysis") or {}).get("price_action") or {}).get("latest_candle_pattern") or "")
+                        verdict = str(payload.get("verdict") or "")
+                        confidence_bucket = _confidence_bucket(payload.get("confidence"))
                         decision_confirmed = bool(decision_payload.get("confirmed"))
                         market_structure_changed = "market_structure" in notification_changes and bool(market_structure)
                         candle_pattern_changed = "candle_pattern" in notification_changes and bool(candle_pattern)
+                        verdict_changed = "verdict" in notification_changes and bool(verdict)
+                        confidence_changed = "confidence_bucket" in notification_changes and bool(confidence_bucket)
                         execution_permission_changed = "execution_permission" in notification_changes and bool(execution_permission)
                         should_alert = bool(
                             market_structure_changed
                             or candle_pattern_changed
+                            or verdict_changed
+                            or confidence_changed
                             or (execution_permission_changed and decision_confirmed)
                         )
                         if should_alert and permission_status == "exit_recommended":
@@ -859,11 +903,15 @@ def _indicator_monitor_loop():
                             last_execution_permission = str(alert_state.get("last_execution_permission", ""))
                             last_market_structure = str(alert_state.get("last_market_structure", ""))
                             last_candle_pattern = str(alert_state.get("last_candle_pattern", ""))
+                            last_verdict = str(alert_state.get("last_verdict", ""))
+                            last_confidence_bucket = str(alert_state.get("last_confidence_bucket", ""))
                             last_alert_ts = int(alert_state.get("last_alert_ts", 0) or 0)
                             duplicate_execution = execution_permission_changed and execution_permission == last_execution_permission
                             duplicate_structure = market_structure_changed and market_structure == last_market_structure
                             duplicate_pattern = candle_pattern_changed and candle_pattern == last_candle_pattern
-                            if (duplicate_execution or duplicate_structure or duplicate_pattern) and (now_ts - last_alert_ts) < ALERT_COOLDOWN_SECONDS:
+                            duplicate_verdict = verdict_changed and verdict == last_verdict
+                            duplicate_confidence = confidence_changed and confidence_bucket == last_confidence_bucket
+                            if (duplicate_execution or duplicate_structure or duplicate_pattern or duplicate_verdict or duplicate_confidence) and (now_ts - last_alert_ts) < ALERT_COOLDOWN_SECONDS:
                                 should_alert = False
                         if not should_alert:
                             last_snapshot = current_snapshot
@@ -923,6 +971,8 @@ def _indicator_monitor_loop():
                                 "last_execution_permission": execution_permission,
                                 "last_market_structure": market_structure,
                                 "last_candle_pattern": candle_pattern,
+                                "last_verdict": verdict,
+                                "last_confidence_bucket": confidence_bucket,
                                 "last_alert_ts": now_ts,
                             },
                         )
