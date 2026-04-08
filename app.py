@@ -86,7 +86,6 @@ CHANGE_SUMMARY_ORDER = [
     "warning_ladder",
     "event_regime",
     "breakout_bias",
-    "big_move_risk_bucket",
     "market_structure",
     "candle_pattern",
     "verdict",
@@ -177,7 +176,6 @@ def _summarize_changes_for_push(changes):
         "warning_ladder": "Big Move Risk",
         "event_regime": "Event Regime",
         "breakout_bias": "Breakout Bias",
-        "big_move_risk_bucket": "Big Move Score",
         "market_structure": "Market Structure",
         "candle_pattern": "Candle Pattern",
         "verdict": "Verdict",
@@ -205,7 +203,6 @@ def _notification_title_for_changes(changes):
     has_warning = "warning_ladder" in changed_keys
     has_event_regime = "event_regime" in changed_keys
     has_breakout_bias = "breakout_bias" in changed_keys
-    has_big_move_bucket = "big_move_risk_bucket" in changed_keys
     has_verdict = "verdict" in changed_keys
     has_confidence = "confidence_bucket" in changed_keys
     has_permission = "execution_permission" in changed_keys
@@ -220,8 +217,6 @@ def _notification_title_for_changes(changes):
         return "XAUUSD Event Regime Changed"
     if has_breakout_bias and not has_structure and not has_pattern and not has_permission:
         return "XAUUSD Breakout Bias Changed"
-    if has_big_move_bucket and not has_structure and not has_pattern and not has_permission:
-        return "XAUUSD Big Move Score Changed"
     if has_verdict and not has_structure and not has_pattern and not has_permission and not has_confidence:
         return "XAUUSD Verdict Changed"
     if has_confidence and not has_structure and not has_pattern and not has_permission and not has_verdict:
@@ -236,13 +231,13 @@ def _notification_title_for_changes(changes):
         return "XAUUSD Entry Readiness Changed"
     if has_permission and not has_structure and not has_pattern:
         return "XAUUSD Execution Permission Changed"
-    if (has_playbook or has_verdict or has_confidence or has_warning or has_event_regime or has_breakout_bias or has_big_move_bucket or has_entry_readiness or has_exit_urgency) and not has_structure and not has_pattern and not has_permission:
+    if (has_playbook or has_verdict or has_confidence or has_warning or has_event_regime or has_breakout_bias or has_entry_readiness or has_exit_urgency) and not has_structure and not has_pattern and not has_permission:
         return "XAUUSD State Changed"
     if has_structure and has_pattern and not has_permission:
         return "XAUUSD Price Action Changed"
-    if has_permission and (has_structure or has_pattern or has_verdict or has_confidence or has_warning or has_event_regime or has_playbook or has_breakout_bias or has_big_move_bucket or has_entry_readiness or has_exit_urgency):
+    if has_permission and (has_structure or has_pattern or has_verdict or has_confidence or has_warning or has_event_regime or has_playbook or has_breakout_bias or has_entry_readiness or has_exit_urgency):
         return "XAUUSD Structure / Execution Changed"
-    if has_playbook or has_verdict or has_confidence or has_warning or has_event_regime or has_breakout_bias or has_big_move_bucket or has_entry_readiness or has_exit_urgency:
+    if has_playbook or has_verdict or has_confidence or has_warning or has_event_regime or has_breakout_bias or has_entry_readiness or has_exit_urgency:
         return "XAUUSD State Changed"
     return "XAUUSD Execution Permission Changed"
 
@@ -447,7 +442,6 @@ def _is_material_change(changes):
         "warning_ladder",
         "event_regime",
         "breakout_bias",
-        "big_move_risk_bucket",
         "entry_readiness",
         "exit_urgency",
         "trend",
@@ -994,7 +988,6 @@ def _extract_indicator_snapshot(payload):
         "warning_ladder": (regime_state.get("warning_ladder") if isinstance(regime_state, dict) else None),
         "event_regime": (regime_state.get("event_regime") if isinstance(regime_state, dict) else None),
         "breakout_bias": (regime_state.get("breakout_bias") if isinstance(regime_state, dict) else None),
-        "big_move_risk_bucket": _big_move_risk_bucket((regime_state.get("big_move_risk") if isinstance(regime_state, dict) else None)),
         "market_structure": (pa.get("structure") if isinstance(pa, dict) else None),
         "candle_pattern": (pa.get("latest_candle_pattern") if isinstance(pa, dict) else None),
         "verdict": payload.get("verdict"),
@@ -1105,7 +1098,6 @@ def _indicator_monitor_loop():
                                 "last_warning_ladder": "",
                                 "last_event_regime": "",
                                 "last_breakout_bias": "",
-                                "last_big_move_risk_bucket": "",
                                 "last_verdict": "",
                                 "last_confidence_bucket": "",
                                 "last_entry_readiness": "",
@@ -1126,7 +1118,6 @@ def _indicator_monitor_loop():
                         warning_ladder = str((payload.get("RegimeState") or {}).get("warning_ladder") or "")
                         event_regime = str((payload.get("RegimeState") or {}).get("event_regime") or "")
                         breakout_bias = str((payload.get("RegimeState") or {}).get("breakout_bias") or "")
-                        big_move_risk_bucket = _big_move_risk_bucket((payload.get("RegimeState") or {}).get("big_move_risk"))
                         verdict = str(payload.get("verdict") or "")
                         confidence_bucket = _confidence_bucket(payload.get("confidence"))
                         decision_confirmed = bool(decision_payload.get("confirmed"))
@@ -1138,7 +1129,6 @@ def _indicator_monitor_loop():
                             and bool(breakout_bias)
                             and warning_ladder in {"High Breakout Risk", "Directional Expansion Likely", "Active Momentum Event"}
                         )
-                        big_move_bucket_changed = "big_move_risk_bucket" in notification_changes and bool(big_move_risk_bucket)
                         market_structure_changed = "market_structure" in notification_changes and bool(market_structure)
                         candle_pattern_changed = "candle_pattern" in notification_changes and bool(candle_pattern)
                         verdict_changed = "verdict" in notification_changes and bool(verdict)
@@ -1157,7 +1147,6 @@ def _indicator_monitor_loop():
                             or warning_changed
                             or event_regime_changed
                             or breakout_bias_changed
-                            or big_move_bucket_changed
                             or entry_readiness_changed
                             or exit_urgency_changed
                             or
@@ -1177,7 +1166,6 @@ def _indicator_monitor_loop():
                             last_warning_ladder = str(alert_state.get("last_warning_ladder", ""))
                             last_event_regime = str(alert_state.get("last_event_regime", ""))
                             last_breakout_bias = str(alert_state.get("last_breakout_bias", ""))
-                            last_big_move_risk_bucket = str(alert_state.get("last_big_move_risk_bucket", ""))
                             last_verdict = str(alert_state.get("last_verdict", ""))
                             last_confidence_bucket = str(alert_state.get("last_confidence_bucket", ""))
                             last_entry_readiness = str(alert_state.get("last_entry_readiness", ""))
@@ -1187,7 +1175,6 @@ def _indicator_monitor_loop():
                             duplicate_warning = warning_changed and warning_ladder == last_warning_ladder
                             duplicate_event_regime = event_regime_changed and event_regime == last_event_regime
                             duplicate_breakout_bias = breakout_bias_changed and breakout_bias == last_breakout_bias
-                            duplicate_big_move_bucket = big_move_bucket_changed and big_move_risk_bucket == last_big_move_risk_bucket
                             duplicate_execution = execution_permission_changed and execution_permission == last_execution_permission
                             duplicate_structure = market_structure_changed and market_structure == last_market_structure
                             duplicate_pattern = candle_pattern_changed and candle_pattern == last_candle_pattern
@@ -1200,7 +1187,6 @@ def _indicator_monitor_loop():
                                 or duplicate_warning
                                 or duplicate_event_regime
                                 or duplicate_breakout_bias
-                                or duplicate_big_move_bucket
                                 or duplicate_execution
                                 or duplicate_structure
                                 or duplicate_pattern
@@ -1284,7 +1270,6 @@ def _indicator_monitor_loop():
                                 "last_warning_ladder": warning_ladder,
                                 "last_event_regime": event_regime,
                                 "last_breakout_bias": breakout_bias,
-                                "last_big_move_risk_bucket": big_move_risk_bucket,
                                 "last_verdict": verdict,
                                 "last_confidence_bucket": confidence_bucket,
                                 "last_entry_readiness": entry_readiness,

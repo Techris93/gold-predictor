@@ -308,6 +308,45 @@
         gap: 0.85rem;
       }
 
+      .decision-toggle {
+        width: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+        margin: 0.9rem 0 0.85rem;
+        padding: 0.75rem 0.9rem;
+        background: rgba(255, 215, 0, 0.06);
+        border: 1px solid rgba(255, 215, 0, 0.18);
+        border-radius: 12px;
+        color: inherit;
+        cursor: pointer;
+      }
+
+      .decision-toggle:focus-visible {
+        outline: 2px solid rgba(255, 215, 0, 0.45);
+        outline-offset: 6px;
+        border-radius: 10px;
+      }
+
+      .decision-toggle-label {
+        color: var(--gold-primary);
+        font-size: 0.76rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+      }
+
+      .decision-toggle-subtext {
+        color: var(--text-muted);
+        font-size: 0.74rem;
+        letter-spacing: 0.2px;
+      }
+
+      .decision-toggle[aria-expanded="false"] .ar-chevron {
+        transform: rotate(-90deg);
+      }
+
       .decision-block {
         padding: 0.8rem 0.9rem;
         border-radius: 12px;
@@ -837,7 +876,25 @@
               <li>Playbook rationale will appear here once the market state is loaded.</li>
             </ul>
           </div>
-          <div class="decision-grid">
+          <button
+            type="button"
+            class="decision-toggle"
+            id="decision-toggle"
+            aria-expanded="false"
+            aria-controls="decision-details"
+          >
+            <span class="ar-heading-wrap">
+              <span class="decision-toggle-label">Detailed Checklist</span>
+              <span class="decision-toggle-subtext">Tap to open buy, sell, and exit rules</span>
+            </span>
+            <span class="ar-toggle-meta">
+              <span class="ar-toggle-badge">Optional</span>
+              <svg class="ar-chevron" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+              </svg>
+            </span>
+          </button>
+          <div class="decision-grid" id="decision-details" hidden>
             <div class="decision-block">
               <div class="decision-heading buy">Buy Only When</div>
               <ul class="decision-points" id="buy-checklist">
@@ -1259,6 +1316,24 @@
         toggle.addEventListener("click", () => {
           const expanded = toggle.getAttribute("aria-expanded") === "true";
           setAutoresearchExpanded(!expanded);
+        });
+      }
+
+      function setDecisionChecklistExpanded(expanded) {
+        const toggle = document.getElementById("decision-toggle");
+        const panel = document.getElementById("decision-details");
+        if (!toggle || !panel) return;
+        toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
+        panel.hidden = !expanded;
+      }
+
+      function initDecisionChecklistToggle() {
+        const toggle = document.getElementById("decision-toggle");
+        if (!toggle || toggle.dataset.bound === "1") return;
+        toggle.dataset.bound = "1";
+        toggle.addEventListener("click", () => {
+          const expanded = toggle.getAttribute("aria-expanded") === "true";
+          setDecisionChecklistExpanded(!expanded);
         });
       }
 
@@ -1814,6 +1889,8 @@
       window.addEventListener("DOMContentLoaded", () => {
         initAutoresearchToggle();
         setAutoresearchExpanded(false);
+        initDecisionChecklistToggle();
+        setDecisionChecklistExpanded(false);
         syncAlertsButton();
         ensureServiceWorker().then(() => {
           if ("Notification" in window && Notification.permission === "granted") {
