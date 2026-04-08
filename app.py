@@ -82,13 +82,18 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 TELEGRAM_THREAD_ID = os.getenv("TELEGRAM_THREAD_ID", "").strip()
 ENABLE_TELEGRAM_NOTIFICATIONS = _read_bool_env("GOLD_PREDICTOR_ENABLE_TELEGRAM", False)
 CHANGE_SUMMARY_ORDER = [
+    "trade_playbook_stage",
     "warning_ladder",
     "event_regime",
+    "breakout_bias",
+    "big_move_risk_bucket",
     "market_structure",
     "candle_pattern",
     "verdict",
     "confidence_bucket",
     "execution_permission",
+    "entry_readiness",
+    "exit_urgency",
 ]
 def _load_subscriptions():
     if not SUBSCRIPTIONS_FILE.exists():
@@ -168,13 +173,18 @@ def _filter_notification_changes(changes):
 
 def _summarize_changes_for_push(changes):
     labels = {
+        "trade_playbook_stage": "Trade Playbook",
         "warning_ladder": "Big Move Risk",
         "event_regime": "Event Regime",
+        "breakout_bias": "Breakout Bias",
+        "big_move_risk_bucket": "Big Move Score",
         "market_structure": "Market Structure",
         "candle_pattern": "Candle Pattern",
         "verdict": "Verdict",
         "confidence_bucket": "AI Confidence",
         "execution_permission": "Execution Permission",
+        "entry_readiness": "Entry Readiness",
+        "exit_urgency": "Exit Urgency",
     }
     ordered_keys = [key for key in CHANGE_SUMMARY_ORDER if key in changes]
     ordered_keys.extend(key for key in changes if key not in ordered_keys)
@@ -189,18 +199,29 @@ def _summarize_changes_for_push(changes):
 
 def _notification_title_for_changes(changes):
     changed_keys = set((changes or {}).keys())
+    has_playbook = "trade_playbook_stage" in changed_keys
     has_structure = "market_structure" in changed_keys
     has_pattern = "candle_pattern" in changed_keys
     has_warning = "warning_ladder" in changed_keys
     has_event_regime = "event_regime" in changed_keys
+    has_breakout_bias = "breakout_bias" in changed_keys
+    has_big_move_bucket = "big_move_risk_bucket" in changed_keys
     has_verdict = "verdict" in changed_keys
     has_confidence = "confidence_bucket" in changed_keys
     has_permission = "execution_permission" in changed_keys
+    has_entry_readiness = "entry_readiness" in changed_keys
+    has_exit_urgency = "exit_urgency" in changed_keys
 
+    if has_playbook and not has_warning and not has_event_regime and not has_structure and not has_pattern and not has_permission:
+        return "XAUUSD Trade Playbook Changed"
     if has_warning and not has_structure and not has_pattern and not has_permission and not has_verdict and not has_confidence:
         return "XAUUSD Big Move Risk Changed"
     if has_event_regime and not has_structure and not has_pattern and not has_permission and not has_verdict and not has_confidence:
         return "XAUUSD Event Regime Changed"
+    if has_breakout_bias and not has_structure and not has_pattern and not has_permission:
+        return "XAUUSD Breakout Bias Changed"
+    if has_big_move_bucket and not has_structure and not has_pattern and not has_permission:
+        return "XAUUSD Big Move Score Changed"
     if has_verdict and not has_structure and not has_pattern and not has_permission and not has_confidence:
         return "XAUUSD Verdict Changed"
     if has_confidence and not has_structure and not has_pattern and not has_permission and not has_verdict:
@@ -209,15 +230,19 @@ def _notification_title_for_changes(changes):
         return "XAUUSD Market Structure Changed"
     if has_pattern and not has_structure and not has_permission:
         return "XAUUSD Candle Pattern Changed"
+    if has_exit_urgency and not has_structure and not has_pattern and not has_permission:
+        return "XAUUSD Exit Urgency Changed"
+    if has_entry_readiness and not has_structure and not has_pattern and not has_permission:
+        return "XAUUSD Entry Readiness Changed"
     if has_permission and not has_structure and not has_pattern:
         return "XAUUSD Execution Permission Changed"
-    if (has_verdict or has_confidence or has_warning or has_event_regime) and not has_structure and not has_pattern and not has_permission:
+    if (has_playbook or has_verdict or has_confidence or has_warning or has_event_regime or has_breakout_bias or has_big_move_bucket or has_entry_readiness or has_exit_urgency) and not has_structure and not has_pattern and not has_permission:
         return "XAUUSD State Changed"
     if has_structure and has_pattern and not has_permission:
         return "XAUUSD Price Action Changed"
-    if has_permission and (has_structure or has_pattern or has_verdict or has_confidence or has_warning or has_event_regime):
+    if has_permission and (has_structure or has_pattern or has_verdict or has_confidence or has_warning or has_event_regime or has_playbook or has_breakout_bias or has_big_move_bucket or has_entry_readiness or has_exit_urgency):
         return "XAUUSD Structure / Execution Changed"
-    if has_verdict or has_confidence or has_warning or has_event_regime:
+    if has_playbook or has_verdict or has_confidence or has_warning or has_event_regime or has_breakout_bias or has_big_move_bucket or has_entry_readiness or has_exit_urgency:
         return "XAUUSD State Changed"
     return "XAUUSD Execution Permission Changed"
 
@@ -237,6 +262,20 @@ def _confidence_bucket(confidence):
         return "High"
     if value >= 60:
         return "Guarded"
+    return "Low"
+
+
+def _big_move_risk_bucket(score):
+    try:
+        value = float(score or 0)
+    except Exception:
+        value = 0.0
+    if value >= 70:
+        return "Extreme"
+    if value >= 56:
+        return "Elevated"
+    if value >= 40:
+        return "Watch"
     return "Low"
 
 
@@ -402,8 +441,15 @@ def _is_material_change(changes):
         return False
 
     always_material = {
+        "trade_playbook_stage",
         "verdict",
         "confidence_bucket",
+        "warning_ladder",
+        "event_regime",
+        "breakout_bias",
+        "big_move_risk_bucket",
+        "entry_readiness",
+        "exit_urgency",
         "trend",
         "market_structure",
         "market_regime",
@@ -942,14 +988,20 @@ def _extract_indicator_snapshot(payload):
     ta_data = payload.get("TechnicalAnalysis", {}) if isinstance(payload, dict) else {}
     pa = ta_data.get("price_action", {}) if isinstance(ta_data, dict) else {}
     regime_state = payload.get("RegimeState", {}) if isinstance(payload, dict) else {}
+    trade_playbook = payload.get("TradePlaybook", {}) if isinstance(payload, dict) else {}
     return {
+        "trade_playbook_stage": (trade_playbook.get("stage") if isinstance(trade_playbook, dict) else None),
         "warning_ladder": (regime_state.get("warning_ladder") if isinstance(regime_state, dict) else None),
         "event_regime": (regime_state.get("event_regime") if isinstance(regime_state, dict) else None),
+        "breakout_bias": (regime_state.get("breakout_bias") if isinstance(regime_state, dict) else None),
+        "big_move_risk_bucket": _big_move_risk_bucket((regime_state.get("big_move_risk") if isinstance(regime_state, dict) else None)),
         "market_structure": (pa.get("structure") if isinstance(pa, dict) else None),
         "candle_pattern": (pa.get("latest_candle_pattern") if isinstance(pa, dict) else None),
         "verdict": payload.get("verdict"),
         "confidence_bucket": _confidence_bucket(payload.get("confidence")),
         "execution_permission": ((payload.get("ExecutionPermission") or {}).get("text")),
+        "entry_readiness": (trade_playbook.get("entryReadiness") if isinstance(trade_playbook, dict) else None),
+        "exit_urgency": (trade_playbook.get("exitUrgency") if isinstance(trade_playbook, dict) else None),
     }
 
 
@@ -1046,37 +1098,68 @@ def _indicator_monitor_loop():
                         alert_state = _load_json_file(
                             ALERT_STATE_FILE,
                             {
+                                "last_trade_playbook_stage": "",
                                 "last_execution_permission": "",
                                 "last_market_structure": "",
                                 "last_candle_pattern": "",
                                 "last_warning_ladder": "",
                                 "last_event_regime": "",
+                                "last_breakout_bias": "",
+                                "last_big_move_risk_bucket": "",
                                 "last_verdict": "",
                                 "last_confidence_bucket": "",
+                                "last_entry_readiness": "",
+                                "last_exit_urgency": "",
                                 "last_alert_ts": 0,
                             },
                         )
                         decision_payload = payload.get("DecisionStatus") or {}
                         execution_permission_payload = payload.get("ExecutionPermission") or {}
+                        trade_playbook_payload = payload.get("TradePlaybook") or {}
                         execution_permission = str(execution_permission_payload.get("text") or "")
                         permission_status = str(execution_permission_payload.get("status") or "no_trade")
+                        trade_playbook_stage = str(trade_playbook_payload.get("stage") or "")
+                        entry_readiness = str(trade_playbook_payload.get("entryReadiness") or "")
+                        exit_urgency = str(trade_playbook_payload.get("exitUrgency") or "")
                         market_structure = str(((payload.get("TechnicalAnalysis") or {}).get("price_action") or {}).get("structure") or "")
                         candle_pattern = str(((payload.get("TechnicalAnalysis") or {}).get("price_action") or {}).get("latest_candle_pattern") or "")
                         warning_ladder = str((payload.get("RegimeState") or {}).get("warning_ladder") or "")
                         event_regime = str((payload.get("RegimeState") or {}).get("event_regime") or "")
+                        breakout_bias = str((payload.get("RegimeState") or {}).get("breakout_bias") or "")
+                        big_move_risk_bucket = _big_move_risk_bucket((payload.get("RegimeState") or {}).get("big_move_risk"))
                         verdict = str(payload.get("verdict") or "")
                         confidence_bucket = _confidence_bucket(payload.get("confidence"))
                         decision_confirmed = bool(decision_payload.get("confirmed"))
+                        playbook_changed = "trade_playbook_stage" in notification_changes and bool(trade_playbook_stage)
                         warning_changed = "warning_ladder" in notification_changes and bool(warning_ladder)
                         event_regime_changed = "event_regime" in notification_changes and bool(event_regime)
+                        breakout_bias_changed = (
+                            "breakout_bias" in notification_changes
+                            and bool(breakout_bias)
+                            and warning_ladder in {"High Breakout Risk", "Directional Expansion Likely", "Active Momentum Event"}
+                        )
+                        big_move_bucket_changed = "big_move_risk_bucket" in notification_changes and bool(big_move_risk_bucket)
                         market_structure_changed = "market_structure" in notification_changes and bool(market_structure)
                         candle_pattern_changed = "candle_pattern" in notification_changes and bool(candle_pattern)
                         verdict_changed = "verdict" in notification_changes and bool(verdict)
                         confidence_changed = "confidence_bucket" in notification_changes and bool(confidence_bucket)
                         execution_permission_changed = "execution_permission" in notification_changes and bool(execution_permission)
+                        entry_readiness_changed = (
+                            "entry_readiness" in notification_changes
+                            and entry_readiness in {"medium", "high"}
+                        )
+                        exit_urgency_changed = (
+                            "exit_urgency" in notification_changes
+                            and exit_urgency == "high"
+                        )
                         should_alert = bool(
-                            warning_changed
+                            playbook_changed
+                            or warning_changed
                             or event_regime_changed
+                            or breakout_bias_changed
+                            or big_move_bucket_changed
+                            or entry_readiness_changed
+                            or exit_urgency_changed
                             or
                             market_structure_changed
                             or candle_pattern_changed
@@ -1087,33 +1170,62 @@ def _indicator_monitor_loop():
                         if should_alert and permission_status == "exit_recommended":
                             should_alert = NOTIFY_EXIT_READS
                         if should_alert:
+                            last_trade_playbook_stage = str(alert_state.get("last_trade_playbook_stage", ""))
                             last_execution_permission = str(alert_state.get("last_execution_permission", ""))
                             last_market_structure = str(alert_state.get("last_market_structure", ""))
                             last_candle_pattern = str(alert_state.get("last_candle_pattern", ""))
                             last_warning_ladder = str(alert_state.get("last_warning_ladder", ""))
                             last_event_regime = str(alert_state.get("last_event_regime", ""))
+                            last_breakout_bias = str(alert_state.get("last_breakout_bias", ""))
+                            last_big_move_risk_bucket = str(alert_state.get("last_big_move_risk_bucket", ""))
                             last_verdict = str(alert_state.get("last_verdict", ""))
                             last_confidence_bucket = str(alert_state.get("last_confidence_bucket", ""))
+                            last_entry_readiness = str(alert_state.get("last_entry_readiness", ""))
+                            last_exit_urgency = str(alert_state.get("last_exit_urgency", ""))
                             last_alert_ts = int(alert_state.get("last_alert_ts", 0) or 0)
+                            duplicate_playbook = playbook_changed and trade_playbook_stage == last_trade_playbook_stage
                             duplicate_warning = warning_changed and warning_ladder == last_warning_ladder
                             duplicate_event_regime = event_regime_changed and event_regime == last_event_regime
+                            duplicate_breakout_bias = breakout_bias_changed and breakout_bias == last_breakout_bias
+                            duplicate_big_move_bucket = big_move_bucket_changed and big_move_risk_bucket == last_big_move_risk_bucket
                             duplicate_execution = execution_permission_changed and execution_permission == last_execution_permission
                             duplicate_structure = market_structure_changed and market_structure == last_market_structure
                             duplicate_pattern = candle_pattern_changed and candle_pattern == last_candle_pattern
                             duplicate_verdict = verdict_changed and verdict == last_verdict
                             duplicate_confidence = confidence_changed and confidence_bucket == last_confidence_bucket
-                            if (duplicate_warning or duplicate_event_regime or duplicate_execution or duplicate_structure or duplicate_pattern or duplicate_verdict or duplicate_confidence) and (now_ts - last_alert_ts) < ALERT_COOLDOWN_SECONDS:
+                            duplicate_entry_readiness = entry_readiness_changed and entry_readiness == last_entry_readiness
+                            duplicate_exit_urgency = exit_urgency_changed and exit_urgency == last_exit_urgency
+                            if (
+                                duplicate_playbook
+                                or duplicate_warning
+                                or duplicate_event_regime
+                                or duplicate_breakout_bias
+                                or duplicate_big_move_bucket
+                                or duplicate_execution
+                                or duplicate_structure
+                                or duplicate_pattern
+                                or duplicate_verdict
+                                or duplicate_confidence
+                                or duplicate_entry_readiness
+                                or duplicate_exit_urgency
+                            ) and (now_ts - last_alert_ts) < ALERT_COOLDOWN_SECONDS:
                                 should_alert = False
                         if not should_alert:
                             last_snapshot = current_snapshot
                             continue
 
-                        if warning_changed and not market_structure_changed and not candle_pattern_changed and not execution_permission_changed:
+                        if playbook_changed and not warning_changed and not event_regime_changed and not execution_permission_changed:
+                            alert_title = "Trade Playbook Changed"
+                            alert_message = "Trade playbook changed"
+                        elif warning_changed and not market_structure_changed and not candle_pattern_changed and not execution_permission_changed:
                             alert_title = "Big Move Risk Changed"
                             alert_message = "Big move risk changed"
                         elif event_regime_changed and not market_structure_changed and not candle_pattern_changed and not execution_permission_changed:
                             alert_title = "Event Regime Changed"
                             alert_message = "Event regime changed"
+                        elif breakout_bias_changed and not market_structure_changed and not candle_pattern_changed and not execution_permission_changed:
+                            alert_title = "Breakout Bias Changed"
+                            alert_message = "Breakout bias changed"
                         elif market_structure_changed and not candle_pattern_changed and not execution_permission_changed:
                             alert_title = "Market Structure Changed"
                             alert_message = "Market structure changed"
@@ -1165,13 +1277,18 @@ def _indicator_monitor_loop():
                         _save_json_file(
                             ALERT_STATE_FILE,
                             {
+                                "last_trade_playbook_stage": trade_playbook_stage,
                                 "last_execution_permission": execution_permission,
                                 "last_market_structure": market_structure,
                                 "last_candle_pattern": candle_pattern,
                                 "last_warning_ladder": warning_ladder,
                                 "last_event_regime": event_regime,
+                                "last_breakout_bias": breakout_bias,
+                                "last_big_move_risk_bucket": big_move_risk_bucket,
                                 "last_verdict": verdict,
                                 "last_confidence_bucket": confidence_bucket,
+                                "last_entry_readiness": entry_readiness,
+                                "last_exit_urgency": exit_urgency,
                                 "last_alert_ts": now_ts,
                             },
                         )
