@@ -3,6 +3,8 @@ import ta
 from pathlib import Path
 import json
 
+from tools.price_action import annotate_price_action, extract_price_action_feature_hits
+
 
 DEFAULT_STRATEGY_PARAMS = {
     "ema_short": 20,
@@ -24,8 +26,11 @@ DEFAULT_STRATEGY_PARAMS = {
     "weak_trend_bonus": 0.4,
     "strong_volume_weight": 2.0,
     "bias_volume_weight": 1.0,
-    "breakout_weight": 2.0,
-    "structure_weight": 1.0,
+    "breakout_weight": 0.0,
+    "structure_weight": 0.0,
+    "swing_structure_weight": 0.0,
+    "drift_weight": 1.0,
+    "range_pressure_weight": 0.0,
     "engulfing_weight": 1.0,
     "reversal_candle_weight": 0.6,
     "rsi_extreme_weight": 1.5,
@@ -219,6 +224,7 @@ def compute_prediction_from_ta(ta_data):
     alignment_label = mtf.get("alignment_label", "Mixed / Low Alignment")
     pa_struct = (ta_data.get("price_action") or {}).get("structure", "Consolidating")
     pa_pattern = (ta_data.get("price_action") or {}).get("latest_candle_pattern", "None")
+    feature_hits = extract_price_action_feature_hits(pa_struct, pa_pattern)
     support_resistance = ta_data.get("support_resistance", {}) if isinstance(ta_data.get("support_resistance"), dict) else {}
     event_risk = ta_data.get("event_risk", {}) if isinstance(ta_data.get("event_risk"), dict) else {}
     rsi = ta_data.get("rsi_14", 50)
@@ -230,6 +236,9 @@ def compute_prediction_from_ta(ta_data):
     bias_volume_weight = float(strategy_params.get("bias_volume_weight", 1.0))
     breakout_weight = float(strategy_params.get("breakout_weight", 2.0))
     structure_weight = float(strategy_params.get("structure_weight", 1.0))
+    swing_structure_weight = float(strategy_params.get("swing_structure_weight", structure_weight))
+    drift_weight = float(strategy_params.get("drift_weight", structure_weight))
+    range_pressure_weight = float(strategy_params.get("range_pressure_weight", structure_weight * 0.2))
     engulfing_weight = float(strategy_params.get("engulfing_weight", 1.0))
     reversal_candle_weight = float(strategy_params.get("reversal_candle_weight", 0.6))
     rsi_extreme_weight = float(strategy_params.get("rsi_extreme_weight", 1.5))
@@ -291,10 +300,18 @@ def compute_prediction_from_ta(ta_data):
         bull_trigger += breakout_weight
     elif "Bearish Breakdown" in pa_struct:
         bear_trigger += breakout_weight
-    elif "Bullish Structure" in pa_struct or "Bullish Drift" in pa_struct or "Bullish Pressure" in pa_struct:
-        bull_trigger += structure_weight
-    elif "Bearish Structure" in pa_struct or "Bearish Drift" in pa_struct or "Bearish Pressure" in pa_struct:
-        bear_trigger += structure_weight
+    elif "Bullish Structure" in pa_struct:
+        bull_trigger += swing_structure_weight
+    elif "Bearish Structure" in pa_struct:
+        bear_trigger += swing_structure_weight
+    elif "Bullish Drift" in pa_struct:
+        bull_trigger += drift_weight
+    elif "Bearish Drift" in pa_struct:
+        bear_trigger += drift_weight
+    elif "Bullish Pressure" in pa_struct:
+        bull_trigger += range_pressure_weight
+    elif "Bearish Pressure" in pa_struct:
+        bear_trigger += range_pressure_weight
 
     if "Bullish Engulfing" in pa_pattern:
         bull_trigger += engulfing_weight
@@ -550,6 +567,7 @@ def compute_prediction_from_ta(ta_data):
         "action": action,
         "confidenceMode": confidence_mode,
         "confidenceBucket": confidence_bucket,
+        "FeatureHits": feature_hits,
         "MarketState": {
             "regime": regime_label,
             "directional_bias": directional_bias,
@@ -661,85 +679,7 @@ def prepare_historical_features(df, params=None):
     frame.loc[(frame["VOLUME_SIGNAL"] == "Neutral") & (frame["CMF_14"] > 0), "VOLUME_SIGNAL"] = "Slight Buying Bias"
     frame.loc[(frame["VOLUME_SIGNAL"] == "Neutral") & (frame["CMF_14"] < 0), "VOLUME_SIGNAL"] = "Slight Selling Bias"
 
-    frame["PA_STRUCTURE"] = "Consolidating"
-    frame["CANDLE_PATTERN"] = "None"
-    for i in range(len(frame)):
-        current = frame.iloc[i]
-        prev = frame.iloc[i - 1] if i >= 1 else current
-        prev2 = frame.iloc[i - 2] if i >= 2 else prev
-
-        pa_structure = "Consolidating"
-        if i >= 20:
-            recent_high = frame["High"].iloc[i - 20:i].max()
-            recent_low = frame["Low"].iloc[i - 20:i].min()
-            if current["Close"] > recent_high:
-                pa_structure = "Bullish Breakout"
-            elif current["Close"] < recent_low:
-                pa_structure = "Bearish Breakdown"
-
-        if pa_structure == "Consolidating" and i >= 2:
-            if current["High"] > prev["High"] > prev2["High"] and current["Low"] > prev["Low"] > prev2["Low"]:
-                pa_structure = "Higher Highs / Higher Lows (Bullish Structure)"
-            elif current["High"] < prev["High"] < prev2["High"] and current["Low"] < prev["Low"] < prev2["Low"]:
-                pa_structure = "Lower Highs / Lower Lows (Bearish Structure)"
-
-        if pa_structure == "Consolidating" and i >= 11:
-            recent12 = frame.iloc[i - 11:i + 1]
-            high_now = recent12["High"].iloc[-4:].mean()
-            high_prev = recent12["High"].iloc[-8:-4].mean()
-            low_now = recent12["Low"].iloc[-4:].mean()
-            low_prev = recent12["Low"].iloc[-8:-4].mean()
-            close_now = recent12["Close"].iloc[-3:].mean()
-            close_prev = recent12["Close"].iloc[-6:-3].mean()
-
-            if high_now > high_prev and low_now > low_prev and close_now > close_prev:
-                pa_structure = "Bullish Drift"
-            elif high_now < high_prev and low_now < low_prev and close_now < close_prev:
-                pa_structure = "Bearish Drift"
-
-        if pa_structure == "Consolidating" and i >= 19:
-            recent20 = frame.iloc[i - 19:i + 1]
-            range_high = recent20["High"].max()
-            range_low = recent20["Low"].min()
-            range_size = max(range_high - range_low, 1e-8)
-            close_pos = (current["Close"] - range_low) / range_size
-            if current["EMA_TREND"] == "Bullish" and close_pos >= 0.67:
-                pa_structure = "Bullish Pressure in Range"
-            elif current["EMA_TREND"] == "Bearish" and close_pos <= 0.33:
-                pa_structure = "Bearish Pressure in Range"
-
-        candle_pattern = "None"
-        if (
-            current["Close"] > current["Open"]
-            and prev["Close"] < prev["Open"]
-            and current["Close"] > prev["Open"]
-            and current["Open"] < prev["Close"]
-        ):
-            candle_pattern = "Bullish Engulfing"
-        elif (
-            current["Close"] < current["Open"]
-            and prev["Close"] > prev["Open"]
-            and current["Close"] < prev["Open"]
-            and current["Open"] > prev["Close"]
-        ):
-            candle_pattern = "Bearish Engulfing"
-        else:
-            candle_range = max(current["High"] - current["Low"], 1e-8)
-            body = abs(current["Close"] - current["Open"])
-            upper_wick = current["High"] - max(current["Close"], current["Open"])
-            lower_wick = min(current["Close"], current["Open"]) - current["Low"]
-
-            if body / candle_range < 0.15:
-                candle_pattern = "Doji"
-            elif lower_wick / candle_range > 0.55 and upper_wick / candle_range < 0.2 and current["Close"] >= current["Open"]:
-                candle_pattern = "Bullish Hammer"
-            elif upper_wick / candle_range > 0.55 and lower_wick / candle_range < 0.2 and current["Close"] <= current["Open"]:
-                candle_pattern = "Bearish Shooting Star"
-
-        frame.iloc[i, frame.columns.get_loc("PA_STRUCTURE")] = pa_structure
-        frame.iloc[i, frame.columns.get_loc("CANDLE_PATTERN")] = candle_pattern
-
-    return frame
+    return annotate_price_action(frame)
 
 
 def build_ta_payload_from_row(row, params=None):

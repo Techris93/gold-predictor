@@ -30,6 +30,7 @@ except ImportError:
     sys.exit(1)
 
 from tools.twelvedata_market_data import canonical_gold_symbol, get_td_client
+from tools.price_action import classify_price_action
 
 DEFAULT_STRATEGY_PARAMS = {
     "ema_short": 20,
@@ -51,8 +52,11 @@ DEFAULT_STRATEGY_PARAMS = {
     "weak_trend_bonus": 0.4,
     "strong_volume_weight": 2.0,
     "bias_volume_weight": 1.0,
-    "breakout_weight": 2.0,
-    "structure_weight": 1.0,
+    "breakout_weight": 0.0,
+    "structure_weight": 0.0,
+    "swing_structure_weight": 0.0,
+    "drift_weight": 1.0,
+    "range_pressure_weight": 0.0,
     "engulfing_weight": 1.0,
     "reversal_candle_weight": 0.6,
     "rsi_extreme_weight": 1.5,
@@ -389,67 +393,10 @@ def get_technical_analysis():
             market_regime = "Weak Trend"
 
         # Price Action: Breakout + swing structure checks
-        pa_structure = "Consolidating"
-        if len(df) >= 21:
-            recent_high = df['High'].iloc[-21:-1].max()
-            recent_low = df['Low'].iloc[-21:-1].min()
-            if latest['Close'] > recent_high:
-                pa_structure = "Bullish Breakout"
-            elif latest['Close'] < recent_low:
-                pa_structure = "Bearish Breakdown"
-
-        if pa_structure == "Consolidating" and len(df) >= 3:
-            p1, p2, p3 = df.iloc[-3], df.iloc[-2], latest
-            if p3['High'] > p2['High'] > p1['High'] and p3['Low'] > p2['Low'] > p1['Low']:
-                pa_structure = "Higher Highs / Higher Lows (Bullish Structure)"
-            elif p3['High'] < p2['High'] < p1['High'] and p3['Low'] < p2['Low'] < p1['Low']:
-                pa_structure = "Lower Highs / Lower Lows (Bearish Structure)"
-
-        # If still not broken out/structured, detect directional drift and pressure in range.
-        if pa_structure == "Consolidating" and len(df) >= 12:
-            recent12 = df.iloc[-12:]
-            high_now = recent12['High'].iloc[-4:].mean()
-            high_prev = recent12['High'].iloc[-8:-4].mean()
-            low_now = recent12['Low'].iloc[-4:].mean()
-            low_prev = recent12['Low'].iloc[-8:-4].mean()
-            close_now = recent12['Close'].iloc[-3:].mean()
-            close_prev = recent12['Close'].iloc[-6:-3].mean()
-
-            if high_now > high_prev and low_now > low_prev and close_now > close_prev:
-                pa_structure = "Bullish Drift"
-            elif high_now < high_prev and low_now < low_prev and close_now < close_prev:
-                pa_structure = "Bearish Drift"
-
-        if pa_structure == "Consolidating" and len(df) >= 20:
-            recent20 = df.iloc[-20:]
-            range_high = recent20['High'].max()
-            range_low = recent20['Low'].min()
-            range_size = max(range_high - range_low, 1e-8)
-            close_pos = (latest['Close'] - range_low) / range_size
-
-            if ema_trend == "Bullish" and close_pos >= 0.67:
-                pa_structure = "Bullish Pressure in Range"
-            elif ema_trend == "Bearish" and close_pos <= 0.33:
-                pa_structure = "Bearish Pressure in Range"
-
-        # Price Action: Single Candle Patterns (Engulfing + reversal candles)
-        candle_pattern = "None"
-        if latest['Close'] > latest['Open'] and prev['Close'] < prev['Open'] and latest['Close'] > prev['Open'] and latest['Open'] < prev['Close']:
-            candle_pattern = "Bullish Engulfing"
-        elif latest['Close'] < latest['Open'] and prev['Close'] > prev['Open'] and latest['Close'] < prev['Open'] and latest['Open'] > prev['Close']:
-            candle_pattern = "Bearish Engulfing"
-        else:
-            candle_range = max(latest['High'] - latest['Low'], 1e-8)
-            body = abs(latest['Close'] - latest['Open'])
-            upper_wick = latest['High'] - max(latest['Close'], latest['Open'])
-            lower_wick = min(latest['Close'], latest['Open']) - latest['Low']
-
-            if body / candle_range < 0.15:
-                candle_pattern = "Doji"
-            elif lower_wick / candle_range > 0.55 and upper_wick / candle_range < 0.2 and latest['Close'] >= latest['Open']:
-                candle_pattern = "Bullish Hammer"
-            elif upper_wick / candle_range > 0.55 and lower_wick / candle_range < 0.2 and latest['Close'] <= latest['Open']:
-                candle_pattern = "Bearish Shooting Star"
+        df["EMA_TREND"] = "Neutral"
+        df.loc[(df["Close"] > df["EMA_20"]) & (df["EMA_20"] > df["EMA_50"]), "EMA_TREND"] = "Bullish"
+        df.loc[(df["Close"] < df["EMA_20"]) & (df["EMA_20"] < df["EMA_50"]), "EMA_TREND"] = "Bearish"
+        pa_structure, candle_pattern = classify_price_action(df, len(df) - 1)
 
         rsi_overbought = float(ACTIVE_STRATEGY_PARAMS.get("rsi_overbought", 70))
         rsi_oversold = float(ACTIVE_STRATEGY_PARAMS.get("rsi_oversold", 20))
