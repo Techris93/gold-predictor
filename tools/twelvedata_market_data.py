@@ -23,6 +23,15 @@ MAX_OUTPUTSIZE = 5000
 
 _TD_CLIENT: Optional[TDClient] = None
 
+_CROSS_ASSET_SYMBOLS = {
+    "dxy": ["DX-Y.NYB", "DXY"],
+    "silver": ["XAG/USD"],
+    "oil": ["USOIL", "WTI"],
+    "spx": ["SPY", "ES"],
+    "usdjpy": ["USD/JPY"],
+    "us10y": ["US10Y", "TNX"],
+}
+
 
 def get_td_client() -> Optional[TDClient]:
     global _TD_CLIENT
@@ -30,7 +39,10 @@ def get_td_client() -> Optional[TDClient]:
         return _TD_CLIENT
     if not TD_API_KEY or TD_API_KEY == "your_twelve_data_api_key_here":
         return None
-    _TD_CLIENT = TDClient(apikey=TD_API_KEY)
+    try:
+        _TD_CLIENT = TDClient(apikey=TD_API_KEY)
+    except Exception:
+        return None
     return _TD_CLIENT
 
 
@@ -144,3 +156,50 @@ def fetch_live_price(ticker: Optional[str] = None) -> Optional[float]:
     except Exception:
         return None
     return None
+
+
+def _fetch_symbol_snapshot(client: TDClient, candidates: list[str], interval: str = "1h", outputsize: int = 8) -> dict:
+    for symbol in candidates:
+        try:
+            ts = client.time_series(symbol=symbol, interval=interval, outputsize=outputsize)
+            frame = normalize_ohlcv_frame(ts.as_pandas())
+            if frame.empty or "Close" not in frame.columns or len(frame) < 2:
+                continue
+            latest_close = float(frame["Close"].iloc[-1])
+            prev_close = float(frame["Close"].iloc[-2])
+            pct_1h = ((latest_close - prev_close) / max(prev_close, 1e-8)) * 100.0
+            pct_4h = pct_1h
+            if len(frame) >= 5:
+                close_4h = float(frame["Close"].iloc[-5])
+                pct_4h = ((latest_close - close_4h) / max(close_4h, 1e-8)) * 100.0
+            trend = "flat"
+            if pct_1h > 0.05:
+                trend = "up"
+            elif pct_1h < -0.05:
+                trend = "down"
+            return {
+                "available": True,
+                "symbol": symbol,
+                "latest": round(latest_close, 4),
+                "pct_1h": round(pct_1h, 4),
+                "pct_4h": round(pct_4h, 4),
+                "trend": trend,
+            }
+        except Exception:
+            continue
+    return {"available": False}
+
+
+def fetch_cross_asset_context() -> dict:
+    client = get_td_client()
+    if not client:
+        return {"assets": {}, "available": False}
+
+    assets = {}
+    for name, candidates in _CROSS_ASSET_SYMBOLS.items():
+        assets[name] = _fetch_symbol_snapshot(client, candidates)
+
+    return {
+        "available": any(isinstance(item, dict) and item.get("available") for item in assets.values()),
+        "assets": assets,
+    }

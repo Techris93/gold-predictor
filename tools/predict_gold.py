@@ -29,7 +29,8 @@ except ImportError:
     }))
     sys.exit(1)
 
-from tools.twelvedata_market_data import canonical_gold_symbol, get_td_client
+from tools.twelvedata_market_data import canonical_gold_symbol, get_td_client, fetch_cross_asset_context
+from tools.event_regime import annotate_event_regime_features, compute_event_regime_snapshot
 from tools.price_action import classify_price_action
 
 DEFAULT_STRATEGY_PARAMS = {
@@ -465,6 +466,20 @@ def get_technical_analysis():
             "data_points_analyzed": len(df),
             "active_strategy_params": ACTIVE_STRATEGY_PARAMS.copy(),
         }
+        df = annotate_event_regime_features(df, event_windows=_load_event_risk_windows())
+        latest = df.iloc[-1]
+        cross_asset_context = fetch_cross_asset_context()
+        result["cross_asset_context"] = cross_asset_context
+        result["event_regime"] = compute_event_regime_snapshot(
+            latest,
+            trend=ema_trend,
+            alignment_label=mtf["alignment_label"],
+            market_structure=pa_structure,
+            candle_pattern=candle_pattern,
+            event_risk=result["event_risk"],
+            cross_asset_context=cross_asset_context,
+        )
+
         LAST_SUCCESSFUL_TA = dict(result)
         return result
     except Exception as e:

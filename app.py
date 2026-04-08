@@ -82,6 +82,8 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 TELEGRAM_THREAD_ID = os.getenv("TELEGRAM_THREAD_ID", "").strip()
 ENABLE_TELEGRAM_NOTIFICATIONS = _read_bool_env("GOLD_PREDICTOR_ENABLE_TELEGRAM", False)
 CHANGE_SUMMARY_ORDER = [
+    "warning_ladder",
+    "event_regime",
     "market_structure",
     "candle_pattern",
     "verdict",
@@ -166,6 +168,8 @@ def _filter_notification_changes(changes):
 
 def _summarize_changes_for_push(changes):
     labels = {
+        "warning_ladder": "Big Move Risk",
+        "event_regime": "Event Regime",
         "market_structure": "Market Structure",
         "candle_pattern": "Candle Pattern",
         "verdict": "Verdict",
@@ -187,10 +191,16 @@ def _notification_title_for_changes(changes):
     changed_keys = set((changes or {}).keys())
     has_structure = "market_structure" in changed_keys
     has_pattern = "candle_pattern" in changed_keys
+    has_warning = "warning_ladder" in changed_keys
+    has_event_regime = "event_regime" in changed_keys
     has_verdict = "verdict" in changed_keys
     has_confidence = "confidence_bucket" in changed_keys
     has_permission = "execution_permission" in changed_keys
 
+    if has_warning and not has_structure and not has_pattern and not has_permission and not has_verdict and not has_confidence:
+        return "XAUUSD Big Move Risk Changed"
+    if has_event_regime and not has_structure and not has_pattern and not has_permission and not has_verdict and not has_confidence:
+        return "XAUUSD Event Regime Changed"
     if has_verdict and not has_structure and not has_pattern and not has_permission and not has_confidence:
         return "XAUUSD Verdict Changed"
     if has_confidence and not has_structure and not has_pattern and not has_permission and not has_verdict:
@@ -201,13 +211,13 @@ def _notification_title_for_changes(changes):
         return "XAUUSD Candle Pattern Changed"
     if has_permission and not has_structure and not has_pattern:
         return "XAUUSD Execution Permission Changed"
-    if (has_verdict or has_confidence) and not has_structure and not has_pattern and not has_permission:
+    if (has_verdict or has_confidence or has_warning or has_event_regime) and not has_structure and not has_pattern and not has_permission:
         return "XAUUSD State Changed"
     if has_structure and has_pattern and not has_permission:
         return "XAUUSD Price Action Changed"
-    if has_permission and (has_structure or has_pattern or has_verdict or has_confidence):
+    if has_permission and (has_structure or has_pattern or has_verdict or has_confidence or has_warning or has_event_regime):
         return "XAUUSD Structure / Execution Changed"
-    if has_verdict or has_confidence:
+    if has_verdict or has_confidence or has_warning or has_event_regime:
         return "XAUUSD State Changed"
     return "XAUUSD Execution Permission Changed"
 
@@ -772,10 +782,10 @@ def _extract_indicator_snapshot(payload):
     """Build a compact snapshot used to detect indicator changes."""
     ta_data = payload.get("TechnicalAnalysis", {}) if isinstance(payload, dict) else {}
     pa = ta_data.get("price_action", {}) if isinstance(ta_data, dict) else {}
-    regime = ta_data.get("volatility_regime", {}) if isinstance(ta_data, dict) else {}
-    mtf = ta_data.get("multi_timeframe", {}) if isinstance(ta_data, dict) else {}
-    trade_guidance = payload.get("TradeGuidance", {}) if isinstance(payload, dict) else {}
+    regime_state = payload.get("RegimeState", {}) if isinstance(payload, dict) else {}
     return {
+        "warning_ladder": (regime_state.get("warning_ladder") if isinstance(regime_state, dict) else None),
+        "event_regime": (regime_state.get("event_regime") if isinstance(regime_state, dict) else None),
         "market_structure": (pa.get("structure") if isinstance(pa, dict) else None),
         "candle_pattern": (pa.get("latest_candle_pattern") if isinstance(pa, dict) else None),
         "verdict": payload.get("verdict"),
@@ -836,6 +846,7 @@ def _build_prediction_response():
         "TechnicalAnalysis": ta_data,
         "TradeGuidance": prediction["TradeGuidance"],
         "MarketState": prediction.get("MarketState", {}),
+        "RegimeState": prediction.get("RegimeState", {}),
         "DecisionStatus": decision_status,
         "ExecutionPermission": execution_permission,
     }, 200
@@ -871,6 +882,8 @@ def _indicator_monitor_loop():
                                 "last_execution_permission": "",
                                 "last_market_structure": "",
                                 "last_candle_pattern": "",
+                                "last_warning_ladder": "",
+                                "last_event_regime": "",
                                 "last_verdict": "",
                                 "last_confidence_bucket": "",
                                 "last_alert_ts": 0,
@@ -882,15 +895,22 @@ def _indicator_monitor_loop():
                         permission_status = str(execution_permission_payload.get("status") or "no_trade")
                         market_structure = str(((payload.get("TechnicalAnalysis") or {}).get("price_action") or {}).get("structure") or "")
                         candle_pattern = str(((payload.get("TechnicalAnalysis") or {}).get("price_action") or {}).get("latest_candle_pattern") or "")
+                        warning_ladder = str((payload.get("RegimeState") or {}).get("warning_ladder") or "")
+                        event_regime = str((payload.get("RegimeState") or {}).get("event_regime") or "")
                         verdict = str(payload.get("verdict") or "")
                         confidence_bucket = _confidence_bucket(payload.get("confidence"))
                         decision_confirmed = bool(decision_payload.get("confirmed"))
+                        warning_changed = "warning_ladder" in notification_changes and bool(warning_ladder)
+                        event_regime_changed = "event_regime" in notification_changes and bool(event_regime)
                         market_structure_changed = "market_structure" in notification_changes and bool(market_structure)
                         candle_pattern_changed = "candle_pattern" in notification_changes and bool(candle_pattern)
                         verdict_changed = "verdict" in notification_changes and bool(verdict)
                         confidence_changed = "confidence_bucket" in notification_changes and bool(confidence_bucket)
                         execution_permission_changed = "execution_permission" in notification_changes and bool(execution_permission)
                         should_alert = bool(
+                            warning_changed
+                            or event_regime_changed
+                            or
                             market_structure_changed
                             or candle_pattern_changed
                             or verdict_changed
@@ -903,21 +923,31 @@ def _indicator_monitor_loop():
                             last_execution_permission = str(alert_state.get("last_execution_permission", ""))
                             last_market_structure = str(alert_state.get("last_market_structure", ""))
                             last_candle_pattern = str(alert_state.get("last_candle_pattern", ""))
+                            last_warning_ladder = str(alert_state.get("last_warning_ladder", ""))
+                            last_event_regime = str(alert_state.get("last_event_regime", ""))
                             last_verdict = str(alert_state.get("last_verdict", ""))
                             last_confidence_bucket = str(alert_state.get("last_confidence_bucket", ""))
                             last_alert_ts = int(alert_state.get("last_alert_ts", 0) or 0)
+                            duplicate_warning = warning_changed and warning_ladder == last_warning_ladder
+                            duplicate_event_regime = event_regime_changed and event_regime == last_event_regime
                             duplicate_execution = execution_permission_changed and execution_permission == last_execution_permission
                             duplicate_structure = market_structure_changed and market_structure == last_market_structure
                             duplicate_pattern = candle_pattern_changed and candle_pattern == last_candle_pattern
                             duplicate_verdict = verdict_changed and verdict == last_verdict
                             duplicate_confidence = confidence_changed and confidence_bucket == last_confidence_bucket
-                            if (duplicate_execution or duplicate_structure or duplicate_pattern or duplicate_verdict or duplicate_confidence) and (now_ts - last_alert_ts) < ALERT_COOLDOWN_SECONDS:
+                            if (duplicate_warning or duplicate_event_regime or duplicate_execution or duplicate_structure or duplicate_pattern or duplicate_verdict or duplicate_confidence) and (now_ts - last_alert_ts) < ALERT_COOLDOWN_SECONDS:
                                 should_alert = False
                         if not should_alert:
                             last_snapshot = current_snapshot
                             continue
 
-                        if market_structure_changed and not candle_pattern_changed and not execution_permission_changed:
+                        if warning_changed and not market_structure_changed and not candle_pattern_changed and not execution_permission_changed:
+                            alert_title = "Big Move Risk Changed"
+                            alert_message = "Big move risk changed"
+                        elif event_regime_changed and not market_structure_changed and not candle_pattern_changed and not execution_permission_changed:
+                            alert_title = "Event Regime Changed"
+                            alert_message = "Event regime changed"
+                        elif market_structure_changed and not candle_pattern_changed and not execution_permission_changed:
                             alert_title = "Market Structure Changed"
                             alert_message = "Market structure changed"
                         elif candle_pattern_changed and not market_structure_changed and not execution_permission_changed:
@@ -971,6 +1001,8 @@ def _indicator_monitor_loop():
                                 "last_execution_permission": execution_permission,
                                 "last_market_structure": market_structure,
                                 "last_candle_pattern": candle_pattern,
+                                "last_warning_ladder": warning_ladder,
+                                "last_event_regime": event_regime,
                                 "last_verdict": verdict,
                                 "last_confidence_bucket": confidence_bucket,
                                 "last_alert_ts": now_ts,

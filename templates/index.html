@@ -701,6 +701,45 @@
           <span class="metric-value" id="ms-scores" style="font-size: 0.78rem; text-align: right; max-width: 56%; line-height: 1.5; white-space: normal;">---</span>
         </div>
       </div>
+      <div style="margin: 2rem 0">
+        <div
+          style="
+            margin-bottom: 1rem;
+            color: var(--gold-primary);
+            font-size: 0.8rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+          "
+        >
+          Event Regime
+        </div>
+
+        <div class="metric-row">
+          <span class="metric-label">Big Move Risk</span>
+          <span class="metric-value" id="rs-risk">---</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">30m / 60m Expansion</span>
+          <span class="metric-value" id="rs-probabilities">---</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Breakout Bias</span>
+          <span class="metric-value" id="rs-bias">---</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Event Regime</span>
+          <span class="metric-value" id="rs-event-regime">---</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Warning Ladder</span>
+          <span class="metric-value" id="rs-warning-ladder">---</span>
+        </div>
+        <div class="metric-row" style="align-items: flex-start; gap: 0.75rem;">
+          <span class="metric-label">Expected Range / Cross-Asset</span>
+          <span class="metric-value" id="rs-context" style="font-size: 0.78rem; text-align: right; max-width: 56%; line-height: 1.5; white-space: normal;">---</span>
+        </div>
+      </div>
       <div style="margin-bottom: 2rem">
         <div
           style="
@@ -1600,6 +1639,38 @@
 
         const marketScoresEl = document.getElementById("ms-scores");
         marketScoresEl.innerText = `Direction ${Number(marketScores.direction || 0).toFixed(2)} · Tradeability ${Number(marketScores.tradeability || 0).toFixed(2)} · Exit Risk ${Number(marketScores.exit_risk || 0).toFixed(2)} · Stability ${Number(marketScores.stability || 0).toFixed(2)}`;
+
+        const regimeState =
+          data.RegimeState && typeof data.RegimeState === "object"
+            ? data.RegimeState
+            : {};
+        const regimeRiskEl = document.getElementById("rs-risk");
+        const regimeProbEl = document.getElementById("rs-probabilities");
+        const regimeBiasEl = document.getElementById("rs-bias");
+        const regimeEventEl = document.getElementById("rs-event-regime");
+        const regimeLadderEl = document.getElementById("rs-warning-ladder");
+        const regimeContextEl = document.getElementById("rs-context");
+
+        const bigMoveRisk = Number(regimeState.big_move_risk || 0);
+        const breakoutBias = regimeState.breakout_bias || "Neutral";
+        const eventRegimeText = regimeState.event_regime || "normal";
+        const warningLadderText = regimeState.warning_ladder || "Normal";
+        regimeRiskEl.innerText = `${bigMoveRisk.toFixed(2)} / 100`;
+        regimeRiskEl.className = `metric-value ${bigMoveRisk >= 64 ? "value-bearish" : bigMoveRisk >= 48 ? "value-bullish" : ""}`;
+        regimeProbEl.innerText = `${Number(regimeState.expansion_probability_30m || 0).toFixed(1)}% / ${Number(regimeState.expansion_probability_60m || 0).toFixed(1)}%`;
+        regimeBiasEl.innerText = breakoutBias;
+        regimeBiasEl.className = `metric-value ${breakoutBias === "Bullish" ? "value-bullish" : breakoutBias === "Bearish" ? "value-bearish" : ""}`;
+        regimeEventEl.innerText = eventRegimeText.replaceAll("_", " ");
+        regimeEventEl.className = `metric-value ${eventRegimeText === "trend_acceleration" ? "value-bullish" : eventRegimeText === "panic_reversal" || eventRegimeText === "event_risk" ? "value-bearish" : ""}`;
+        regimeLadderEl.innerText = warningLadderText;
+        regimeLadderEl.className = `metric-value ${warningLadderText === "Directional Expansion Likely" || warningLadderText === "Active Momentum Event" ? "value-bullish" : warningLadderText === "High Breakout Risk" ? "value-bearish" : ""}`;
+        const crossAssetText = regimeState.cross_asset_bias || "Neutral";
+        const minutesText =
+          regimeState.minutes_to_next_event === null ||
+          regimeState.minutes_to_next_event === undefined
+            ? "n/a"
+            : `${Number(regimeState.minutes_to_next_event).toFixed(0)}m`;
+        regimeContextEl.innerText = `Range ${regimeState.expected_range_expansion || "---"} · Cross-asset ${crossAssetText} · Next event ${minutesText}`;
 
         const tradeGuidance =
           data.TradeGuidance && typeof data.TradeGuidance === "object"

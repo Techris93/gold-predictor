@@ -108,6 +108,7 @@ def generate_signals(df, params=None):
                 "exit_risk_score": prediction.get("exitRiskScore"),
                 "stability_score": prediction.get("stabilityScore"),
                 "feature_hits": prediction.get("FeatureHits", {}),
+                "regime_state": prediction.get("RegimeState", {}),
             }
         )
 
@@ -348,6 +349,79 @@ def summarize_ablation_metrics(df, base_params):
     }
     return summaries
 
+
+def summarize_big_move_metrics(df, states):
+    if not states or len(df) < 6:
+        return {}
+
+    watch_hits_60m = 0
+    watch_true_60m = 0
+    watch_hits_4h = 0
+    watch_true_4h = 0
+    active_hits_4h = 0
+    active_true_4h = 0
+    total_true_60m = 0
+    total_true_4h = 0
+    lead_times = []
+    regime_counts = {}
+
+    max_index = min(len(states), len(df) - 4)
+    for i in range(max_index):
+        entry = float(df["Close"].iloc[i])
+        next_bar = df.iloc[i + 1]
+        next_four = df.iloc[i + 1 : i + 5]
+        future_move_60m = max(abs(float(next_bar["High"]) - entry), abs(entry - float(next_bar["Low"])))
+        future_move_4h = max(abs(float(next_four["High"].max()) - entry), abs(entry - float(next_four["Low"].min())))
+        true_60m = future_move_60m >= 5.0
+        true_4h = future_move_4h >= 10.0
+        total_true_60m += 1 if true_60m else 0
+        total_true_4h += 1 if true_4h else 0
+
+        regime_state = state_regime = states[i].get("regime_state") or {}
+        ladder = str(regime_state.get("warning_ladder", "Normal"))
+        event_regime = str(regime_state.get("event_regime", "normal"))
+        regime_counts[event_regime] = regime_counts.get(event_regime, 0) + 1
+        watch_flag = ladder in {"Expansion Watch", "High Breakout Risk", "Directional Expansion Likely", "Active Momentum Event"}
+        active_flag = ladder in {"Directional Expansion Likely", "Active Momentum Event"}
+
+        if watch_flag:
+            watch_hits_60m += 1
+            watch_hits_4h += 1
+            watch_true_60m += 1 if true_60m else 0
+            watch_true_4h += 1 if true_4h else 0
+        if active_flag:
+            active_hits_4h += 1
+            active_true_4h += 1 if true_4h else 0
+
+        if true_4h:
+            for lookback in range(1, min(4, i + 1)):
+                previous_ladder = str((states[i - lookback].get("regime_state") or {}).get("warning_ladder", "Normal"))
+                if previous_ladder in {"Expansion Watch", "High Breakout Risk", "Directional Expansion Likely", "Active Momentum Event"}:
+                    lead_times.append(lookback)
+                    break
+
+    def _safe_ratio(numerator, denominator):
+        return round(numerator / denominator, 4) if denominator else 0.0
+
+    return {
+        "label_definition": {
+            "big_move_60m_price_points": 5.0,
+            "big_move_4h_price_points": 10.0,
+        },
+        "warning_watch": {
+            "precision_60m": _safe_ratio(watch_true_60m, watch_hits_60m),
+            "recall_60m": _safe_ratio(watch_true_60m, total_true_60m),
+            "precision_4h": _safe_ratio(watch_true_4h, watch_hits_4h),
+            "recall_4h": _safe_ratio(watch_true_4h, total_true_4h),
+        },
+        "warning_directional": {
+            "precision_4h": _safe_ratio(active_true_4h, active_hits_4h),
+            "recall_4h": _safe_ratio(active_true_4h, total_true_4h),
+        },
+        "avg_lead_bars_4h": round(float(np.mean(lead_times)), 2) if lead_times else None,
+        "event_regime_distribution": regime_counts,
+    }
+
 def run_backtest(ticker="XAU/USD", period="2y", interval="1h"):
     print(f"Fetching {period} of {interval} data for {ticker}...")
     try:
@@ -389,6 +463,7 @@ def run_backtest(ticker="XAU/USD", period="2y", interval="1h"):
         transition_metrics = summarize_transition_metrics(df, states)
         feature_hit_metrics = summarize_feature_hit_metrics(df, states)
         ablation_metrics = summarize_ablation_metrics(df, ACTIVE_BACKTEST_PARAMS)
+        big_move_metrics = summarize_big_move_metrics(df, states)
         print(f"Whipsaw Rate:       {transition_metrics.get('whipsaw_rate', 0.0):.4f}")
         print(f"False Entry Rate:   {transition_metrics.get('false_entry_rate', 0.0):.4f}")
         print(f"Avg Persistence:    {transition_metrics.get('avg_signal_persistence', 0.0):.2f} bars")
@@ -408,6 +483,22 @@ def run_backtest(ticker="XAU/USD", period="2y", interval="1h"):
                 f"win_rate_delta={metrics.get('win_rate_delta', 0.0):.2f} "
                 f"trade_delta={metrics.get('trade_delta', 0)}"
             )
+        if big_move_metrics:
+            watch = big_move_metrics.get("warning_watch", {})
+            directional = big_move_metrics.get("warning_directional", {})
+            print("Big Move Metrics:")
+            print(
+                f"  watch_60m: precision={watch.get('precision_60m', 0.0):.4f} "
+                f"recall={watch.get('recall_60m', 0.0):.4f}"
+            )
+            print(
+                f"  watch_4h:  precision={watch.get('precision_4h', 0.0):.4f} "
+                f"recall={watch.get('recall_4h', 0.0):.4f}"
+            )
+            print(
+                f"  directional_4h: precision={directional.get('precision_4h', 0.0):.4f} "
+                f"recall={directional.get('recall_4h', 0.0):.4f}"
+            )
         os.makedirs(os.path.dirname(FEATURE_REPORT_FILE), exist_ok=True)
         with open(FEATURE_REPORT_FILE, "w", encoding="utf-8") as handle:
             json.dump(
@@ -418,6 +509,7 @@ def run_backtest(ticker="XAU/USD", period="2y", interval="1h"):
                     "feature_hit_metrics": feature_hit_metrics,
                     "ablation_metrics": ablation_metrics,
                     "transition_metrics": transition_metrics,
+                    "big_move_metrics": big_move_metrics,
                 },
                 handle,
                 indent=2,

@@ -3,6 +3,7 @@ import ta
 from pathlib import Path
 import json
 
+from tools.event_regime import annotate_event_regime_features, compute_event_regime_snapshot
 from tools.price_action import annotate_price_action, extract_price_action_feature_hits
 
 
@@ -64,6 +65,9 @@ DEFAULT_STRATEGY_PARAMS = {
     "direction_hold_threshold": 5.0,
     "exit_risk_threshold": 6.0,
     "mtf_intervals": ["15min", "1h", "4h"],
+    "expansion_watch_threshold": 48.0,
+    "high_breakout_threshold": 64.0,
+    "directional_expansion_threshold": 78.0,
 }
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -225,6 +229,7 @@ def compute_prediction_from_ta(ta_data):
     pa_struct = (ta_data.get("price_action") or {}).get("structure", "Consolidating")
     pa_pattern = (ta_data.get("price_action") or {}).get("latest_candle_pattern", "None")
     feature_hits = extract_price_action_feature_hits(pa_struct, pa_pattern)
+    regime_state = ta_data.get("event_regime", {}) if isinstance(ta_data.get("event_regime"), dict) else {}
     support_resistance = ta_data.get("support_resistance", {}) if isinstance(ta_data.get("support_resistance"), dict) else {}
     event_risk = ta_data.get("event_risk", {}) if isinstance(ta_data.get("event_risk"), dict) else {}
     rsi = ta_data.get("rsi_14", 50)
@@ -258,6 +263,16 @@ def compute_prediction_from_ta(ta_data):
     no_trade_adx_threshold = float(strategy_params.get("no_trade_adx_threshold", 18))
     no_trade_confidence_cap = float(strategy_params.get("no_trade_confidence_cap", 60))
     event_risk_penalty = float(strategy_params.get("event_risk_penalty", 15.0))
+    expansion_watch_threshold = float(strategy_params.get("expansion_watch_threshold", 48.0))
+    high_breakout_threshold = float(strategy_params.get("high_breakout_threshold", 64.0))
+    directional_expansion_threshold = float(strategy_params.get("directional_expansion_threshold", 78.0))
+
+    event_breakout_bias = str(regime_state.get("breakout_bias", "Neutral"))
+    big_move_risk = float(regime_state.get("big_move_risk", 0.0) or 0.0)
+    expansion_probability_30m = float(regime_state.get("expansion_probability_30m", 0.0) or 0.0)
+    expansion_probability_60m = float(regime_state.get("expansion_probability_60m", 0.0) or 0.0)
+    warning_ladder = str(regime_state.get("warning_ladder", "Normal") or "Normal")
+    event_regime_label = str(regime_state.get("event_regime", "normal") or "normal")
 
     bull_setup = 0.0
     bear_setup = 0.0
@@ -322,6 +337,11 @@ def compute_prediction_from_ta(ta_data):
     elif "Bearish Shooting Star" in pa_pattern:
         bear_trigger += reversal_candle_weight
 
+    if event_breakout_bias == "Bullish" and expansion_probability_60m >= high_breakout_threshold:
+        bull_setup += 0.6
+    elif event_breakout_bias == "Bearish" and expansion_probability_60m >= high_breakout_threshold:
+        bear_setup += 0.6
+
     rsi_oversold = float(strategy_params.get("rsi_oversold", 20))
     rsi_overbought = float(strategy_params.get("rsi_overbought", 70))
     bullish_rsi_warning = min(rsi_oversold + rsi_warning_band, 50)
@@ -371,6 +391,8 @@ def compute_prediction_from_ta(ta_data):
     regime_label = "transition"
     if event_risk.get("active"):
         regime_label = "event-risk"
+    elif event_regime_label in {"range_expansion", "trend_acceleration", "panic_reversal"}:
+        regime_label = event_regime_label
     elif regime == "Range-Bound":
         regime_label = "range"
     elif alignment_label == "Mixed / Low Alignment" or ("Consolidating" in pa_struct and trend == "Neutral"):
@@ -483,6 +505,8 @@ def compute_prediction_from_ta(ta_data):
     if event_risk.get("active"):
         penalty += event_risk_penalty
         no_trade_reasons.append("Major macro event window is active.")
+    elif big_move_risk >= directional_expansion_threshold and event_breakout_bias == "Neutral":
+        no_trade_reasons.append("Large move risk is elevated, but directional bias is still unclear.")
     if regime == "Range-Bound" and alignment_label == "Mixed / Low Alignment":
         no_trade_reasons.append("Range-bound regime with mixed alignment.")
     if adx_14 < no_trade_adx_threshold:
@@ -549,6 +573,15 @@ def compute_prediction_from_ta(ta_data):
                 + (f" because {blocker_text}." if blocker_text else ".")
             )
 
+    if warning_ladder == "Expansion Watch":
+        trade_guidance["summary"] += " Expansion watch is active."
+    elif warning_ladder == "High Breakout Risk":
+        trade_guidance["summary"] += " High breakout risk is building."
+    elif warning_ladder == "Directional Expansion Likely":
+        trade_guidance["summary"] += f" Directional expansion is likely with {event_breakout_bias.lower()} bias."
+    elif warning_ladder == "Active Momentum Event":
+        trade_guidance["summary"] += " Active momentum event conditions are in force."
+
     return {
         "raw_verdict": "Bullish" if score_diff >= verdict_margin_threshold else ("Bearish" if score_diff <= -verdict_margin_threshold else "Neutral"),
         "verdict": verdict,
@@ -591,6 +624,20 @@ def compute_prediction_from_ta(ta_data):
             "confidence_bucket": confidence_bucket,
         },
         "TradeGuidance": trade_guidance,
+        "RegimeState": {
+            "big_move_risk": round(big_move_risk, 2),
+            "expansion_probability_30m": round(expansion_probability_30m, 2),
+            "expansion_probability_60m": round(expansion_probability_60m, 2),
+            "expected_range_expansion": regime_state.get("expected_range_expansion"),
+            "breakout_bias": event_breakout_bias,
+            "event_regime": event_regime_label,
+            "warning_ladder": warning_ladder,
+            "cross_asset_bias": regime_state.get("cross_asset_bias", "Neutral"),
+            "cross_asset_available": regime_state.get("cross_asset_available", 0),
+            "minutes_to_next_event": regime_state.get("minutes_to_next_event"),
+            "feature_hits": regime_state.get("feature_hits", {}),
+            "components": regime_state.get("components", {}),
+        },
     }
 
 
@@ -679,7 +726,8 @@ def prepare_historical_features(df, params=None):
     frame.loc[(frame["VOLUME_SIGNAL"] == "Neutral") & (frame["CMF_14"] > 0), "VOLUME_SIGNAL"] = "Slight Buying Bias"
     frame.loc[(frame["VOLUME_SIGNAL"] == "Neutral") & (frame["CMF_14"] < 0), "VOLUME_SIGNAL"] = "Slight Selling Bias"
 
-    return annotate_price_action(frame)
+    frame = annotate_price_action(frame)
+    return annotate_event_regime_features(frame)
 
 
 def build_ta_payload_from_row(row, params=None):
@@ -717,4 +765,14 @@ def build_ta_payload_from_row(row, params=None):
             "overall_volume_signal": row.get("VOLUME_SIGNAL", "Neutral"),
         },
         "active_strategy_params": strategy_params,
+        "event_regime": compute_event_regime_snapshot(
+            row,
+            trend=row.get("EMA_TREND", "Neutral"),
+            alignment_label=row.get("ALIGNMENT_LABEL", "Mixed / Low Alignment"),
+            market_structure=row.get("PA_STRUCTURE", "Consolidating"),
+            candle_pattern=row.get("CANDLE_PATTERN", "None"),
+            event_risk={
+                "active": bool(row.get("EVENT_ACTIVE", 0)),
+            },
+        ),
     }
