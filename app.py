@@ -1432,6 +1432,7 @@ def _indicator_monitor_loop():
                                 {
                                     "message": alert_message,
                                     "title": alert_title,
+                                    "data": payload,
                                     "changes": notification_changes,
                                     "snapshot": current_snapshot,
                                     "verdict": payload.get("verdict"),

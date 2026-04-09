@@ -1299,9 +1299,15 @@
             });
           }
 
-          // Keep the full dashboard in sync after a push event.
-          suppressNextUiChangeNotification = true;
-          fetchPrediction();
+          const nextData =
+            payload?.data && typeof payload.data === "object" ? payload.data : null;
+          if (nextData && nextData.status === "success") {
+            suppressNextUiChangeNotification = true;
+            updateUI(nextData);
+          } else {
+            suppressNextUiChangeNotification = true;
+            fetchPrediction();
+          }
         });
       }
 
