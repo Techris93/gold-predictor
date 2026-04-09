@@ -10,17 +10,21 @@
     "trend|Bearish|High|stable": 54.55
   },
   "reliability_curve": {
+    "50-59": {
+      "count": 11,
+      "hit_rate": 0.5455
+    },
+    "60-69": {
+      "count": 44,
+      "hit_rate": 0.5682
+    },
     "70-79": {
-      "count": 7,
-      "hit_rate": 0.5714
+      "count": 14,
+      "hit_rate": 0.7857
     },
     "80-89": {
-      "count": 51,
-      "hit_rate": 0.5882
-    },
-    "90-99": {
-      "count": 13,
-      "hit_rate": 0.6923
+      "count": 2,
+      "hit_rate": 0.5
     }
   }
 }
