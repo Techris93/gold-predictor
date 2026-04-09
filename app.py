@@ -216,6 +216,8 @@ def _notification_title_for_changes(changes):
 
     if has_playbook and has_warning and not has_structure and not has_pattern and not has_permission:
         return "XAUUSD Trade Setup Changed"
+    if has_playbook and (has_breakout_bias or has_entry_readiness or has_exit_urgency) and not has_structure and not has_pattern and not has_permission:
+        return "XAUUSD Trade Setup Changed"
     if has_playbook and not has_warning and not has_event_regime and not has_structure and not has_pattern and not has_permission:
         return "XAUUSD Trade Playbook Changed"
     if (has_warning or has_event_regime or has_breakout_bias) and not has_structure and not has_pattern and not has_permission and not has_verdict and not has_confidence:
@@ -519,6 +521,52 @@ def _is_significant_candle_pattern(value):
     if not value or value == "None":
         return False
     return any(token in value for token in ["Engulfing", "Doji", "Hammer", "Shooting Star"])
+
+
+def _is_forming_setup_wobble(changes, trade_playbook, execution_permission, decision_status):
+    if not isinstance(changes, dict) or not changes:
+        return False
+
+    execution_status = str((execution_permission or {}).get("status") or "no_trade")
+    if execution_status not in {"no_trade", "watchlist_only"}:
+        return False
+
+    if bool((decision_status or {}).get("confirmed")):
+        return False
+
+    changed_keys = set(changes.keys())
+    allowed_keys = {
+        "trade_playbook_stage",
+        "warning_ladder",
+        "event_regime",
+        "breakout_bias",
+        "entry_readiness",
+    }
+    if not changed_keys.issubset(allowed_keys):
+        return False
+
+    stage_prev = str(((changes.get("trade_playbook_stage") or {}).get("previous")) or "")
+    stage_cur = str(((changes.get("trade_playbook_stage") or {}).get("current")) or "")
+    warning_prev = str(((changes.get("warning_ladder") or {}).get("previous")) or "")
+    warning_cur = str(((changes.get("warning_ladder") or {}).get("current")) or "")
+    event_prev = str(((changes.get("event_regime") or {}).get("previous")) or "")
+    event_cur = str(((changes.get("event_regime") or {}).get("current")) or "")
+    readiness_prev = str(((changes.get("entry_readiness") or {}).get("previous")) or "")
+    readiness_cur = str(((changes.get("entry_readiness") or {}).get("current")) or "")
+    bias_cur = str((trade_playbook or {}).get("breakoutBias") or "")
+
+    stage_pair = {stage_prev, stage_cur}
+    warning_pair = {warning_prev, warning_cur}
+    event_pair = {event_prev, event_cur}
+    readiness_pair = {readiness_prev, readiness_cur}
+
+    return (
+        stage_pair.issubset({"prepare", "stalk_entry", ""})
+        and warning_pair.issubset({"Expansion Watch", "High Breakout Risk", ""})
+        and event_pair.issubset({"normal", "breakout_watch", ""})
+        and readiness_pair.issubset({"guarded", "medium", ""})
+        and bias_cur in {"", "Neutral", "Bullish", "Bearish"}
+    )
 
 
 def _evaluate_decision_status(verdict, confidence, ta_data, trade_guidance):
@@ -1388,6 +1436,13 @@ def _indicator_monitor_loop():
                             or confidence_changed
                             or (execution_permission_changed and decision_confirmed)
                         )
+                        if should_alert and _is_forming_setup_wobble(
+                            notification_changes,
+                            trade_playbook_payload,
+                            execution_permission_payload,
+                            decision_payload,
+                        ):
+                            should_alert = False
                         if should_alert and permission_status == "exit_recommended":
                             should_alert = NOTIFY_EXIT_READS
                         if should_alert:
