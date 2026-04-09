@@ -60,6 +60,10 @@ WAIT_DECISION_CONFIRMATION_COUNT = _read_int_env("WAIT_DECISION_CONFIRMATION_COU
 DIRECTIONAL_REVERSAL_CONFIRMATION_COUNT = _read_int_env("DIRECTIONAL_REVERSAL_CONFIRMATION_COUNT", 4, 1)
 ALERT_COOLDOWN_SECONDS = _read_int_env("ALERT_COOLDOWN_SECONDS", 900, 0)
 DECISION_FLIP_MIN_HOLD_SECONDS = _read_int_env("DECISION_FLIP_MIN_HOLD_SECONDS", 300, 0)
+PLAYBOOK_CONFIRMATION_COUNT = _read_int_env("PLAYBOOK_CONFIRMATION_COUNT", 2, 1)
+ENTER_PLAYBOOK_CONFIRMATION_COUNT = _read_int_env("ENTER_PLAYBOOK_CONFIRMATION_COUNT", 3, 1)
+EXIT_PLAYBOOK_CONFIRMATION_COUNT = _read_int_env("EXIT_PLAYBOOK_CONFIRMATION_COUNT", 2, 1)
+PLAYBOOK_FLIP_MIN_HOLD_SECONDS = _read_int_env("PLAYBOOK_FLIP_MIN_HOLD_SECONDS", 600, 0)
 NOTIFY_EXIT_READS = _read_bool_env("NOTIFY_EXIT_READS", True)
 PUSH_EXCLUDED_FIELDS = {
     "rsi_14",
@@ -74,6 +78,7 @@ SUBSCRIPTIONS_FILE = BASE_DIR / "tools" / "reports" / "webpush_subscriptions.jso
 PREDICTION_STATE_FILE = BASE_DIR / "tools" / "reports" / "prediction_state.json"
 DECISION_STATE_FILE = BASE_DIR / "tools" / "reports" / "decision_state.json"
 ALERT_STATE_FILE = BASE_DIR / "tools" / "reports" / "alert_state.json"
+PLAYBOOK_STATE_FILE = BASE_DIR / "tools" / "reports" / "playbook_state.json"
 VAPID_PUBLIC_KEY = os.getenv("VAPID_PUBLIC_KEY", "")
 VAPID_PRIVATE_KEY = os.getenv("VAPID_PRIVATE_KEY", "")
 VAPID_CLAIMS_SUBJECT = os.getenv("VAPID_CLAIMS_SUBJECT", "mailto:alerts@example.com")
@@ -209,6 +214,8 @@ def _notification_title_for_changes(changes):
     has_entry_readiness = "entry_readiness" in changed_keys
     has_exit_urgency = "exit_urgency" in changed_keys
 
+    if has_playbook and has_warning and not has_structure and not has_pattern and not has_permission:
+        return "XAUUSD Trade Setup Changed"
     if has_playbook and not has_warning and not has_event_regime and not has_structure and not has_pattern and not has_permission:
         return "XAUUSD Trade Playbook Changed"
     if has_warning and not has_structure and not has_pattern and not has_permission and not has_verdict and not has_confidence:
@@ -477,6 +484,22 @@ def _is_material_change(changes):
             return True
 
     return False
+
+
+def _warning_alert_tier(value):
+    value = str(value or "")
+    if value in {"Directional Expansion Likely", "Active Momentum Event"}:
+        return "high"
+    if value == "High Breakout Risk":
+        return "medium"
+    return "low"
+
+
+def _is_significant_candle_pattern(value):
+    value = str(value or "")
+    if not value or value == "None":
+        return False
+    return any(token in value for token in ["Engulfing", "Doji", "Hammer", "Shooting Star"])
 
 
 def _evaluate_decision_status(verdict, confidence, ta_data, trade_guidance):
@@ -838,6 +861,143 @@ def _evaluate_trade_playbook(decision_status, execution_permission, market_state
     }
 
 
+def _stabilize_trade_playbook(trade_playbook, execution_permission, decision_status):
+    raw_stage = str((trade_playbook or {}).get("stage") or "stand_aside")
+    raw_title = str((trade_playbook or {}).get("title") or "Stand Aside")
+    raw_text = str((trade_playbook or {}).get("text") or "")
+    raw_why = list((trade_playbook or {}).get("why") or [])
+    raw_entry_readiness = str((trade_playbook or {}).get("entryReadiness") or "low")
+    raw_exit_urgency = str((trade_playbook or {}).get("exitUrgency") or "low")
+    raw_warning_ladder = str((trade_playbook or {}).get("warningLadder") or "Normal")
+    raw_event_regime = str((trade_playbook or {}).get("eventRegime") or "normal")
+    raw_breakout_bias = str((trade_playbook or {}).get("breakoutBias") or "Neutral")
+    raw_directional_bias = str((trade_playbook or {}).get("directionalBias") or "Neutral")
+    raw_alignment = str((trade_playbook or {}).get("alignment") or "mixed")
+    now_ts = int(time.time())
+
+    state = _load_json_file(
+        PLAYBOOK_STATE_FILE,
+        {
+            "stable_stage": raw_stage,
+            "stable_title": raw_title,
+            "stable_text": raw_text,
+            "stable_why": raw_why,
+            "stable_entry_readiness": raw_entry_readiness,
+            "stable_exit_urgency": raw_exit_urgency,
+            "stable_warning_ladder": raw_warning_ladder,
+            "stable_event_regime": raw_event_regime,
+            "stable_breakout_bias": raw_breakout_bias,
+            "stable_directional_bias": raw_directional_bias,
+            "stable_alignment": raw_alignment,
+            "last_raw_stage": raw_stage,
+            "raw_streak": 1,
+            "last_stable_change_ts": now_ts,
+        },
+    )
+
+    last_raw_stage = str(state.get("last_raw_stage", raw_stage))
+    raw_streak = int(state.get("raw_streak", 0) or 0)
+    raw_streak = raw_streak + 1 if raw_stage == last_raw_stage else 1
+
+    stable_stage = str(state.get("stable_stage", raw_stage))
+    stable_title = str(state.get("stable_title", raw_title))
+    stable_text = str(state.get("stable_text", raw_text))
+    stable_why = list(state.get("stable_why", raw_why) or raw_why)
+    stable_entry_readiness = str(state.get("stable_entry_readiness", raw_entry_readiness))
+    stable_exit_urgency = str(state.get("stable_exit_urgency", raw_exit_urgency))
+    stable_warning_ladder = str(state.get("stable_warning_ladder", raw_warning_ladder))
+    stable_event_regime = str(state.get("stable_event_regime", raw_event_regime))
+    stable_breakout_bias = str(state.get("stable_breakout_bias", raw_breakout_bias))
+    stable_directional_bias = str(state.get("stable_directional_bias", raw_directional_bias))
+    stable_alignment = str(state.get("stable_alignment", raw_alignment))
+    last_stable_change_ts = int(state.get("last_stable_change_ts", now_ts) or now_ts)
+
+    execution_status = str((execution_permission or {}).get("status") or "no_trade")
+    decision_confirmed = bool((decision_status or {}).get("confirmed"))
+    held_for_seconds = max(0, now_ts - last_stable_change_ts)
+
+    if raw_stage == stable_stage:
+        required_confirmation = 1
+    elif raw_stage == "exit":
+        required_confirmation = max(PLAYBOOK_CONFIRMATION_COUNT, EXIT_PLAYBOOK_CONFIRMATION_COUNT)
+    elif raw_stage == "enter":
+        required_confirmation = max(PLAYBOOK_CONFIRMATION_COUNT, ENTER_PLAYBOOK_CONFIRMATION_COUNT)
+    elif stable_stage in {"enter", "hold"} and raw_stage in {"prepare", "stalk_entry", "stand_aside"}:
+        required_confirmation = max(PLAYBOOK_CONFIRMATION_COUNT, ENTER_PLAYBOOK_CONFIRMATION_COUNT + 1)
+    else:
+        required_confirmation = PLAYBOOK_CONFIRMATION_COUNT
+
+    can_flip = raw_streak >= required_confirmation
+    if can_flip and raw_stage != stable_stage and held_for_seconds < PLAYBOOK_FLIP_MIN_HOLD_SECONDS:
+        if stable_stage in {"enter", "hold"} and raw_stage in {"prepare", "stalk_entry", "stand_aside"}:
+            can_flip = False
+        elif stable_stage == "exit" and raw_stage in {"prepare", "stalk_entry", "stand_aside"}:
+            can_flip = False
+
+    if (
+        stable_stage == "enter"
+        and raw_stage in {"prepare", "stalk_entry"}
+        and execution_status == "entry_allowed"
+        and decision_confirmed
+        and held_for_seconds < PLAYBOOK_FLIP_MIN_HOLD_SECONDS
+    ):
+        can_flip = False
+
+    if can_flip:
+        if raw_stage != stable_stage:
+            last_stable_change_ts = now_ts
+        stable_stage = raw_stage
+        stable_title = raw_title
+        stable_text = raw_text
+        stable_why = raw_why
+        stable_entry_readiness = raw_entry_readiness
+        stable_exit_urgency = raw_exit_urgency
+        stable_warning_ladder = raw_warning_ladder
+        stable_event_regime = raw_event_regime
+        stable_breakout_bias = raw_breakout_bias
+        stable_directional_bias = raw_directional_bias
+        stable_alignment = raw_alignment
+
+    state.update(
+        {
+            "stable_stage": stable_stage,
+            "stable_title": stable_title,
+            "stable_text": stable_text,
+            "stable_why": stable_why,
+            "stable_entry_readiness": stable_entry_readiness,
+            "stable_exit_urgency": stable_exit_urgency,
+            "stable_warning_ladder": stable_warning_ladder,
+            "stable_event_regime": stable_event_regime,
+            "stable_breakout_bias": stable_breakout_bias,
+            "stable_directional_bias": stable_directional_bias,
+            "stable_alignment": stable_alignment,
+            "last_raw_stage": raw_stage,
+            "raw_streak": raw_streak,
+            "last_stable_change_ts": last_stable_change_ts,
+            "updated_at": now_ts,
+        }
+    )
+    _save_json_file(PLAYBOOK_STATE_FILE, state)
+
+    stabilized = dict(trade_playbook or {})
+    stabilized["rawStage"] = raw_stage
+    stabilized["stage"] = stable_stage
+    stabilized["title"] = stable_title
+    stabilized["text"] = stable_text
+    stabilized["why"] = stable_why
+    stabilized["entryReadiness"] = stable_entry_readiness
+    stabilized["exitUrgency"] = stable_exit_urgency
+    stabilized["warningLadder"] = stable_warning_ladder
+    stabilized["eventRegime"] = stable_event_regime
+    stabilized["breakoutBias"] = stable_breakout_bias
+    stabilized["directionalBias"] = stable_directional_bias
+    stabilized["alignment"] = stable_alignment
+    stabilized["confirmationCount"] = raw_streak
+    stabilized["requiredConfirmation"] = required_confirmation
+    stabilized["heldForSeconds"] = max(0, now_ts - last_stable_change_ts)
+    return stabilized
+
+
 def _stabilize_decision_status(decision_status):
     raw_status = str((decision_status or {}).get("status") or "wait")
     raw_text = str((decision_status or {}).get("text") or "Stand aside.")
@@ -985,9 +1145,21 @@ def _extract_indicator_snapshot(payload):
     trade_playbook = payload.get("TradePlaybook", {}) if isinstance(payload, dict) else {}
     return {
         "trade_playbook_stage": (trade_playbook.get("stage") if isinstance(trade_playbook, dict) else None),
-        "warning_ladder": (regime_state.get("warning_ladder") if isinstance(regime_state, dict) else None),
-        "event_regime": (regime_state.get("event_regime") if isinstance(regime_state, dict) else None),
-        "breakout_bias": (regime_state.get("breakout_bias") if isinstance(regime_state, dict) else None),
+        "warning_ladder": (
+            trade_playbook.get("warningLadder")
+            if isinstance(trade_playbook, dict) and trade_playbook.get("warningLadder")
+            else (regime_state.get("warning_ladder") if isinstance(regime_state, dict) else None)
+        ),
+        "event_regime": (
+            trade_playbook.get("eventRegime")
+            if isinstance(trade_playbook, dict) and trade_playbook.get("eventRegime")
+            else (regime_state.get("event_regime") if isinstance(regime_state, dict) else None)
+        ),
+        "breakout_bias": (
+            trade_playbook.get("breakoutBias")
+            if isinstance(trade_playbook, dict) and trade_playbook.get("breakoutBias")
+            else (regime_state.get("breakout_bias") if isinstance(regime_state, dict) else None)
+        ),
         "market_structure": (pa.get("structure") if isinstance(pa, dict) else None),
         "candle_pattern": (pa.get("latest_candle_pattern") if isinstance(pa, dict) else None),
         "verdict": payload.get("verdict"),
@@ -1048,6 +1220,11 @@ def _build_prediction_response():
         market_state=prediction.get("MarketState", {}),
         regime_state=prediction.get("RegimeState", {}),
         trade_guidance=prediction.get("TradeGuidance", {}),
+    )
+    trade_playbook = _stabilize_trade_playbook(
+        trade_playbook,
+        execution_permission=execution_permission,
+        decision_status=decision_status,
     )
 
     return {
@@ -1115,14 +1292,22 @@ def _indicator_monitor_loop():
                         exit_urgency = str(trade_playbook_payload.get("exitUrgency") or "")
                         market_structure = str(((payload.get("TechnicalAnalysis") or {}).get("price_action") or {}).get("structure") or "")
                         candle_pattern = str(((payload.get("TechnicalAnalysis") or {}).get("price_action") or {}).get("latest_candle_pattern") or "")
-                        warning_ladder = str((payload.get("RegimeState") or {}).get("warning_ladder") or "")
-                        event_regime = str((payload.get("RegimeState") or {}).get("event_regime") or "")
-                        breakout_bias = str((payload.get("RegimeState") or {}).get("breakout_bias") or "")
+                        warning_ladder = str(trade_playbook_payload.get("warningLadder") or (payload.get("RegimeState") or {}).get("warning_ladder") or "")
+                        event_regime = str(trade_playbook_payload.get("eventRegime") or (payload.get("RegimeState") or {}).get("event_regime") or "")
+                        breakout_bias = str(trade_playbook_payload.get("breakoutBias") or (payload.get("RegimeState") or {}).get("breakout_bias") or "")
                         verdict = str(payload.get("verdict") or "")
                         confidence_bucket = _confidence_bucket(payload.get("confidence"))
                         decision_confirmed = bool(decision_payload.get("confirmed"))
+                        previous_warning_ladder = str((notification_changes.get("warning_ladder") or {}).get("previous") or "")
                         playbook_changed = "trade_playbook_stage" in notification_changes and bool(trade_playbook_stage)
-                        warning_changed = "warning_ladder" in notification_changes and bool(warning_ladder)
+                        warning_changed = (
+                            "warning_ladder" in notification_changes
+                            and bool(warning_ladder)
+                            and (
+                                _warning_alert_tier(warning_ladder) != "low"
+                                or _warning_alert_tier(previous_warning_ladder) != "low"
+                            )
+                        )
                         event_regime_changed = "event_regime" in notification_changes and bool(event_regime)
                         breakout_bias_changed = (
                             "breakout_bias" in notification_changes
@@ -1130,12 +1315,25 @@ def _indicator_monitor_loop():
                             and warning_ladder in {"High Breakout Risk", "Directional Expansion Likely", "Active Momentum Event"}
                         )
                         market_structure_changed = "market_structure" in notification_changes and bool(market_structure)
-                        candle_pattern_changed = "candle_pattern" in notification_changes and bool(candle_pattern)
+                        candle_pattern_changed = (
+                            "candle_pattern" in notification_changes
+                            and bool(candle_pattern)
+                            and _is_significant_candle_pattern(candle_pattern)
+                        )
                         verdict_changed = "verdict" in notification_changes and bool(verdict)
                         confidence_changed = "confidence_bucket" in notification_changes and bool(confidence_bucket)
                         execution_permission_changed = "execution_permission" in notification_changes and bool(execution_permission)
+                        if (
+                            not candle_pattern_changed
+                            and "candle_pattern" in notification_changes
+                            and bool(candle_pattern)
+                            and _is_significant_candle_pattern(candle_pattern)
+                            and (playbook_changed or execution_permission_changed or verdict_changed)
+                        ):
+                            candle_pattern_changed = True
                         entry_readiness_changed = (
                             "entry_readiness" in notification_changes
+                            and playbook_changed
                             and entry_readiness in {"medium", "high"}
                         )
                         exit_urgency_changed = (
