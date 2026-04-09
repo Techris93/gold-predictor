@@ -209,6 +209,30 @@ def _build_execution_state(action_state, action, tradeability_label, no_trade_re
     }
 
 
+def _bias_vote(*biases):
+    bullish = sum(1 for bias in biases if bias == "Bullish")
+    bearish = sum(1 for bias in biases if bias == "Bearish")
+    if bullish > bearish:
+        return "Bullish", bullish, bearish
+    if bearish > bullish:
+        return "Bearish", bullish, bearish
+    return "Neutral", bullish, bearish
+
+
+def _price_action_bias(structure, pattern):
+    structure = str(structure or "")
+    pattern = str(pattern or "")
+    bullish_markers = ("Bullish", "Hammer")
+    bearish_markers = ("Bearish", "Shooting Star")
+    bullish_score = sum(1 for marker in bullish_markers if marker in structure or marker in pattern)
+    bearish_score = sum(1 for marker in bearish_markers if marker in structure or marker in pattern)
+    if bullish_score > bearish_score:
+        return "Bullish"
+    if bearish_score > bullish_score:
+        return "Bearish"
+    return "Neutral"
+
+
 def compute_trade_guidance(ta_data, confidence):
     if not isinstance(ta_data, dict):
         return {
@@ -375,6 +399,7 @@ def compute_prediction_from_ta(ta_data):
     anti_chop_penalty = float(strategy_params.get("anti_chop_penalty", 8.0))
 
     event_breakout_bias = str(regime_state.get("breakout_bias", "Neutral"))
+    cross_asset_bias = str(regime_state.get("cross_asset_bias", "Neutral"))
     big_move_risk = float(regime_state.get("big_move_risk", 0.0) or 0.0)
     expansion_probability_30m = float(regime_state.get("expansion_probability_30m", 0.0) or 0.0)
     expansion_probability_60m = float(regime_state.get("expansion_probability_60m", 0.0) or 0.0)
@@ -729,10 +754,44 @@ def compute_prediction_from_ta(ta_data):
         ta_data,
         confidence,
     )
+    price_action_bias = _price_action_bias(pa_struct, pa_pattern)
+    higher_timeframe_bias, _, _ = _bias_vote(
+        trend,
+        "Bullish" if alignment_score > 0 else ("Bearish" if alignment_score < 0 else "Neutral"),
+        directional_bias,
+    )
+    coordination_bias, bullish_votes, bearish_votes = _bias_vote(
+        directional_bias,
+        event_breakout_bias,
+        cross_asset_bias,
+        price_action_bias,
+    )
+    conflicted_bias_stack = bullish_votes > 0 and bearish_votes > 0
+    opposing_details = []
+    if price_action_bias != "Neutral" and higher_timeframe_bias in {"Bullish", "Bearish"} and price_action_bias != higher_timeframe_bias:
+        opposing_details.append(f"price action is {price_action_bias.lower()}")
+    if event_breakout_bias != "Neutral" and higher_timeframe_bias in {"Bullish", "Bearish"} and event_breakout_bias != higher_timeframe_bias:
+        opposing_details.append(f"breakout pressure is {event_breakout_bias.lower()}")
+    if cross_asset_bias != "Neutral" and higher_timeframe_bias in {"Bullish", "Bearish"} and cross_asset_bias != higher_timeframe_bias:
+        opposing_details.append(f"cross-asset context is {cross_asset_bias.lower()}")
+
+    def _conflicted_summary(reason_text):
+        if higher_timeframe_bias in {"Bullish", "Bearish"} and opposing_details:
+            return (
+                f"Higher-timeframe trend remains {higher_timeframe_bias.lower()}, but "
+                + ", ".join(opposing_details[:-1] + ([f"and {opposing_details[-1]}"] if len(opposing_details) > 1 else opposing_details))
+                + f". Conditions are conflicted, so no trade is allowed yet. {reason_text}"
+            )
+        if coordination_bias in {"Bullish", "Bearish"}:
+            return f"Signals are conflicted even though the near-term vote leans {coordination_bias.lower()}. No trade is allowed yet. {reason_text}"
+        return f"Signals are conflicted across trend, price action, and breakout context. No trade is allowed yet. {reason_text}"
+
     if no_trade_reasons:
         trade_guidance["sellLevel"] = "Weak"
         trade_guidance["buyLevel"] = "Weak"
-        if directional_bias == "Bearish":
+        if conflicted_bias_stack:
+            trade_guidance["summary"] = _conflicted_summary(no_trade_reasons[0])
+        elif directional_bias == "Bearish":
             trade_guidance["summary"] = f"Bearish bias is intact, but conditions are not clean enough for execution yet. {no_trade_reasons[0]}"
         elif directional_bias == "Bullish":
             trade_guidance["summary"] = f"Bullish bias is intact, but conditions are not clean enough for execution yet. {no_trade_reasons[0]}"
@@ -756,7 +815,11 @@ def compute_prediction_from_ta(ta_data):
         if regime_label in {"unstable", "range", "event-risk", "transition"}:
             blockers.append(f"regime is {regime_label}")
         blocker_text = " and ".join(blockers)
-        if directional_bias == "Bearish" and trade_guidance["sellLevel"] in {"Watch", "Strong"}:
+        if conflicted_bias_stack:
+            trade_guidance["summary"] = _conflicted_summary(
+                f"Because {blocker_text}." if blocker_text else "Execution quality is still too weak."
+            )
+        elif directional_bias == "Bearish" and trade_guidance["sellLevel"] in {"Watch", "Strong"}:
             trade_guidance["summary"] = (
                 f"Sell bias is favored, but conditions are not clean enough for execution yet"
                 + (f" because {blocker_text}." if blocker_text else ".")

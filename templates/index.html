@@ -1718,8 +1718,28 @@
         const exitLevel =
           exitRisk >= 3 ? "High" : exitRisk >= 2 ? "Medium" : "Low";
 
+        const priceActionBias =
+          structure.includes("Bearish") || pattern.includes("Bearish")
+            ? "Bearish"
+            : structure.includes("Bullish") || pattern.includes("Bullish")
+              ? "Bullish"
+              : "Neutral";
+        const alignmentBias = alignment.includes("Bearish")
+          ? "Bearish"
+          : alignment.includes("Bullish")
+            ? "Bullish"
+            : "Neutral";
+        const conflictSignals = [trend, priceActionBias, alignmentBias].filter(
+          (bias) => bias === "Bullish" || bias === "Bearish",
+        );
+        const hasBullishConflict = conflictSignals.includes("Bullish");
+        const hasBearishConflict = conflictSignals.includes("Bearish");
+
         let summary = "Wait for cleaner confirmation.";
-        if (sellScore >= 6 && sellScore > buyScore + 1) {
+        if (hasBullishConflict && hasBearishConflict) {
+          summary =
+            "Signals are conflicted across trend, price action, and alignment. Wait for cleaner confirmation.";
+        } else if (sellScore >= 6 && sellScore > buyScore + 1) {
           summary =
             "Sell bias is favored; wait for bearish continuation or rejection confirmation.";
         } else if (buyScore >= 6 && buyScore > sellScore + 1) {
