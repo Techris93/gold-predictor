@@ -842,6 +842,11 @@ def _evaluate_trade_playbook(decision_status, execution_permission, market_state
     bullish_alignment = breakout_bias == "Bullish" and directional_bias == "Bullish"
     bearish_alignment = breakout_bias == "Bearish" and directional_bias == "Bearish"
     directional_alignment = bullish_alignment or bearish_alignment
+    directional_conflict = (
+        breakout_bias in {"Bullish", "Bearish"}
+        and directional_bias in {"Bullish", "Bearish"}
+        and breakout_bias != directional_bias
+    )
     active_long = action_state == "LONG_ACTIVE"
     active_short = action_state == "SHORT_ACTIVE"
     active_position = active_long or active_short
@@ -976,7 +981,7 @@ def _evaluate_trade_playbook(decision_status, execution_permission, market_state
         "eventRegime": event_regime,
         "breakoutBias": breakout_bias,
         "directionalBias": directional_bias,
-        "alignment": "aligned" if directional_alignment else "mixed",
+        "alignment": "conflicted" if directional_conflict else ("aligned" if directional_alignment else "mixed"),
     }
 
 
@@ -1047,11 +1052,27 @@ def _stabilize_trade_playbook(trade_playbook, execution_permission, decision_sta
         required_confirmation = PLAYBOOK_CONFIRMATION_COUNT
 
     can_flip = raw_streak >= required_confirmation
+    if (
+        stable_stage in {"enter", "hold"}
+        and execution_status == "no_trade"
+        and raw_stage in {"prepare", "stand_aside"}
+        and not decision_confirmed
+    ):
+        required_confirmation = 1
+        can_flip = True
     if can_flip and raw_stage != stable_stage and held_for_seconds < PLAYBOOK_FLIP_MIN_HOLD_SECONDS:
         if stable_stage in {"enter", "hold"} and raw_stage in {"prepare", "stalk_entry", "stand_aside"}:
             can_flip = False
         elif stable_stage == "exit" and raw_stage in {"prepare", "stalk_entry", "stand_aside"}:
             can_flip = False
+
+    if (
+        stable_stage in {"enter", "hold"}
+        and execution_status == "no_trade"
+        and raw_stage in {"prepare", "stand_aside"}
+        and not decision_confirmed
+    ):
+        can_flip = True
 
     if (
         stable_stage == "enter"
@@ -1129,6 +1150,30 @@ def _stabilize_trade_playbook(trade_playbook, execution_permission, decision_sta
     stabilized["confirmationCount"] = raw_streak
     stabilized["requiredConfirmation"] = required_confirmation
     stabilized["heldForSeconds"] = max(0, now_ts - last_stable_change_ts)
+
+    if (
+        stabilized["breakoutBias"] in {"Bullish", "Bearish"}
+        and stabilized["directionalBias"] in {"Bullish", "Bearish"}
+        and stabilized["breakoutBias"] != stabilized["directionalBias"]
+    ):
+        stabilized["alignment"] = "conflicted"
+
+    if stabilized["stage"] == "stand_aside":
+        stabilized["title"] = "Stand Aside"
+        stabilized["text"] = str((decision_status or {}).get("text") or (execution_permission or {}).get("text") or "No trade. Conditions are not clean enough yet.")
+        stabilized["why"] = [
+            f"Execution: {str((execution_permission or {}).get('text') or 'No trade')}",
+            f"Decision: {str((decision_status or {}).get('text') or 'Stand aside.')}",
+        ]
+        stabilized["entryReadiness"] = "low"
+    elif stabilized["stage"] in {"prepare", "stalk_entry"} and stabilized["alignment"] == "conflicted":
+        stabilized["text"] = "Signals are building, but the directional stack is conflicted. Mark levels and stay patient."
+        stabilized["why"] = [
+            f"Warning ladder: {stabilized['warningLadder']}",
+            f"Breakout bias: {stabilized['breakoutBias']}",
+            f"Directional bias: {stabilized['directionalBias']}",
+        ]
+
     return stabilized
 
 
@@ -1444,16 +1489,34 @@ def _build_prediction_response():
     forecast_state["directionalBias"] = trade_playbook.get("directionalBias") or forecast_state.get("directionalBias")
 
     execution_state = dict(prediction.get("ExecutionState", {}) or {})
-    execution_state["status"] = (
+    stabilized_execution_status = (
         "exit"
         if execution_permission.get("status") == "exit_recommended"
         else ("enter" if trade_playbook.get("stage") in {"enter", "hold"} else ("prepare" if trade_playbook.get("stage") in {"prepare", "stalk_entry"} else "stand_aside"))
     )
-    execution_state["title"] = trade_playbook.get("title") or _humanize_value(execution_state.get("status") or "stand_aside")
+    execution_state["status"] = stabilized_execution_status
+    execution_state["title"] = trade_playbook.get("title") or _humanize_value(stabilized_execution_status or "stand_aside")
     execution_state["text"] = trade_playbook.get("text") or execution_permission.get("text") or ""
     execution_state["entryAllowed"] = execution_permission.get("status") == "entry_allowed"
     execution_state["exitRecommended"] = execution_permission.get("status") == "exit_recommended"
     execution_state["permissionStatus"] = execution_permission.get("status")
+    execution_state["action"] = (
+        "exit"
+        if stabilized_execution_status == "exit"
+        else ("hold" if trade_playbook.get("stage") == "hold" else ("enter" if stabilized_execution_status == "enter" else ("prepare" if stabilized_execution_status == "prepare" else "stand_aside")))
+    )
+    if stabilized_execution_status == "exit":
+        execution_state["actionState"] = "EXIT_RISK"
+    elif trade_playbook.get("stage") == "hold" and trade_playbook.get("directionalBias") == "Bullish":
+        execution_state["actionState"] = "LONG_ACTIVE"
+    elif trade_playbook.get("stage") == "hold" and trade_playbook.get("directionalBias") == "Bearish":
+        execution_state["actionState"] = "SHORT_ACTIVE"
+    elif stabilized_execution_status == "enter" and trade_playbook.get("directionalBias") == "Bullish":
+        execution_state["actionState"] = "SETUP_LONG"
+    elif stabilized_execution_status == "enter" and trade_playbook.get("directionalBias") == "Bearish":
+        execution_state["actionState"] = "SETUP_SHORT"
+    else:
+        execution_state["actionState"] = "WAIT"
 
     return {
         "status": "success",
