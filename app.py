@@ -218,12 +218,8 @@ def _notification_title_for_changes(changes):
         return "XAUUSD Trade Setup Changed"
     if has_playbook and not has_warning and not has_event_regime and not has_structure and not has_pattern and not has_permission:
         return "XAUUSD Trade Playbook Changed"
-    if has_warning and not has_structure and not has_pattern and not has_permission and not has_verdict and not has_confidence:
-        return "XAUUSD Big Move Risk Changed"
-    if has_event_regime and not has_structure and not has_pattern and not has_permission and not has_verdict and not has_confidence:
-        return "XAUUSD Event Regime Changed"
-    if has_breakout_bias and not has_structure and not has_pattern and not has_permission:
-        return "XAUUSD Breakout Bias Changed"
+    if (has_warning or has_event_regime or has_breakout_bias) and not has_structure and not has_pattern and not has_permission and not has_verdict and not has_confidence:
+        return "XAUUSD Trade Context Changed"
     if has_verdict and not has_structure and not has_pattern and not has_permission and not has_confidence:
         return "XAUUSD Verdict Changed"
     if has_confidence and not has_structure and not has_pattern and not has_permission and not has_verdict:
@@ -233,9 +229,9 @@ def _notification_title_for_changes(changes):
     if has_pattern and not has_structure and not has_permission:
         return "XAUUSD Candle Pattern Changed"
     if has_exit_urgency and not has_structure and not has_pattern and not has_permission:
-        return "XAUUSD Exit Urgency Changed"
+        return "XAUUSD Risk State Changed"
     if has_entry_readiness and not has_structure and not has_pattern and not has_permission:
-        return "XAUUSD Entry Readiness Changed"
+        return "XAUUSD Trade Setup Changed"
     if has_permission and not has_structure and not has_pattern:
         return "XAUUSD Execution Permission Changed"
     if (has_playbook or has_verdict or has_confidence or has_warning or has_event_regime or has_breakout_bias or has_entry_readiness or has_exit_urgency) and not has_structure and not has_pattern and not has_permission:
@@ -279,6 +275,29 @@ def _big_move_risk_bucket(score):
     if value >= 40:
         return "Watch"
     return "Low"
+
+
+def _warning_ladder_rank(value):
+    ranks = {
+        "Normal": 0,
+        "Expansion Watch": 1,
+        "High Breakout Risk": 2,
+        "Directional Expansion Likely": 3,
+        "Active Momentum Event": 4,
+    }
+    return ranks.get(str(value or "Normal"), 0)
+
+
+def _entry_readiness_rank(value):
+    ranks = {
+        "blocked": 0,
+        "closed": 0,
+        "low": 1,
+        "guarded": 2,
+        "medium": 3,
+        "high": 4,
+    }
+    return ranks.get(str(value or "low"), 1)
 
 
 def _should_append_trade_summary(permission_text, trade_summary):
@@ -943,6 +962,21 @@ def _stabilize_trade_playbook(trade_playbook, execution_permission, decision_sta
     ):
         can_flip = False
 
+    preserve_context = (
+        not can_flip
+        and stable_stage in {"enter", "hold", "stalk_entry"}
+        and held_for_seconds < PLAYBOOK_FLIP_MIN_HOLD_SECONDS
+    )
+    if preserve_context:
+        if _warning_ladder_rank(raw_warning_ladder) < _warning_ladder_rank(stable_warning_ladder):
+            raw_warning_ladder = stable_warning_ladder
+        if _entry_readiness_rank(raw_entry_readiness) < _entry_readiness_rank(stable_entry_readiness):
+            raw_entry_readiness = stable_entry_readiness
+        if raw_breakout_bias == "Neutral" and stable_breakout_bias in {"Bullish", "Bearish"}:
+            raw_breakout_bias = stable_breakout_bias
+        if raw_event_regime == "normal" and stable_event_regime != "normal":
+            raw_event_regime = stable_event_regime
+
     if can_flip:
         if raw_stage != stable_stage:
             last_stable_change_ts = now_ts
@@ -1398,33 +1432,8 @@ def _indicator_monitor_loop():
                             last_snapshot = current_snapshot
                             continue
 
-                        if playbook_changed and not warning_changed and not event_regime_changed and not execution_permission_changed:
-                            alert_title = "Trade Playbook Changed"
-                            alert_message = "Trade playbook changed"
-                        elif warning_changed and not market_structure_changed and not candle_pattern_changed and not execution_permission_changed:
-                            alert_title = "Big Move Risk Changed"
-                            alert_message = "Big move risk changed"
-                        elif event_regime_changed and not market_structure_changed and not candle_pattern_changed and not execution_permission_changed:
-                            alert_title = "Event Regime Changed"
-                            alert_message = "Event regime changed"
-                        elif breakout_bias_changed and not market_structure_changed and not candle_pattern_changed and not execution_permission_changed:
-                            alert_title = "Breakout Bias Changed"
-                            alert_message = "Breakout bias changed"
-                        elif market_structure_changed and not candle_pattern_changed and not execution_permission_changed:
-                            alert_title = "Market Structure Changed"
-                            alert_message = "Market structure changed"
-                        elif candle_pattern_changed and not market_structure_changed and not execution_permission_changed:
-                            alert_title = "Candle Pattern Changed"
-                            alert_message = "Candle pattern changed"
-                        elif execution_permission_changed and not market_structure_changed and not candle_pattern_changed:
-                            alert_title = "Execution Permission Changed"
-                            alert_message = "Execution permission changed"
-                        elif (market_structure_changed or candle_pattern_changed) and not execution_permission_changed:
-                            alert_title = "Price Action Changed"
-                            alert_message = "Price action changed"
-                        else:
-                            alert_title = "Structure / Execution Changed"
-                            alert_message = "Price action or execution permission changed"
+                        alert_title = _notification_title_for_changes(notification_changes)
+                        alert_message = _summarize_changes_for_push(notification_changes)
 
                         if _monitor_state["clients"] > 0:
                             socketio.emit(
@@ -1707,6 +1716,38 @@ def get_prediction():
         return jsonify(payload), status_code
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route('/api/health')
+def get_health():
+    try:
+        ta_status = {
+            "last_refresh_ts": int(getattr(predict_gold, "LAST_TA_REFRESH_TS", 0) or 0),
+            "cache_seconds": int(getattr(predict_gold, "TECHNICAL_ANALYSIS_CACHE_SECONDS", 20) or 20),
+            "has_cached_snapshot": bool(getattr(predict_gold, "LAST_SUCCESSFUL_TA", None)),
+        }
+        cross_asset_status = {
+            "last_refresh_ts": int(getattr(predict_gold, "LAST_CROSS_ASSET_TS", 0) or 0),
+            "cache_seconds": int(getattr(predict_gold, "CROSS_ASSET_CACHE_SECONDS", 90) or 90),
+            "has_cached_snapshot": isinstance(getattr(predict_gold, "LAST_CROSS_ASSET_CONTEXT", None), dict),
+        }
+        return jsonify({
+            "status": "ok",
+            "runtime": {
+                "socket_async_mode": getattr(socketio, "async_mode", "unknown"),
+                "monitor_interval_seconds": MONITOR_INTERVAL_SECONDS,
+                "notify_min_interval_seconds": NOTIFY_MIN_INTERVAL_SECONDS,
+                "has_background_alert_channels": _has_background_alert_channels(),
+            },
+            "monitor": {
+                "started": bool(_monitor_state.get("started")),
+                "clients": int(_monitor_state.get("clients", 0) or 0),
+            },
+            "prediction_cache": ta_status,
+            "cross_asset_cache": cross_asset_status,
+        }), 200
+    except Exception as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 500
 
 
 _ensure_monitor_started()
