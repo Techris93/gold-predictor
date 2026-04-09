@@ -71,6 +71,12 @@ DEFAULT_STRATEGY_PARAMS = {
     "volume_unavailable_penalty": 5.0,
     "mixed_alignment_penalty": 6.0,
     "neutral_confidence_cap": 63,
+    "event_watch_setup_weight": 0.35,
+    "event_breakout_setup_weight": 0.7,
+    "event_directional_setup_weight": 1.15,
+    "event_momentum_setup_weight": 1.55,
+    "event_alignment_boost": 0.35,
+    "event_conflict_penalty": 0.85,
     "mtf_intervals": ["15min", "1h", "4h"],
 }
 

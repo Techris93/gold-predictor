@@ -350,7 +350,32 @@ def compute_event_regime_snapshot(
 
     reopen_score = 8.0 if session_reopen else 0.0
     vol_of_vol_score = 6.0 if vol_of_vol >= 0.08 else 0.0
-    cross_asset_score = abs(cross_asset_summary["bullish_score"] - cross_asset_summary["bearish_score"]) * 5.0
+    cross_asset_diff = abs(cross_asset_summary["bullish_score"] - cross_asset_summary["bearish_score"])
+    cross_asset_score = cross_asset_diff * 5.0
+
+    compression_setup = compression_ratio <= 0.75 or squeeze_on
+    momentum_stack = atr_expansion_ratio >= 1.1 and bar_velocity >= 0.8
+    level_pressure = level_proximity_score >= 6.0
+    calendar_near = event_active or (_safe_float(minutes_to_next_event, 9999.0) <= 90.0 if minutes_to_next_event is not None else False)
+    cross_asset_confluence = cross_asset_summary["bias"] != "Neutral"
+    setup_cluster_count = sum(
+        1
+        for flag in [
+            compression_setup,
+            momentum_stack,
+            level_pressure,
+            session_reopen,
+            calendar_near,
+            asian_breakout_score > 0.0,
+            cross_asset_confluence,
+        ]
+        if flag
+    )
+    cluster_bonus = 0.0
+    if setup_cluster_count >= 5:
+        cluster_bonus = 10.0
+    elif setup_cluster_count >= 3:
+        cluster_bonus = 6.0
 
     big_move_score = _clamp(
         compression_score
@@ -364,6 +389,7 @@ def compute_event_regime_snapshot(
         + reopen_score
         + vol_of_vol_score
         + cross_asset_score
+        + cluster_bonus
     )
 
     bullish_bias = 0.0
@@ -397,10 +423,33 @@ def compute_event_regime_snapshot(
     elif gap_pct < 0:
         bearish_bias += 0.4
 
+    if momentum_stack and trend == "Bullish" and "Bullish" in alignment_label:
+        bullish_bias += 0.45
+    elif momentum_stack and trend == "Bearish" and "Bearish" in alignment_label:
+        bearish_bias += 0.45
+
+    if level_pressure and range_pos_24 is not None:
+        range_pos_24 = _safe_float(range_pos_24, 0.5)
+        if range_pos_24 >= 0.82 and bullish_bias >= bearish_bias:
+            bullish_bias += 0.3
+        elif range_pos_24 <= 0.18 and bearish_bias >= bullish_bias:
+            bearish_bias += 0.3
+
     breakout_bias = "Neutral"
-    if bullish_bias - bearish_bias >= 1.0:
+    bias_threshold = 1.0
+    if cross_asset_summary["bias"] == trend and trend in {"Bullish", "Bearish"}:
+        bias_threshold = 0.7
+    if (
+        ("Drift" in market_structure or "Breakout" in market_structure or "Breakdown" in market_structure)
+        and (("Bullish" in alignment_label and trend == "Bullish") or ("Bearish" in alignment_label and trend == "Bearish"))
+    ):
+        bias_threshold = min(bias_threshold, 0.6)
+    if setup_cluster_count >= 5:
+        bias_threshold = min(bias_threshold, 0.55)
+
+    if bullish_bias - bearish_bias >= bias_threshold:
         breakout_bias = "Bullish"
-    elif bearish_bias - bullish_bias >= 1.0:
+    elif bearish_bias - bullish_bias >= bias_threshold:
         breakout_bias = "Bearish"
 
     immediate_trigger = 0.0
@@ -415,18 +464,40 @@ def compute_event_regime_snapshot(
     if event_active:
         immediate_trigger += 12.0
 
-    expansion_probability_30m = _clamp(big_move_score * 0.62 + immediate_trigger)
-    expansion_probability_60m = _clamp(big_move_score * 0.78 + immediate_trigger * 0.7)
+    adaptive_threshold_discount = 0.0
+    if compression_setup:
+        adaptive_threshold_discount += 4.0
+    if momentum_stack:
+        adaptive_threshold_discount += 4.0
+    if level_pressure:
+        adaptive_threshold_discount += 3.0
+    if session_reopen:
+        adaptive_threshold_discount += 2.0
+    if calendar_near:
+        adaptive_threshold_discount += 4.0
+    if cross_asset_confluence:
+        adaptive_threshold_discount += 3.0
+    if setup_cluster_count >= 5:
+        adaptive_threshold_discount += 6.0
+    elif setup_cluster_count >= 3:
+        adaptive_threshold_discount += 3.0
+
+    effective_watch_threshold = max(28.0, expansion_watch_threshold - adaptive_threshold_discount)
+    effective_high_breakout_threshold = max(42.0, high_breakout_threshold - adaptive_threshold_discount)
+    effective_directional_threshold = max(54.0, directional_expansion_threshold - adaptive_threshold_discount)
+
+    expansion_probability_30m = _clamp(big_move_score * 0.62 + immediate_trigger + cluster_bonus * 0.35)
+    expansion_probability_60m = _clamp(big_move_score * 0.78 + immediate_trigger * 0.7 + cluster_bonus * 0.45)
     expected_range_expansion = round(atr_14 * (1.0 + max(0.0, atr_expansion_ratio - 1.0) + (0.35 if squeeze_on else 0.0)), 2)
 
     warning_ladder = "Normal"
-    if expansion_probability_30m >= max(directional_expansion_threshold + 10.0, 80.0) or (bar_velocity >= 1.1 and atr_expansion_ratio >= 1.2):
+    if expansion_probability_30m >= max(effective_directional_threshold + 8.0, 76.0) or (bar_velocity >= 1.1 and atr_expansion_ratio >= 1.2):
         warning_ladder = "Active Momentum Event"
-    elif expansion_probability_60m >= directional_expansion_threshold and breakout_bias != "Neutral":
+    elif expansion_probability_60m >= effective_directional_threshold and breakout_bias != "Neutral":
         warning_ladder = "Directional Expansion Likely"
-    elif expansion_probability_60m >= high_breakout_threshold:
+    elif expansion_probability_60m >= effective_high_breakout_threshold:
         warning_ladder = "High Breakout Risk"
-    elif expansion_probability_60m >= expansion_watch_threshold:
+    elif expansion_probability_60m >= effective_watch_threshold:
         warning_ladder = "Expansion Watch"
 
     event_regime = "normal"
@@ -463,6 +534,9 @@ def compute_event_regime_snapshot(
             "bar_velocity": bar_velocity >= 0.8,
             "calendar_risk": event_active or (_safe_float(minutes_to_next_event, 9999.0) <= 90.0 if minutes_to_next_event is not None else False),
             "cross_asset_confirmation": cross_asset_summary["bias"] == breakout_bias and breakout_bias != "Neutral",
+            "momentum_stack": momentum_stack,
+            "compression_setup": compression_setup,
+            "setup_cluster": setup_cluster_count >= 3,
         },
         "components": {
             "compression_score": round(compression_score, 2),
@@ -473,5 +547,10 @@ def compute_event_regime_snapshot(
             "asian_breakout_score": round(asian_breakout_score, 2),
             "calendar_score": round(calendar_score, 2),
             "cross_asset_score": round(cross_asset_score, 2),
+            "cluster_bonus": round(cluster_bonus, 2),
+            "adaptive_threshold_discount": round(adaptive_threshold_discount, 2),
+            "effective_watch_threshold": round(effective_watch_threshold, 2),
+            "effective_high_breakout_threshold": round(effective_high_breakout_threshold, 2),
+            "effective_directional_threshold": round(effective_directional_threshold, 2),
         },
     }

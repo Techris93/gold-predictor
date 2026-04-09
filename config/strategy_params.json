@@ -28,6 +28,12 @@
   "expansion_watch_threshold": 40.0,
   "high_breakout_threshold": 56.0,
   "directional_expansion_threshold": 70.0,
+  "event_watch_setup_weight": 0.35,
+  "event_breakout_setup_weight": 0.7,
+  "event_directional_setup_weight": 1.15,
+  "event_momentum_setup_weight": 1.55,
+  "event_alignment_boost": 0.35,
+  "event_conflict_penalty": 0.85,
   "mtf_intervals": [
     "15min",
     "1h",

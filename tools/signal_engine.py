@@ -68,6 +68,12 @@ DEFAULT_STRATEGY_PARAMS = {
     "expansion_watch_threshold": 48.0,
     "high_breakout_threshold": 64.0,
     "directional_expansion_threshold": 78.0,
+    "event_watch_setup_weight": 0.35,
+    "event_breakout_setup_weight": 0.7,
+    "event_directional_setup_weight": 1.15,
+    "event_momentum_setup_weight": 1.55,
+    "event_alignment_boost": 0.35,
+    "event_conflict_penalty": 0.85,
 }
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -266,6 +272,12 @@ def compute_prediction_from_ta(ta_data):
     expansion_watch_threshold = float(strategy_params.get("expansion_watch_threshold", 48.0))
     high_breakout_threshold = float(strategy_params.get("high_breakout_threshold", 64.0))
     directional_expansion_threshold = float(strategy_params.get("directional_expansion_threshold", 78.0))
+    event_watch_setup_weight = float(strategy_params.get("event_watch_setup_weight", 0.35))
+    event_breakout_setup_weight = float(strategy_params.get("event_breakout_setup_weight", 0.7))
+    event_directional_setup_weight = float(strategy_params.get("event_directional_setup_weight", 1.15))
+    event_momentum_setup_weight = float(strategy_params.get("event_momentum_setup_weight", 1.55))
+    event_alignment_boost = float(strategy_params.get("event_alignment_boost", 0.35))
+    event_conflict_penalty = float(strategy_params.get("event_conflict_penalty", 0.85))
 
     event_breakout_bias = str(regime_state.get("breakout_bias", "Neutral"))
     big_move_risk = float(regime_state.get("big_move_risk", 0.0) or 0.0)
@@ -337,10 +349,24 @@ def compute_prediction_from_ta(ta_data):
     elif "Bearish Shooting Star" in pa_pattern:
         bear_trigger += reversal_candle_weight
 
-    if event_breakout_bias == "Bullish" and expansion_probability_60m >= high_breakout_threshold:
-        bull_setup += 0.6
-    elif event_breakout_bias == "Bearish" and expansion_probability_60m >= high_breakout_threshold:
-        bear_setup += 0.6
+    event_setup_boost = 0.0
+    if warning_ladder == "Expansion Watch":
+        event_setup_boost = event_watch_setup_weight
+    elif warning_ladder == "High Breakout Risk":
+        event_setup_boost = event_breakout_setup_weight
+    elif warning_ladder == "Directional Expansion Likely":
+        event_setup_boost = event_directional_setup_weight
+    elif warning_ladder == "Active Momentum Event":
+        event_setup_boost = event_momentum_setup_weight
+
+    if event_breakout_bias == "Bullish" and event_setup_boost > 0:
+        bull_setup += event_setup_boost
+        if trend == "Bullish" or alignment_score > 0:
+            bull_setup += event_alignment_boost
+    elif event_breakout_bias == "Bearish" and event_setup_boost > 0:
+        bear_setup += event_setup_boost
+        if trend == "Bearish" or alignment_score < 0:
+            bear_setup += event_alignment_boost
 
     rsi_oversold = float(strategy_params.get("rsi_oversold", 20))
     rsi_overbought = float(strategy_params.get("rsi_overbought", 70))
@@ -407,6 +433,29 @@ def compute_prediction_from_ta(ta_data):
         directional_bias = "Bullish"
     elif score_diff <= -verdict_margin_threshold:
         directional_bias = "Bearish"
+
+    if warning_ladder in {"Directional Expansion Likely", "Active Momentum Event"} and event_breakout_bias != "Neutral":
+        if directional_bias == "Neutral":
+            directional_bias = event_breakout_bias
+        elif directional_bias != event_breakout_bias:
+            if event_breakout_bias == "Bullish":
+                bull_setup = max(0.0, bull_setup - event_conflict_penalty)
+                bear_setup += event_conflict_penalty
+            else:
+                bear_setup = max(0.0, bear_setup - event_conflict_penalty)
+                bull_setup += event_conflict_penalty
+            no_trade_reasons.append("Directional event regime conflicts with the core setup.")
+            bull_score = bull_setup + bull_trigger
+            bear_score = bear_setup + bear_trigger
+            score_diff = bull_score - bear_score
+            score_margin = abs(score_diff)
+            evidence_total = bull_score + bear_score
+            if score_diff >= verdict_margin_threshold:
+                directional_bias = "Bullish"
+            elif score_diff <= -verdict_margin_threshold:
+                directional_bias = "Bearish"
+            else:
+                directional_bias = "Neutral"
 
     if directional_bias == "Bullish" and bull_trigger >= trigger_min_score:
         verdict = "Bullish"
@@ -502,11 +551,17 @@ def compute_prediction_from_ta(ta_data):
         penalty += volume_unavailable_penalty
     if alignment_label == "Mixed / Low Alignment":
         penalty += mixed_alignment_penalty
+    if warning_ladder == "Directional Expansion Likely" and event_breakout_bias == directional_bias and directional_bias != "Neutral":
+        base_conf += 4.0
+    elif warning_ladder == "Active Momentum Event" and event_breakout_bias == directional_bias and directional_bias != "Neutral":
+        base_conf += 6.0
     if event_risk.get("active"):
         penalty += event_risk_penalty
         no_trade_reasons.append("Major macro event window is active.")
     elif big_move_risk >= directional_expansion_threshold and event_breakout_bias == "Neutral":
         no_trade_reasons.append("Large move risk is elevated, but directional bias is still unclear.")
+    elif warning_ladder in {"Directional Expansion Likely", "Active Momentum Event"} and event_breakout_bias != "Neutral" and directional_bias != "Neutral" and event_breakout_bias != directional_bias:
+        penalty += 6.0
     if regime == "Range-Bound" and alignment_label == "Mixed / Low Alignment":
         no_trade_reasons.append("Range-bound regime with mixed alignment.")
     if adx_14 < no_trade_adx_threshold:
