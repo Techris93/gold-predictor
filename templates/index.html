@@ -618,6 +618,10 @@
         border: 1px solid rgba(255, 255, 255, 0.06);
       }
 
+      .live-status-grid.live-pulse {
+        animation: liveGridPulse 1.1s ease-out;
+      }
+
       .live-status-item {
         text-align: left;
       }
@@ -647,6 +651,53 @@
 
       .live-status-value.is-muted {
         color: var(--text-muted);
+      }
+
+      .badge.update-pulse {
+        animation: badgePulse 0.9s ease-out;
+      }
+
+      .price.update-pulse {
+        animation: pricePulse 0.9s ease-out;
+      }
+
+      @keyframes liveGridPulse {
+        0% {
+          box-shadow: 0 0 0 0 rgba(212, 175, 55, 0.45);
+          border-color: rgba(212, 175, 55, 0.45);
+          background: rgba(212, 175, 55, 0.1);
+        }
+        100% {
+          box-shadow: 0 0 0 18px rgba(212, 175, 55, 0);
+          border-color: rgba(255, 255, 255, 0.06);
+          background: rgba(255, 255, 255, 0.03);
+        }
+      }
+
+      @keyframes badgePulse {
+        0% {
+          transform: scale(1);
+          box-shadow: 0 0 0 0 rgba(212, 175, 55, 0.45);
+        }
+        40% {
+          transform: scale(1.04);
+        }
+        100% {
+          transform: scale(1);
+          box-shadow: 0 0 0 14px rgba(212, 175, 55, 0);
+        }
+      }
+
+      @keyframes pricePulse {
+        0% {
+          text-shadow: 0 0 0 rgba(212, 175, 55, 0);
+        }
+        35% {
+          text-shadow: 0 0 18px rgba(212, 175, 55, 0.55);
+        }
+        100% {
+          text-shadow: 0 0 0 rgba(212, 175, 55, 0);
+        }
       }
 
       /* Responsive fixes */
@@ -1296,6 +1347,27 @@
           source === "socket" ? "Websocket push" : "Direct refresh",
           source === "socket" ? "good" : "warn",
         );
+        pulseLiveUpdate(source);
+      }
+
+      function pulseLiveUpdate(source) {
+        const grid = document.querySelector(".live-status-grid");
+        const badge = document.getElementById("verdict-badge");
+        const price = document.getElementById("current-price");
+        if (grid) {
+          grid.classList.remove("live-pulse");
+          void grid.offsetWidth;
+          grid.classList.add("live-pulse");
+        }
+        const pulseTargets = [badge, price].filter(Boolean);
+        for (const el of pulseTargets) {
+          el.classList.remove("update-pulse");
+          void el.offsetWidth;
+          el.classList.add("update-pulse");
+        }
+        if (source === "socket") {
+          setLiveStatusValue("last-update-source", "Websocket push applied", "good");
+        }
       }
 
       function showPushToast(title, body) {
