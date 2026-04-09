@@ -196,7 +196,9 @@ def _summarize_changes_for_push(changes):
         val = changes.get(key, {})
         prev = val.get("previous") if isinstance(val, dict) else None
         cur = val.get("current") if isinstance(val, dict) else None
-        parts.append(f"{labels.get(key, key)}: {prev} -> {cur}")
+        parts.append(
+            f"{labels.get(key, key)}: {_humanize_alert_value(key, prev)} -> {_humanize_alert_value(key, cur)}"
+        )
     return " | ".join(parts) if parts else "Execution permission changed"
 
 
@@ -245,6 +247,40 @@ def _notification_title_for_changes(changes):
     if has_playbook or has_verdict or has_confidence or has_warning or has_event_regime or has_breakout_bias or has_entry_readiness or has_exit_urgency:
         return "XAUUSD State Changed"
     return "XAUUSD Execution Permission Changed"
+
+
+def _humanize_words(value):
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    text = text.replace("_", " ").replace("-", " ")
+    acronyms = {"AI", "RSI", "EMA", "ATR", "ADX", "XAUUSD"}
+    words = []
+    for word in text.split():
+        upper = word.upper()
+        if upper in acronyms:
+            words.append(upper)
+        else:
+            words.append(word.capitalize())
+    return " ".join(words)
+
+
+def _humanize_alert_value(key, value):
+    text = str(value or "").strip()
+    if not text:
+        return "None"
+    humanized_keys = {
+        "trade_playbook_stage",
+        "event_regime",
+        "breakout_bias",
+        "entry_readiness",
+        "exit_urgency",
+        "execution_permission",
+        "market_regime",
+    }
+    if key in humanized_keys:
+        return _humanize_words(text)
+    return text
 
 
 def _normalize_notification_text(text):

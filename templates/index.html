@@ -1209,6 +1209,38 @@
         }, 14000);
       }
 
+      function humanizeWords(value) {
+        const text = String(value || "").trim();
+        if (!text) return "";
+        const acronyms = new Set(["AI", "RSI", "EMA", "ATR", "ADX", "XAUUSD"]);
+        return text
+          .replaceAll("_", " ")
+          .replaceAll("-", " ")
+          .split(/\s+/)
+          .map((word) => {
+            const upper = word.toUpperCase();
+            if (acronyms.has(upper)) return upper;
+            return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+          })
+          .join(" ");
+      }
+
+      function humanizeChangeValue(key, value) {
+        const text = String(value ?? "").trim();
+        if (!text) return "None";
+        const humanizedKeys = new Set([
+          "trade_playbook_stage",
+          "event_regime",
+          "breakout_bias",
+          "entry_readiness",
+          "exit_urgency",
+          "execution_permission",
+          "market_regime",
+          "alignment",
+        ]);
+        return humanizedKeys.has(key) ? humanizeWords(text) : text;
+      }
+
       function summarizeChanges(changes) {
         const entries = Object.entries(changes || {});
         if (entries.length === 0) return "No indicator fields changed.";
@@ -1240,7 +1272,7 @@
 
         return orderedEntries
           .slice(0, 4)
-          .map(([k, v]) => `${labels[k] || k}: ${v.previous} -> ${v.current}`)
+          .map(([k, v]) => `${labels[k] || k}: ${humanizeChangeValue(k, v.previous)} -> ${humanizeChangeValue(k, v.current)}`)
           .join(" | ");
       }
 
@@ -1722,7 +1754,7 @@
 
         const regimeEl = document.getElementById("ta-regime");
         const regimeText = regime.market_regime || "Unknown";
-        regimeEl.innerText = regimeText;
+        regimeEl.innerText = humanizeWords(regimeText);
         regimeEl.className = `metric-value ${regimeText.includes("Trending") ? "value-bullish" : regimeText.includes("Range") ? "value-bearish" : ""}`;
 
         const alignmentEl = document.getElementById("ta-alignment");
@@ -1750,7 +1782,7 @@
         const marketActionText = marketState.action || "hold";
 
         const marketRegimeEl = document.getElementById("ms-regime");
-        marketRegimeEl.innerText = marketRegimeText;
+        marketRegimeEl.innerText = humanizeWords(marketRegimeText);
         marketRegimeEl.className = `metric-value ${marketRegimeText === "trend" ? "value-bullish" : marketRegimeText === "event-risk" ? "value-bearish" : ""}`;
 
         const marketBiasEl = document.getElementById("ms-bias");
@@ -1762,11 +1794,11 @@
         marketTradeabilityEl.className = `metric-value ${marketTradeabilityText === "High" ? "value-bullish" : marketTradeabilityText === "Low" ? "value-bearish" : ""}`;
 
         const marketActionStateEl = document.getElementById("ms-action-state");
-        marketActionStateEl.innerText = marketActionStateText.replaceAll("_", " ");
+        marketActionStateEl.innerText = humanizeWords(marketActionStateText);
         marketActionStateEl.className = `metric-value ${marketActionStateText === "LONG_ACTIVE" ? "value-bullish" : marketActionStateText === "SHORT_ACTIVE" || marketActionStateText === "EXIT_RISK" ? "value-bearish" : ""}`;
 
         const marketActionEl = document.getElementById("ms-action");
-        marketActionEl.innerText = marketActionText.toUpperCase();
+        marketActionEl.innerText = humanizeWords(marketActionText);
         marketActionEl.className = `metric-value ${marketActionText === "buy" ? "value-bullish" : marketActionText === "sell" || marketActionText === "exit" ? "value-bearish" : ""}`;
 
         const marketScoresEl = document.getElementById("ms-scores");
@@ -1792,7 +1824,7 @@
         regimeProbEl.innerText = `${Number(regimeState.expansion_probability_30m || 0).toFixed(1)}% / ${Number(regimeState.expansion_probability_60m || 0).toFixed(1)}%`;
         regimeBiasEl.innerText = breakoutBias;
         regimeBiasEl.className = `metric-value ${breakoutBias === "Bullish" ? "value-bullish" : breakoutBias === "Bearish" ? "value-bearish" : ""}`;
-        regimeEventEl.innerText = eventRegimeText.replaceAll("_", " ");
+        regimeEventEl.innerText = humanizeWords(eventRegimeText);
         regimeEventEl.className = `metric-value ${eventRegimeText === "trend_acceleration" ? "value-bullish" : eventRegimeText === "panic_reversal" || eventRegimeText === "event_risk" ? "value-bearish" : ""}`;
         regimeLadderEl.innerText = warningLadderText;
         regimeLadderEl.className = `metric-value ${warningLadderText === "Directional Expansion Likely" || warningLadderText === "Active Momentum Event" ? "value-bullish" : warningLadderText === "High Breakout Risk" ? "value-bearish" : ""}`;
