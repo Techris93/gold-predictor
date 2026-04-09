@@ -452,6 +452,20 @@ def compute_event_regime_snapshot(
     elif bearish_bias - bullish_bias >= bias_threshold:
         breakout_bias = "Bearish"
 
+    directional_confluence_count = 0
+    if trend in {"Bullish", "Bearish"} and trend == breakout_bias:
+        directional_confluence_count += 1
+    if ("Bullish" in alignment_label and breakout_bias == "Bullish") or ("Bearish" in alignment_label and breakout_bias == "Bearish"):
+        directional_confluence_count += 1
+    if ("Bullish" in market_structure and breakout_bias == "Bullish") or ("Bearish" in market_structure and breakout_bias == "Bearish"):
+        directional_confluence_count += 1
+    if cross_asset_summary["bias"] == breakout_bias and breakout_bias != "Neutral":
+        directional_confluence_count += 1
+    if momentum_stack:
+        directional_confluence_count += 1
+    if level_pressure:
+        directional_confluence_count += 1
+
     immediate_trigger = 0.0
     if atr_expansion_ratio >= 1.15:
         immediate_trigger += 10.0
@@ -481,6 +495,10 @@ def compute_event_regime_snapshot(
         adaptive_threshold_discount += 6.0
     elif setup_cluster_count >= 3:
         adaptive_threshold_discount += 3.0
+    if directional_confluence_count >= 4:
+        adaptive_threshold_discount += 5.0
+    elif directional_confluence_count >= 3:
+        adaptive_threshold_discount += 2.0
 
     effective_watch_threshold = max(28.0, expansion_watch_threshold - adaptive_threshold_discount)
     effective_high_breakout_threshold = max(42.0, high_breakout_threshold - adaptive_threshold_discount)
@@ -493,7 +511,14 @@ def compute_event_regime_snapshot(
     warning_ladder = "Normal"
     if expansion_probability_30m >= max(effective_directional_threshold + 8.0, 76.0) or (bar_velocity >= 1.1 and atr_expansion_ratio >= 1.2):
         warning_ladder = "Active Momentum Event"
-    elif expansion_probability_60m >= effective_directional_threshold and breakout_bias != "Neutral":
+    elif (
+        expansion_probability_60m >= effective_directional_threshold
+        or (
+            expansion_probability_60m >= max(effective_high_breakout_threshold, effective_directional_threshold - 8.0)
+            and breakout_bias != "Neutral"
+            and directional_confluence_count >= 4
+        )
+    ) and breakout_bias != "Neutral":
         warning_ladder = "Directional Expansion Likely"
     elif expansion_probability_60m >= effective_high_breakout_threshold:
         warning_ladder = "High Breakout Risk"
@@ -537,6 +562,7 @@ def compute_event_regime_snapshot(
             "momentum_stack": momentum_stack,
             "compression_setup": compression_setup,
             "setup_cluster": setup_cluster_count >= 3,
+            "directional_confluence": directional_confluence_count >= 3,
         },
         "components": {
             "compression_score": round(compression_score, 2),
@@ -548,6 +574,7 @@ def compute_event_regime_snapshot(
             "calendar_score": round(calendar_score, 2),
             "cross_asset_score": round(cross_asset_score, 2),
             "cluster_bonus": round(cluster_bonus, 2),
+            "directional_confluence_count": int(directional_confluence_count),
             "adaptive_threshold_discount": round(adaptive_threshold_discount, 2),
             "effective_watch_threshold": round(effective_watch_threshold, 2),
             "effective_high_breakout_threshold": round(effective_high_breakout_threshold, 2),
