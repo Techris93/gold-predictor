@@ -78,6 +78,8 @@ def _load_json_config(relative_path, fallback):
 
 ACTIVE_BACKTEST_PARAMS = _load_json_config("config/backtest_params.json", DEFAULT_BACKTEST_PARAMS)
 FEATURE_REPORT_FILE = os.path.join(BASE_DIR, "tools", "reports", "backtest_feature_analysis.json")
+CONFIDENCE_CALIBRATION_FILE = os.path.join(BASE_DIR, "tools", "reports", "confidence_calibration.json")
+OUTCOME_SUMMARY_FILE = os.path.join(BASE_DIR, "tools", "reports", "signal_outcome_summary.json")
 
 def generate_signals(df, params=None):
     params = normalize_strategy_params(params or ACTIVE_BACKTEST_PARAMS)
@@ -103,12 +105,18 @@ def generate_signals(df, params=None):
                 "directional_bias": prediction.get("directionalBias"),
                 "tradeability": prediction.get("tradeability"),
                 "confidence": prediction.get("confidence"),
+                "confidence_bucket": prediction.get("confidenceBucket"),
                 "direction_score": prediction.get("directionScore"),
                 "tradeability_score": prediction.get("tradeabilityScore"),
                 "exit_risk_score": prediction.get("exitRiskScore"),
                 "stability_score": prediction.get("stabilityScore"),
+                "regime_bucket": prediction.get("regimeBucket"),
+                "anti_chop_active": prediction.get("antiChopActive"),
+                "anti_chop_reasons": prediction.get("antiChopReasons", []),
                 "feature_hits": prediction.get("FeatureHits", {}),
                 "regime_state": prediction.get("RegimeState", {}),
+                "forecast_state": prediction.get("ForecastState", {}),
+                "execution_state": prediction.get("ExecutionState", {}),
             }
         )
 
@@ -422,6 +430,141 @@ def summarize_big_move_metrics(df, states):
         "event_regime_distribution": regime_counts,
     }
 
+
+def summarize_confidence_reliability(df, states):
+    if not states or len(df) < 4:
+        return {}
+
+    buckets = {}
+    regime_scores = {}
+    calibration_table = {}
+    max_index = min(len(states), len(df) - 3)
+    for i in range(max_index):
+        state = states[i]
+        verdict = state.get("verdict")
+        if verdict not in {"Bullish", "Bearish"}:
+            continue
+        entry_price = float(df["Close"].iloc[i])
+        future_close = float(df["Close"].iloc[i + 3])
+        realized = (future_close - entry_price) / max(entry_price, 1e-8)
+        success = realized > 0 if verdict == "Bullish" else realized < 0
+        confidence = float(state.get("confidence") or 50.0)
+        confidence_band = f"{int(confidence // 10) * 10:02d}-{min(99, int(confidence // 10) * 10 + 9):02d}"
+        bucket = buckets.setdefault(confidence_band, {"count": 0, "wins": 0})
+        bucket["count"] += 1
+        bucket["wins"] += 1 if success else 0
+
+        regime_bucket = str(state.get("regime_bucket") or "transition")
+        regime_record = regime_scores.setdefault(regime_bucket, {"count": 0, "wins": 0, "confidence_sum": 0.0})
+        regime_record["count"] += 1
+        regime_record["wins"] += 1 if success else 0
+        regime_record["confidence_sum"] += confidence
+
+        tradeability = "High" if float(state.get("tradeability_score") or 0.0) >= 68.0 else "Medium" if float(state.get("tradeability_score") or 0.0) >= 52.0 else "Low"
+        stability = "stable" if float(state.get("stability_score") or 0.0) >= 60.0 else "unstable"
+        calib_key = "|".join([str(state.get("regime") or "transition"), str(state.get("directional_bias") or "Neutral"), tradeability, stability])
+        calib_entry = calibration_table.setdefault(calib_key, {"count": 0, "wins": 0})
+        calib_entry["count"] += 1
+        calib_entry["wins"] += 1 if success else 0
+
+    reliability_curve = {
+        key: {
+            "count": value["count"],
+            "hit_rate": round(value["wins"] / value["count"], 4) if value["count"] else 0.0,
+        }
+        for key, value in sorted(buckets.items())
+    }
+    regime_confidence = {
+        key: round((value["wins"] / value["count"]) * 100.0, 2)
+        for key, value in regime_scores.items()
+        if value["count"]
+    }
+    confidence_buckets = {
+        key: round((value["wins"] / value["count"]) * 100.0, 2)
+        for key, value in calibration_table.items()
+        if value["count"] >= 5
+    }
+    payload = {
+        "regime_confidence": regime_confidence,
+        "confidence_buckets": confidence_buckets,
+        "reliability_curve": reliability_curve,
+    }
+    return payload
+
+
+def summarize_execution_state_metrics(df, states):
+    if not states or len(df) < 5:
+        return {}
+
+    metrics = {}
+    max_index = min(len(states), len(df) - 4)
+    for i in range(max_index):
+        state = states[i]
+        execution = state.get("execution_state") or {}
+        status = str(execution.get("status") or "stand_aside")
+        if status not in {"enter", "prepare", "exit", "stand_aside"}:
+            continue
+        entry_price = float(df["Close"].iloc[i])
+        future = df.iloc[i + 1 : i + 5]
+        future_close = float(df["Close"].iloc[i + 4])
+        future_high = float(future["High"].max())
+        future_low = float(future["Low"].min())
+        verdict = state.get("verdict")
+        direction_success = False
+        if verdict == "Bullish":
+            direction_success = future_close > entry_price
+        elif verdict == "Bearish":
+            direction_success = future_close < entry_price
+        if status == "exit":
+            direction_success = abs(future_close - entry_price) / max(entry_price, 1e-8) > 0.003
+
+        bucket = metrics.setdefault(status, {"count": 0, "wins": 0, "favorable": [], "adverse": []})
+        bucket["count"] += 1
+        bucket["wins"] += 1 if direction_success else 0
+        bucket["favorable"].append(max(abs(future_high - entry_price), abs(entry_price - future_low)) / max(entry_price, 1e-8))
+        bucket["adverse"].append(abs(future_close - entry_price) / max(entry_price, 1e-8))
+
+    return {
+        status: {
+            "count": bucket["count"],
+            "hit_rate": round(bucket["wins"] / bucket["count"], 4) if bucket["count"] else 0.0,
+            "avg_favorable_move_pct": round(float(np.mean(bucket["favorable"])) * 100, 4) if bucket["favorable"] else 0.0,
+            "avg_realized_move_pct": round(float(np.mean(bucket["adverse"])) * 100, 4) if bucket["adverse"] else 0.0,
+        }
+        for status, bucket in metrics.items()
+    }
+
+
+def summarize_outcome_log(df, states):
+    if not states or len(df) < 5:
+        return {}
+
+    records = []
+    max_index = min(len(states), len(df) - 4)
+    for i in range(max_index):
+        state = states[i]
+        entry_price = float(df["Close"].iloc[i])
+        outcomes = {}
+        for bars in (1, 2, 4):
+            future_price = float(df["Close"].iloc[i + bars])
+            outcomes[f"{bars}h_return_pct"] = round(((future_price - entry_price) / max(entry_price, 1e-8)) * 100, 4)
+        records.append(
+            {
+                "timestamp": state.get("timestamp"),
+                "price": round(entry_price, 2),
+                "verdict": state.get("verdict"),
+                "confidence": state.get("confidence"),
+                "regime_bucket": state.get("regime_bucket"),
+                "warning_ladder": (state.get("regime_state") or {}).get("warning_ladder"),
+                "event_regime": (state.get("regime_state") or {}).get("event_regime"),
+                "trade_playbook_stage": (state.get("execution_state") or {}).get("status"),
+                "breakout_bias": (state.get("forecast_state") or {}).get("breakoutBias"),
+                "anti_chop_active": state.get("anti_chop_active"),
+                "outcomes": outcomes,
+            }
+        )
+    return {"records": records[:500]}
+
 def run_backtest(ticker="XAU/USD", period="2y", interval="1h"):
     print(f"Fetching {period} of {interval} data for {ticker}...")
     try:
@@ -464,6 +607,9 @@ def run_backtest(ticker="XAU/USD", period="2y", interval="1h"):
         feature_hit_metrics = summarize_feature_hit_metrics(df, states)
         ablation_metrics = summarize_ablation_metrics(df, ACTIVE_BACKTEST_PARAMS)
         big_move_metrics = summarize_big_move_metrics(df, states)
+        confidence_reliability = summarize_confidence_reliability(df, states)
+        execution_state_metrics = summarize_execution_state_metrics(df, states)
+        outcome_log = summarize_outcome_log(df, states)
         print(f"Whipsaw Rate:       {transition_metrics.get('whipsaw_rate', 0.0):.4f}")
         print(f"False Entry Rate:   {transition_metrics.get('false_entry_rate', 0.0):.4f}")
         print(f"Avg Persistence:    {transition_metrics.get('avg_signal_persistence', 0.0):.2f} bars")
@@ -499,6 +645,17 @@ def run_backtest(ticker="XAU/USD", period="2y", interval="1h"):
                 f"  directional_4h: precision={directional.get('precision_4h', 0.0):.4f} "
                 f"recall={directional.get('recall_4h', 0.0):.4f}"
             )
+        if confidence_reliability:
+            print("Confidence Reliability:")
+            for regime_bucket, value in sorted((confidence_reliability.get("regime_confidence") or {}).items()):
+                print(f"  {regime_bucket}: {float(value):.2f}%")
+        if execution_state_metrics:
+            print("Execution State Metrics:")
+            for status, metrics in sorted(execution_state_metrics.items()):
+                print(
+                    f"  {status}: hit_rate={metrics.get('hit_rate', 0.0):.4f} "
+                    f"count={metrics.get('count', 0)}"
+                )
         os.makedirs(os.path.dirname(FEATURE_REPORT_FILE), exist_ok=True)
         with open(FEATURE_REPORT_FILE, "w", encoding="utf-8") as handle:
             json.dump(
@@ -510,10 +667,18 @@ def run_backtest(ticker="XAU/USD", period="2y", interval="1h"):
                     "ablation_metrics": ablation_metrics,
                     "transition_metrics": transition_metrics,
                     "big_move_metrics": big_move_metrics,
+                    "confidence_reliability": confidence_reliability,
+                    "execution_state_metrics": execution_state_metrics,
                 },
                 handle,
                 indent=2,
             )
+            handle.write("\n")
+        with open(CONFIDENCE_CALIBRATION_FILE, "w", encoding="utf-8") as handle:
+            json.dump(confidence_reliability, handle, indent=2)
+            handle.write("\n")
+        with open(OUTCOME_SUMMARY_FILE, "w", encoding="utf-8") as handle:
+            json.dump(outcome_log, handle, indent=2)
             handle.write("\n")
     else:
         print("No trades triggered.")

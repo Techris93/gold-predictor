@@ -210,12 +210,23 @@ def _write_confidence_calibration(best_result):
 
     calibrated = round(max(50.0, min(95.0, 45.0 + (float(pass_rate) * 100.0))), 2)
     payload = {
-        "trend|Bullish|High|stable": calibrated,
-        "trend|Bearish|High|stable": calibrated,
-        "transition|Bullish|Medium|stable": round(max(50.0, calibrated - 10.0), 2),
-        "transition|Bearish|Medium|stable": round(max(50.0, calibrated - 10.0), 2),
-        "range|Neutral|Low|unstable": 52.0,
-        "event-risk|Neutral|Low|unstable": 50.0,
+        "regime_confidence": {
+            "trend_continuation": calibrated,
+            "breakout_watch": round(max(50.0, calibrated - 4.0), 2),
+            "active_momentum": round(min(95.0, calibrated + 3.0), 2),
+            "quiet_range": 52.0,
+            "reversal_risk": 50.0,
+            "transition": round(max(50.0, calibrated - 10.0), 2),
+        },
+        "confidence_buckets": {
+            "trend|Bullish|High|stable": calibrated,
+            "trend|Bearish|High|stable": calibrated,
+            "transition|Bullish|Medium|stable": round(max(50.0, calibrated - 10.0), 2),
+            "transition|Bearish|Medium|stable": round(max(50.0, calibrated - 10.0), 2),
+            "range|Neutral|Low|unstable": 52.0,
+            "event-risk|Neutral|Low|unstable": 50.0,
+        },
+        "reliability_curve": {},
     }
     _write_json(CONFIDENCE_CALIBRATION_FILE, payload)
 

@@ -74,6 +74,10 @@ DEFAULT_STRATEGY_PARAMS = {
     "event_momentum_setup_weight": 1.55,
     "event_alignment_boost": 0.35,
     "event_conflict_penalty": 0.85,
+    "anti_chop_margin_buffer": 0.8,
+    "anti_chop_trigger_buffer": 0.35,
+    "anti_chop_tradeability_floor": 68.0,
+    "anti_chop_penalty": 8.0,
 }
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -97,6 +101,23 @@ def _load_confidence_calibration():
         return {}
 
 
+def _regime_bucket(regime_label, warning_ladder, event_regime):
+    regime_label = str(regime_label or "")
+    warning_ladder = str(warning_ladder or "")
+    event_regime = str(event_regime or "")
+    if event_regime == "panic_reversal":
+        return "reversal_risk"
+    if warning_ladder == "Active Momentum Event" or event_regime in {"trend_acceleration", "range_expansion"}:
+        return "active_momentum"
+    if warning_ladder in {"Directional Expansion Likely", "High Breakout Risk"} or event_regime == "breakout_watch":
+        return "breakout_watch"
+    if regime_label == "trend":
+        return "trend_continuation"
+    if regime_label == "range":
+        return "quiet_range"
+    return "transition"
+
+
 def _bucket_from_components(regime_label, directional_bias, tradeability, stability):
     return "|".join(
         [
@@ -110,12 +131,82 @@ def _bucket_from_components(regime_label, directional_bias, tradeability, stabil
 
 def _calibrate_confidence(raw_confidence, regime_label, directional_bias, tradeability, stability):
     calibration = _load_confidence_calibration()
+    regime_bucket = _regime_bucket(regime_label, "", "")
     bucket = _bucket_from_components(regime_label, directional_bias, tradeability, stability)
-    empirical = calibration.get(bucket)
+    empirical = None
+    if isinstance(calibration.get("confidence_buckets"), dict):
+        empirical = calibration["confidence_buckets"].get(bucket)
+    if empirical is None:
+        empirical = calibration.get(bucket)
     if isinstance(empirical, (int, float)):
         calibrated = max(50, min(95, round(float(empirical))))
         return calibrated, "empirical", bucket
+    regime_floor = None
+    if isinstance(calibration.get("regime_confidence"), dict):
+        regime_floor = calibration["regime_confidence"].get(regime_bucket)
+    if isinstance(regime_floor, (int, float)):
+        calibrated = round((float(raw_confidence) * 0.55) + (float(regime_floor) * 0.45))
+        return max(50, min(95, calibrated)), "regime_blend", bucket
     return int(raw_confidence), "heuristic", bucket
+
+
+def _build_forecast_state(regime_bucket, regime_state, confidence, directional_bias):
+    regime_state = regime_state or {}
+    breakout_bias = str(regime_state.get("breakout_bias") or "Neutral")
+    warning_ladder = str(regime_state.get("warning_ladder") or "Normal")
+    event_regime = str(regime_state.get("event_regime") or "normal")
+    expansion_30m = float(regime_state.get("expansion_probability_30m") or 0.0)
+    expansion_60m = float(regime_state.get("expansion_probability_60m") or 0.0)
+    forecast_confidence = round(
+        min(
+            95.0,
+            max(
+                50.0,
+                (float(confidence or 50) * 0.55)
+                + (expansion_60m * 0.30)
+                + (expansion_30m * 0.15),
+            ),
+        )
+    )
+    return {
+        "regimeBucket": regime_bucket,
+        "moveProbability30m": round(expansion_30m, 2),
+        "moveProbability60m": round(expansion_60m, 2),
+        "directionalBias": directional_bias,
+        "breakoutBias": breakout_bias,
+        "eventRegime": event_regime,
+        "warningLadder": warning_ladder,
+        "expectedRangeExpansion": regime_state.get("expected_range_expansion"),
+        "crossAssetBias": regime_state.get("cross_asset_bias", "Neutral"),
+        "minutesToNextEvent": regime_state.get("minutes_to_next_event"),
+        "forecastConfidence": forecast_confidence,
+    }
+
+
+def _build_execution_state(action_state, action, tradeability_label, no_trade_reasons, anti_chop_reasons, confidence):
+    actionable = action_state in {"LONG_ACTIVE", "SHORT_ACTIVE"}
+    forming = action_state in {"SETUP_LONG", "SETUP_SHORT"}
+    exit_recommended = action_state == "EXIT_RISK"
+    if exit_recommended:
+        status = "exit"
+    elif actionable:
+        status = "enter"
+    elif forming:
+        status = "prepare"
+    else:
+        status = "stand_aside"
+    return {
+        "status": status,
+        "actionState": action_state,
+        "action": action,
+        "entryAllowed": actionable,
+        "exitRecommended": exit_recommended,
+        "tradeability": tradeability_label,
+        "blockers": list(no_trade_reasons or []),
+        "antiChopActive": bool(anti_chop_reasons),
+        "antiChopReasons": list(anti_chop_reasons or []),
+        "executionConfidence": round(float(confidence or 50)),
+    }
 
 
 def compute_trade_guidance(ta_data, confidence):
@@ -278,6 +369,10 @@ def compute_prediction_from_ta(ta_data):
     event_momentum_setup_weight = float(strategy_params.get("event_momentum_setup_weight", 1.55))
     event_alignment_boost = float(strategy_params.get("event_alignment_boost", 0.35))
     event_conflict_penalty = float(strategy_params.get("event_conflict_penalty", 0.85))
+    anti_chop_margin_buffer = float(strategy_params.get("anti_chop_margin_buffer", 0.8))
+    anti_chop_trigger_buffer = float(strategy_params.get("anti_chop_trigger_buffer", 0.35))
+    anti_chop_tradeability_floor = float(strategy_params.get("anti_chop_tradeability_floor", 68.0))
+    anti_chop_penalty = float(strategy_params.get("anti_chop_penalty", 8.0))
 
     event_breakout_bias = str(regime_state.get("breakout_bias", "Neutral"))
     big_move_risk = float(regime_state.get("big_move_risk", 0.0) or 0.0)
@@ -531,6 +626,29 @@ def compute_prediction_from_ta(ta_data):
     if verdict in {"Bullish", "Bearish"} and exit_risk_score >= exit_risk_threshold:
         action_state = "EXIT_RISK"
 
+    regime_bucket = _regime_bucket(regime_label, warning_ladder, event_regime_label)
+    anti_chop_reasons = []
+    if warning_ladder in {"Expansion Watch", "High Breakout Risk"} and event_breakout_bias == "Neutral":
+        anti_chop_reasons.append("Expansion risk is rising without directional confirmation.")
+    if warning_ladder in {"Expansion Watch", "High Breakout Risk"} and tradeability_score < anti_chop_tradeability_floor:
+        anti_chop_reasons.append("Tradeability is still below the execution floor for breakout conditions.")
+    if alignment_label == "Mixed / Low Alignment" and score_margin < (verdict_margin_threshold + anti_chop_margin_buffer):
+        anti_chop_reasons.append("Directional edge is still too narrow in mixed alignment.")
+    if "Doji" in pa_pattern and warning_ladder != "Active Momentum Event":
+        anti_chop_reasons.append("Indecision candle is weakening the trigger.")
+    if (
+        action_state in {"SETUP_LONG", "SETUP_SHORT"}
+        and max(bull_trigger, bear_trigger) < (trigger_min_score + anti_chop_trigger_buffer)
+    ):
+        anti_chop_reasons.append("Trigger quality is still too weak for setup promotion.")
+    if (
+        warning_ladder == "Directional Expansion Likely"
+        and event_breakout_bias != "Neutral"
+        and directional_bias != "Neutral"
+        and event_breakout_bias != directional_bias
+    ):
+        anti_chop_reasons.append("Forecast direction conflicts with the execution direction.")
+
     action = "hold"
     if action_state == "LONG_ACTIVE":
         action = "buy"
@@ -568,6 +686,13 @@ def compute_prediction_from_ta(ta_data):
         no_trade_reasons.append("Trend strength is too weak.")
     if verdict == "Neutral" and max(bull_trigger, bear_trigger) < trigger_min_score:
         no_trade_reasons.append("No clean trigger is present.")
+    if anti_chop_reasons:
+        penalty += anti_chop_penalty
+        if action_state in {"SETUP_LONG", "SETUP_SHORT"}:
+            action_state = "WAIT"
+            action = "hold"
+        if not no_trade_reasons:
+            no_trade_reasons.append(anti_chop_reasons[0])
 
     confidence = base_conf - penalty
     if no_trade_reasons:
@@ -584,6 +709,20 @@ def compute_prediction_from_ta(ta_data):
         directional_bias,
         tradeability_label,
         stability_score,
+    )
+    forecast_state = _build_forecast_state(
+        regime_bucket,
+        regime_state,
+        confidence,
+        directional_bias,
+    )
+    execution_state = _build_execution_state(
+        action_state,
+        action,
+        tradeability_label,
+        no_trade_reasons,
+        anti_chop_reasons,
+        confidence,
     )
 
     trade_guidance = compute_trade_guidance(
@@ -649,19 +788,25 @@ def compute_prediction_from_ta(ta_data):
         "exitRiskScore": round(exit_risk_score, 2),
         "stabilityScore": round(stability_score, 2),
         "regime": regime_label,
+        "regimeBucket": regime_bucket,
         "directionalBias": directional_bias,
         "tradeability": tradeability_label,
         "actionState": action_state,
         "action": action,
         "confidenceMode": confidence_mode,
         "confidenceBucket": confidence_bucket,
+        "antiChopActive": bool(anti_chop_reasons),
+        "antiChopReasons": anti_chop_reasons,
         "FeatureHits": feature_hits,
         "MarketState": {
             "regime": regime_label,
+            "regime_bucket": regime_bucket,
             "directional_bias": directional_bias,
             "tradeability": tradeability_label,
             "action": action,
             "action_state": action_state,
+            "anti_chop_active": bool(anti_chop_reasons),
+            "anti_chop_reasons": anti_chop_reasons,
             "scores": {
                 "direction": round(direction_score, 2),
                 "tradeability": round(tradeability_score, 2),
@@ -693,6 +838,8 @@ def compute_prediction_from_ta(ta_data):
             "feature_hits": regime_state.get("feature_hits", {}),
             "components": regime_state.get("components", {}),
         },
+        "ForecastState": forecast_state,
+        "ExecutionState": execution_state,
     }
 
 

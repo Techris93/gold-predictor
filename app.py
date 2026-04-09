@@ -79,6 +79,8 @@ PREDICTION_STATE_FILE = BASE_DIR / "tools" / "reports" / "prediction_state.json"
 DECISION_STATE_FILE = BASE_DIR / "tools" / "reports" / "decision_state.json"
 ALERT_STATE_FILE = BASE_DIR / "tools" / "reports" / "alert_state.json"
 PLAYBOOK_STATE_FILE = BASE_DIR / "tools" / "reports" / "playbook_state.json"
+LIVE_SIGNAL_OUTCOMES_FILE = BASE_DIR / "tools" / "reports" / "live_signal_outcomes.json"
+LIVE_SIGNAL_SUMMARY_FILE = BASE_DIR / "tools" / "reports" / "live_signal_summary.json"
 VAPID_PUBLIC_KEY = os.getenv("VAPID_PUBLIC_KEY", "")
 VAPID_PRIVATE_KEY = os.getenv("VAPID_PRIVATE_KEY", "")
 VAPID_CLAIMS_SUBJECT = os.getenv("VAPID_CLAIMS_SUBJECT", "mailto:alerts@example.com")
@@ -117,6 +119,20 @@ def _load_json_file(path, default):
         return data if isinstance(data, dict) else default
     except Exception:
         return default
+
+
+def _humanize_value(value):
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    text = text.replace("_", " ").replace("-", " ")
+    words = []
+    for word in text.split():
+        if word.upper() in {"AI", "RSI", "EMA", "ATR", "ADX", "XAUUSD"}:
+            words.append(word.upper())
+        else:
+            words.append(word.capitalize())
+    return " ".join(words)
 
 
 def _save_json_file(path, payload):
@@ -1301,6 +1317,83 @@ def _diff_snapshot(prev_snapshot, cur_snapshot):
     return changed
 
 
+def _record_live_signal_outcome(payload, snapshot, changes, now_ts):
+    ta_data = payload.get("TechnicalAnalysis") or {}
+    forecast_state = payload.get("ForecastState") or {}
+    execution_state = payload.get("ExecutionState") or {}
+    price = float(ta_data.get("current_price") or 0.0)
+    records = _load_json_file(LIVE_SIGNAL_OUTCOMES_FILE, {"records": []})
+    record = {
+        "id": f"{now_ts}:{snapshot.get('trade_playbook_stage')}:{payload.get('verdict')}:{price}",
+        "ts": now_ts,
+        "price": round(price, 2),
+        "verdict": payload.get("verdict"),
+        "confidence": payload.get("confidence"),
+        "regimeBucket": forecast_state.get("regimeBucket"),
+        "warningLadder": forecast_state.get("warningLadder"),
+        "eventRegime": forecast_state.get("eventRegime"),
+        "breakoutBias": forecast_state.get("breakoutBias"),
+        "forecastConfidence": forecast_state.get("forecastConfidence"),
+        "executionStatus": execution_state.get("status"),
+        "entryAllowed": execution_state.get("entryAllowed"),
+        "antiChopActive": execution_state.get("antiChopActive"),
+        "snapshot": snapshot,
+        "changes": changes,
+        "outcomes": {},
+    }
+    current_records = list(records.get("records") or [])
+    if current_records and current_records[-1].get("snapshot") == snapshot:
+        return
+    current_records.append(record)
+    current_records = current_records[-500:]
+    _save_json_file(LIVE_SIGNAL_OUTCOMES_FILE, {"records": current_records})
+
+
+def _update_live_signal_outcomes(current_price, now_ts):
+    records = _load_json_file(LIVE_SIGNAL_OUTCOMES_FILE, {"records": []})
+    current_records = list(records.get("records") or [])
+    updated = False
+    summary = {
+        "total_records": len(current_records),
+        "resolved_15m": 0,
+        "resolved_30m": 0,
+        "resolved_60m": 0,
+        "enter_hit_rate_30m": 0.0,
+        "prepare_to_enter_candidates": 0,
+    }
+    enter_total = 0
+    enter_hits = 0
+    for record in current_records:
+        base_price = float(record.get("price") or 0.0)
+        if base_price <= 0:
+            continue
+        age_seconds = max(0, now_ts - int(record.get("ts", now_ts) or now_ts))
+        outcomes = record.setdefault("outcomes", {})
+        for label, seconds in (("15m", 900), ("30m", 1800), ("60m", 3600)):
+            if age_seconds >= seconds and label not in outcomes:
+                change_pct = ((float(current_price) - base_price) / base_price) * 100.0
+                outcomes[label] = {
+                    "return_pct": round(change_pct, 4),
+                    "resolved_at": now_ts,
+                }
+                updated = True
+            if label in outcomes:
+                summary[f"resolved_{label}"] += 1
+        if record.get("executionStatus") == "enter" and "30m" in outcomes:
+            enter_total += 1
+            direction = str(record.get("verdict") or "Neutral")
+            realized = float((outcomes.get("30m") or {}).get("return_pct") or 0.0)
+            if (direction == "Bullish" and realized > 0) or (direction == "Bearish" and realized < 0):
+                enter_hits += 1
+        if record.get("executionStatus") == "prepare":
+            summary["prepare_to_enter_candidates"] += 1
+    if enter_total:
+        summary["enter_hit_rate_30m"] = round(enter_hits / enter_total, 4)
+    if updated:
+        _save_json_file(LIVE_SIGNAL_OUTCOMES_FILE, {"records": current_records})
+    _save_json_file(LIVE_SIGNAL_SUMMARY_FILE, summary)
+
+
 def _build_prediction_response():
     """Central prediction builder used by both HTTP and websocket monitor."""
     ta_data = predict_gold.get_technical_analysis()
@@ -1344,6 +1437,23 @@ def _build_prediction_response():
         execution_permission=execution_permission,
         decision_status=decision_status,
     )
+    forecast_state = dict(prediction.get("ForecastState", {}) or {})
+    forecast_state["warningLadder"] = trade_playbook.get("warningLadder") or forecast_state.get("warningLadder")
+    forecast_state["eventRegime"] = trade_playbook.get("eventRegime") or forecast_state.get("eventRegime")
+    forecast_state["breakoutBias"] = trade_playbook.get("breakoutBias") or forecast_state.get("breakoutBias")
+    forecast_state["directionalBias"] = trade_playbook.get("directionalBias") or forecast_state.get("directionalBias")
+
+    execution_state = dict(prediction.get("ExecutionState", {}) or {})
+    execution_state["status"] = (
+        "exit"
+        if execution_permission.get("status") == "exit_recommended"
+        else ("enter" if trade_playbook.get("stage") in {"enter", "hold"} else ("prepare" if trade_playbook.get("stage") in {"prepare", "stalk_entry"} else "stand_aside"))
+    )
+    execution_state["title"] = trade_playbook.get("title") or _humanize_value(execution_state.get("status") or "stand_aside")
+    execution_state["text"] = trade_playbook.get("text") or execution_permission.get("text") or ""
+    execution_state["entryAllowed"] = execution_permission.get("status") == "entry_allowed"
+    execution_state["exitRecommended"] = execution_permission.get("status") == "exit_recommended"
+    execution_state["permissionStatus"] = execution_permission.get("status")
 
     return {
         "status": "success",
@@ -1353,6 +1463,8 @@ def _build_prediction_response():
         "TradeGuidance": prediction["TradeGuidance"],
         "MarketState": prediction.get("MarketState", {}),
         "RegimeState": prediction.get("RegimeState", {}),
+        "ForecastState": forecast_state,
+        "ExecutionState": execution_state,
         "DecisionStatus": decision_status,
         "ExecutionPermission": execution_permission,
         "TradePlaybook": trade_playbook,
@@ -1374,6 +1486,9 @@ def _indicator_monitor_loop():
             payload, status_code = _build_prediction_response()
             if status_code == 200:
                 current_snapshot = _extract_indicator_snapshot(payload)
+                current_price = float(((payload.get("TechnicalAnalysis") or {}).get("current_price")) or 0.0)
+                if current_price > 0:
+                    _update_live_signal_outcomes(current_price, int(time.time()))
                 if last_snapshot is not None:
                     changes = _diff_snapshot(last_snapshot, current_snapshot)
                     notification_changes = _filter_notification_changes(changes)
@@ -1482,6 +1597,12 @@ def _indicator_monitor_loop():
                         if should_alert and permission_status == "exit_recommended":
                             should_alert = NOTIFY_EXIT_READS
                         if should_alert:
+                            _record_live_signal_outcome(
+                                payload,
+                                current_snapshot,
+                                notification_changes,
+                                now_ts,
+                            )
                             last_trade_playbook_stage = str(alert_state.get("last_trade_playbook_stage", ""))
                             last_execution_permission = str(alert_state.get("last_execution_permission", ""))
                             last_market_structure = str(alert_state.get("last_market_structure", ""))
@@ -1822,6 +1943,7 @@ def get_health():
             "cache_seconds": int(getattr(predict_gold, "CROSS_ASSET_CACHE_SECONDS", 90) or 90),
             "has_cached_snapshot": isinstance(getattr(predict_gold, "LAST_CROSS_ASSET_CONTEXT", None), dict),
         }
+        live_signal_summary = _load_json_file(LIVE_SIGNAL_SUMMARY_FILE, {})
         return jsonify({
             "status": "ok",
             "runtime": {
@@ -1836,6 +1958,19 @@ def get_health():
             },
             "prediction_cache": ta_status,
             "cross_asset_cache": cross_asset_status,
+            "live_signal_summary": live_signal_summary,
+        }), 200
+    except Exception as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 500
+
+
+@app.route('/api/outcomes/latest')
+def get_latest_outcomes():
+    try:
+        return jsonify({
+            "status": "success",
+            "summary": _load_json_file(LIVE_SIGNAL_SUMMARY_FILE, {}),
+            "records": (_load_json_file(LIVE_SIGNAL_OUTCOMES_FILE, {"records": []}).get("records") or [])[-50:],
         }), 200
     except Exception as exc:
         return jsonify({"status": "error", "message": str(exc)}), 500

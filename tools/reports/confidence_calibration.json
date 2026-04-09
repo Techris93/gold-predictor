@@ -1,0 +1,26 @@
+{
+  "regime_confidence": {
+    "breakout_watch": 60.0,
+    "trend_continuation": 59.57,
+    "transition": 63.16
+  },
+  "confidence_buckets": {
+    "unstable|Bullish|Low|stable": 72.73,
+    "trend|Bullish|High|stable": 60.0,
+    "trend|Bearish|High|stable": 54.55
+  },
+  "reliability_curve": {
+    "70-79": {
+      "count": 7,
+      "hit_rate": 0.5714
+    },
+    "80-89": {
+      "count": 51,
+      "hit_rate": 0.5882
+    },
+    "90-99": {
+      "count": 13,
+      "hit_rate": 0.6923
+    }
+  }
+}

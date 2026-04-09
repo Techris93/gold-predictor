@@ -871,6 +871,18 @@
               Building combined entry/exit playbook...
             </div>
           </div>
+          <div class="metric-row" style="margin-top: 0.85rem;">
+            <span class="metric-label">Forecast Bucket</span>
+            <span class="metric-value" id="forecast-bucket">---</span>
+          </div>
+          <div class="metric-row">
+            <span class="metric-label">Execution State</span>
+            <span class="metric-value" id="execution-state">---</span>
+          </div>
+          <div class="metric-row" style="align-items: flex-start; gap: 0.75rem;">
+            <span class="metric-label">Anti-Chop Filter</span>
+            <span class="metric-value" id="anti-chop-state" style="font-size: 0.78rem; text-align: right; max-width: 56%; line-height: 1.5; white-space: normal;">---</span>
+          </div>
           <div class="decision-block" style="margin-bottom: 0.85rem;">
             <div class="decision-heading exit">Playbook Read</div>
             <div class="metric-value" id="trade-playbook-text" style="font-size: 0.84rem; line-height: 1.5; font-weight: 500;">
@@ -1922,6 +1934,37 @@
                 .map((item) => `<li>${item}</li>`)
                 .join("")
             : "<li>No playbook rationale is available yet.</li>";
+        }
+
+        const forecastState =
+          data.ForecastState && typeof data.ForecastState === "object"
+            ? data.ForecastState
+            : {};
+        const executionState =
+          data.ExecutionState && typeof data.ExecutionState === "object"
+            ? data.ExecutionState
+            : {};
+        const forecastBucketEl = document.getElementById("forecast-bucket");
+        if (forecastBucketEl) {
+          const forecastBucket = forecastState.regimeBucket || "transition";
+          forecastBucketEl.innerText = humanizeWords(forecastBucket);
+          forecastBucketEl.className = `metric-value ${forecastBucket === "active_momentum" ? "value-bullish" : forecastBucket === "reversal_risk" ? "value-bearish" : ""}`;
+        }
+        const executionStateEl = document.getElementById("execution-state");
+        if (executionStateEl) {
+          const executionStatus = executionState.status || "stand_aside";
+          executionStateEl.innerText = humanizeWords(executionStatus);
+          executionStateEl.className = `metric-value ${executionStatus === "enter" ? "value-bullish" : executionStatus === "exit" ? "value-bearish" : executionStatus === "prepare" ? "" : ""}`;
+        }
+        const antiChopEl = document.getElementById("anti-chop-state");
+        if (antiChopEl) {
+          const antiChopReasons = Array.isArray(executionState.antiChopReasons)
+            ? executionState.antiChopReasons
+            : [];
+          antiChopEl.innerText = executionState.antiChopActive
+            ? antiChopReasons[0] || "Execution is being suppressed by the anti-chop filter."
+            : "Clear";
+          antiChopEl.className = `metric-value ${executionState.antiChopActive ? "value-bearish" : "value-bullish"}`;
         }
 
         suppressNextUiChangeNotification = false;
