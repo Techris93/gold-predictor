@@ -1457,6 +1457,7 @@ def _build_prediction_response():
 
     return {
         "status": "success",
+        "response_generated_at": int(time.time()),
         "verdict": prediction["verdict"],
         "confidence": prediction["confidence"],
         "TechnicalAnalysis": ta_data,

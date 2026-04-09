@@ -607,6 +607,48 @@
         letter-spacing: 0.5px;
       }
 
+      .live-status-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.65rem 1rem;
+        margin-top: 1rem;
+        padding: 0.9rem 1rem;
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+      }
+
+      .live-status-item {
+        text-align: left;
+      }
+
+      .live-status-label {
+        color: var(--text-muted);
+        font-size: 0.64rem;
+        font-weight: 600;
+        letter-spacing: 0.9px;
+        text-transform: uppercase;
+        margin-bottom: 0.18rem;
+      }
+
+      .live-status-value {
+        color: var(--text-main);
+        font-size: 0.8rem;
+        font-weight: 600;
+      }
+
+      .live-status-value.is-good {
+        color: var(--bullish);
+      }
+
+      .live-status-value.is-warn {
+        color: var(--gold-primary);
+      }
+
+      .live-status-value.is-muted {
+        color: var(--text-muted);
+      }
+
       /* Responsive fixes */
       @media (max-width: 480px) {
         h1 {
@@ -661,6 +703,24 @@
 
         <div class="socket-state" id="socket-state">Push channel: connecting...</div>
         <div class="socket-state" id="bg-push-state">Background push: not enabled</div>
+        <div class="live-status-grid">
+          <div class="live-status-item">
+            <div class="live-status-label">Last Push Received</div>
+            <div class="live-status-value is-muted" id="last-push-at">Waiting for push...</div>
+          </div>
+          <div class="live-status-item">
+            <div class="live-status-label">Last Analysis Applied</div>
+            <div class="live-status-value is-muted" id="last-analysis-at">Waiting for analysis...</div>
+          </div>
+          <div class="live-status-item">
+            <div class="live-status-label">Payload Source</div>
+            <div class="live-status-value is-muted" id="last-update-source">Initial load</div>
+          </div>
+          <div class="live-status-item">
+            <div class="live-status-label">Rendered Snapshot</div>
+            <div class="live-status-value is-muted" id="last-snapshot-at">No snapshot yet</div>
+          </div>
+        </div>
       </div>
 
       <div style="margin-bottom: 2rem">
@@ -1137,7 +1197,7 @@
           const data = await response.json();
 
           if (data.status === "success") {
-            updateUI(data);
+            updateUI(data, "fetch");
           } else {
             showInlineError(data.message || "Unknown error occurred");
           }
@@ -1196,6 +1256,46 @@
         if (!el) return;
         el.innerText = text;
         el.style.color = isGood ? "var(--bullish)" : "var(--text-muted)";
+      }
+
+      function formatStatusTime(epochSeconds) {
+        const ts = Number(epochSeconds || 0);
+        if (!Number.isFinite(ts) || ts <= 0) return "Waiting...";
+        return new Date(ts * 1000).toLocaleTimeString();
+      }
+
+      function setLiveStatusValue(id, text, tone = "muted") {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.innerText = text;
+        el.classList.remove("is-good", "is-warn", "is-muted");
+        el.classList.add(
+          tone === "good" ? "is-good" : tone === "warn" ? "is-warn" : "is-muted",
+        );
+      }
+
+      function markPushReceived(epochSeconds) {
+        setLiveStatusValue("last-push-at", formatStatusTime(epochSeconds), "good");
+      }
+
+      function markAnalysisApplied(data, source) {
+        const responseTs = Number(data?.response_generated_at || 0);
+        const snapshotTs = Number(data?.TechnicalAnalysis?.last_updated_at || 0);
+        setLiveStatusValue(
+          "last-analysis-at",
+          responseTs > 0 ? formatStatusTime(responseTs) : "Applied",
+          "good",
+        );
+        setLiveStatusValue(
+          "last-snapshot-at",
+          snapshotTs > 0 ? formatStatusTime(snapshotTs) : "Snapshot time unavailable",
+          snapshotTs > 0 ? "warn" : "muted",
+        );
+        setLiveStatusValue(
+          "last-update-source",
+          source === "socket" ? "Websocket push" : "Direct refresh",
+          source === "socket" ? "good" : "warn",
+        );
       }
 
       function showPushToast(title, body) {
@@ -1320,6 +1420,7 @@
         });
 
         indicatorSocket.on("indicator_change", (payload) => {
+          markPushReceived(payload?.timestamp);
           const changeText = summarizeChanges(payload?.changes || {});
           const verdict = payload?.verdict || "Neutral";
           const confidence = payload?.confidence ?? "N/A";
@@ -1347,7 +1448,7 @@
             payload?.data && typeof payload.data === "object" ? payload.data : null;
           if (nextData && nextData.status === "success") {
             suppressNextUiChangeNotification = true;
-            updateUI(nextData);
+            updateUI(nextData, "socket");
           } else {
             suppressNextUiChangeNotification = true;
             fetchPrediction();
@@ -1669,11 +1770,12 @@
         };
       }
 
-      function updateUI(data) {
+      function updateUI(data, source = "fetch") {
         if (!data || !data.TechnicalAnalysis) {
           showInlineError("Malformed server response");
           return;
         }
+        markAnalysisApplied(data, source);
 
         // Update Price
         const ta = data.TechnicalAnalysis;
