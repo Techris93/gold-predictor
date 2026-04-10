@@ -245,7 +245,10 @@ def _event_risk_context(now_ts):
             upcoming.append((start_ts, window))
 
     next_event = None
-    if upcoming:
+    if active:
+        active.sort(key=lambda item: str(item.get("start") or ""))
+        next_event = active[0]
+    elif upcoming:
         upcoming.sort(key=lambda item: item[0])
         next_event = upcoming[0][1]
 

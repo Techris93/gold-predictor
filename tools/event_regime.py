@@ -338,6 +338,8 @@ def compute_event_regime_snapshot(
         except Exception:
             if minutes_to_next_event is None:
                 minutes_to_next_event = None
+    if event_active:
+        minutes_to_next_event = 0.0
 
     compression_score = 0.0
     if compression_ratio <= 0.55:
