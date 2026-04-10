@@ -1876,7 +1876,11 @@ def _indicator_monitor_loop():
                                 should_alert = False
                             if should_alert and boundary_wobble and (now_ts - last_boundary_wobble_ts) < BOUNDARY_WOBBLE_COOLDOWN_SECONDS:
                                 should_alert = False
-                        if should_alert and boundary_wobble:
+                        if (
+                            should_alert
+                            and boundary_wobble
+                            and not (market_structure_changed or candle_pattern_changed)
+                        ):
                             should_alert = False
                         if not should_alert:
                             if boundary_wobble:
