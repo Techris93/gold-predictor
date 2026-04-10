@@ -62,6 +62,7 @@ ALERT_COOLDOWN_SECONDS = _read_int_env("ALERT_COOLDOWN_SECONDS", 900, 0)
 ALERT_CLASS_COOLDOWN_SECONDS = _read_int_env("ALERT_CLASS_COOLDOWN_SECONDS", 600, 0)
 ALERT_CONTEXT_COOLDOWN_SECONDS = _read_int_env("ALERT_CONTEXT_COOLDOWN_SECONDS", 900, 0)
 PRICE_ACTION_ALERT_COOLDOWN_SECONDS = _read_int_env("PRICE_ACTION_ALERT_COOLDOWN_SECONDS", 0, 0)
+CANDLE_PATTERN_ALERT_COOLDOWN_SECONDS = _read_int_env("CANDLE_PATTERN_ALERT_COOLDOWN_SECONDS", 600, 0)
 DECISION_FLIP_MIN_HOLD_SECONDS = _read_int_env("DECISION_FLIP_MIN_HOLD_SECONDS", 300, 0)
 PLAYBOOK_CONFIRMATION_COUNT = _read_int_env("PLAYBOOK_CONFIRMATION_COUNT", 2, 1)
 ENTER_PLAYBOOK_CONFIRMATION_COUNT = _read_int_env("ENTER_PLAYBOOK_CONFIRMATION_COUNT", 3, 1)
@@ -1670,6 +1671,7 @@ def _indicator_monitor_loop():
                                 "last_execution_alert_ts": 0,
                                 "last_diagnostics_alert_ts": 0,
                                 "last_price_action_alert_ts": 0,
+                                "last_candle_pattern_alert_ts": 0,
                                 "last_boundary_wobble_ts": 0,
                             },
                         )
@@ -1828,6 +1830,7 @@ def _indicator_monitor_loop():
                             last_execution_alert_ts = int(alert_state.get("last_execution_alert_ts", 0) or 0)
                             last_diagnostics_alert_ts = int(alert_state.get("last_diagnostics_alert_ts", 0) or 0)
                             last_price_action_alert_ts = int(alert_state.get("last_price_action_alert_ts", 0) or 0)
+                            last_candle_pattern_alert_ts = int(alert_state.get("last_candle_pattern_alert_ts", 0) or 0)
                             last_boundary_wobble_ts = int(alert_state.get("last_boundary_wobble_ts", 0) or 0)
                             duplicate_playbook = playbook_changed and trade_playbook_stage == last_trade_playbook_stage
                             duplicate_warning = warning_changed and warning_ladder == last_warning_ladder
@@ -1863,6 +1866,13 @@ def _indicator_monitor_loop():
                             if should_alert and signal_class == "diagnostics" and (now_ts - last_diagnostics_alert_ts) < ALERT_CONTEXT_COOLDOWN_SECONDS:
                                 should_alert = False
                             if should_alert and signal_class == "price_action" and (now_ts - last_price_action_alert_ts) < PRICE_ACTION_ALERT_COOLDOWN_SECONDS:
+                                should_alert = False
+                            if (
+                                should_alert
+                                and candle_pattern_changed
+                                and not market_structure_changed
+                                and (now_ts - last_candle_pattern_alert_ts) < CANDLE_PATTERN_ALERT_COOLDOWN_SECONDS
+                            ):
                                 should_alert = False
                             if should_alert and boundary_wobble and (now_ts - last_boundary_wobble_ts) < BOUNDARY_WOBBLE_COOLDOWN_SECONDS:
                                 should_alert = False
@@ -1940,6 +1950,9 @@ def _indicator_monitor_loop():
                                 ),
                                 "last_price_action_alert_ts": (
                                     now_ts if signal_class == "price_action" else int(alert_state.get("last_price_action_alert_ts", 0) or 0)
+                                ),
+                                "last_candle_pattern_alert_ts": (
+                                    now_ts if candle_pattern_changed else int(alert_state.get("last_candle_pattern_alert_ts", 0) or 0)
                                 ),
                                 "last_boundary_wobble_ts": (
                                     now_ts if boundary_wobble else int(alert_state.get("last_boundary_wobble_ts", 0) or 0)
