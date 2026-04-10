@@ -59,6 +59,8 @@ EXIT_DECISION_CONFIRMATION_COUNT = _read_int_env("EXIT_DECISION_CONFIRMATION_COU
 WAIT_DECISION_CONFIRMATION_COUNT = _read_int_env("WAIT_DECISION_CONFIRMATION_COUNT", 4, 1)
 DIRECTIONAL_REVERSAL_CONFIRMATION_COUNT = _read_int_env("DIRECTIONAL_REVERSAL_CONFIRMATION_COUNT", 4, 1)
 ALERT_COOLDOWN_SECONDS = _read_int_env("ALERT_COOLDOWN_SECONDS", 900, 0)
+ALERT_CLASS_COOLDOWN_SECONDS = _read_int_env("ALERT_CLASS_COOLDOWN_SECONDS", 600, 0)
+ALERT_CONTEXT_COOLDOWN_SECONDS = _read_int_env("ALERT_CONTEXT_COOLDOWN_SECONDS", 900, 0)
 DECISION_FLIP_MIN_HOLD_SECONDS = _read_int_env("DECISION_FLIP_MIN_HOLD_SECONDS", 300, 0)
 PLAYBOOK_CONFIRMATION_COUNT = _read_int_env("PLAYBOOK_CONFIRMATION_COUNT", 2, 1)
 ENTER_PLAYBOOK_CONFIRMATION_COUNT = _read_int_env("ENTER_PLAYBOOK_CONFIRMATION_COUNT", 3, 1)
@@ -79,6 +81,7 @@ PREDICTION_STATE_FILE = BASE_DIR / "tools" / "reports" / "prediction_state.json"
 DECISION_STATE_FILE = BASE_DIR / "tools" / "reports" / "decision_state.json"
 ALERT_STATE_FILE = BASE_DIR / "tools" / "reports" / "alert_state.json"
 PLAYBOOK_STATE_FILE = BASE_DIR / "tools" / "reports" / "playbook_state.json"
+REGIME_MEMORY_FILE = BASE_DIR / "tools" / "reports" / "regime_memory_state.json"
 LIVE_SIGNAL_OUTCOMES_FILE = BASE_DIR / "tools" / "reports" / "live_signal_outcomes.json"
 LIVE_SIGNAL_SUMMARY_FILE = BASE_DIR / "tools" / "reports" / "live_signal_summary.json"
 VAPID_PUBLIC_KEY = os.getenv("VAPID_PUBLIC_KEY", "")
@@ -568,6 +571,41 @@ def _warning_alert_tier(value):
     return "low"
 
 
+def _playbook_stage_class(value):
+    value = str(value or "")
+    if value in {"enter", "hold"}:
+        return "actionable"
+    if value in {"prepare", "stalk_entry"}:
+        return "forming"
+    if value == "exit":
+        return "exit"
+    return "standby"
+
+
+def _is_major_playbook_transition(previous_stage, current_stage):
+    prev_class = _playbook_stage_class(previous_stage)
+    cur_class = _playbook_stage_class(current_stage)
+    if prev_class != cur_class:
+        return True
+    return False
+
+
+def _warning_tier_rank(value):
+    tier = _warning_alert_tier(value)
+    return {"low": 0, "medium": 1, "high": 2}.get(tier, 0)
+
+
+def _is_context_flip_noise(previous_warning, current_warning, previous_event_regime, current_event_regime):
+    prev_warning = str(previous_warning or "")
+    cur_warning = str(current_warning or "")
+    prev_event = str(previous_event_regime or "")
+    cur_event = str(current_event_regime or "")
+    return (
+        {prev_warning, cur_warning}.issubset({"Expansion Watch", "High Breakout Risk", ""})
+        and {prev_event, cur_event}.issubset({"normal", "breakout_watch", ""})
+    )
+
+
 def _is_significant_candle_pattern(value):
     value = str(value or "")
     if not value or value == "None":
@@ -1045,9 +1083,11 @@ def _stabilize_trade_playbook(trade_playbook, execution_permission, decision_sta
     elif raw_stage == "exit":
         required_confirmation = max(PLAYBOOK_CONFIRMATION_COUNT, EXIT_PLAYBOOK_CONFIRMATION_COUNT)
     elif raw_stage == "enter":
-        required_confirmation = max(PLAYBOOK_CONFIRMATION_COUNT, ENTER_PLAYBOOK_CONFIRMATION_COUNT)
-    elif stable_stage in {"enter", "hold"} and raw_stage in {"prepare", "stalk_entry", "stand_aside"}:
         required_confirmation = max(PLAYBOOK_CONFIRMATION_COUNT, ENTER_PLAYBOOK_CONFIRMATION_COUNT + 1)
+    elif stable_stage in {"enter", "hold"} and raw_stage in {"prepare", "stalk_entry", "stand_aside"}:
+        required_confirmation = max(PLAYBOOK_CONFIRMATION_COUNT, ENTER_PLAYBOOK_CONFIRMATION_COUNT + 2)
+    elif stable_stage in {"prepare", "stalk_entry"} and raw_stage in {"prepare", "stalk_entry"}:
+        required_confirmation = max(PLAYBOOK_CONFIRMATION_COUNT, 2)
     else:
         required_confirmation = PLAYBOOK_CONFIRMATION_COUNT
 
@@ -1454,8 +1494,25 @@ def _build_prediction_response():
             "TechnicalAnalysis": ta_data,
         }, 502
 
+    regime_memory = _load_json_file(
+        REGIME_MEMORY_FILE,
+        {
+            "warning_ladder": "Normal",
+            "event_regime": "normal",
+            "breakout_bias": "Neutral",
+            "warning_dwell_bars": 0,
+            "breakout_bias_dwell_bars": 0,
+        },
+    )
+    ta_with_memory = dict(ta_data)
+    ta_with_memory["_regime_memory"] = regime_memory
+
+    raw_prediction = compute_prediction_from_ta(ta_with_memory)
+    if isinstance(raw_prediction.get("_regime_memory"), dict):
+        _save_json_file(REGIME_MEMORY_FILE, raw_prediction["_regime_memory"])
+
     prediction = _stabilize_prediction(
-        compute_prediction_from_ta(ta_data),
+        raw_prediction,
         ta_data,
     )
     ta_data["_prediction_market_state"] = prediction.get("MarketState", {})
@@ -1520,7 +1577,6 @@ def _build_prediction_response():
 
     return {
         "status": "success",
-        "response_generated_at": int(time.time()),
         "verdict": prediction["verdict"],
         "confidence": prediction["confidence"],
         "TechnicalAnalysis": ta_data,
@@ -1577,6 +1633,10 @@ def _indicator_monitor_loop():
                                 "last_entry_readiness": "",
                                 "last_exit_urgency": "",
                                 "last_alert_ts": 0,
+                                "last_playbook_alert_ts": 0,
+                                "last_context_alert_ts": 0,
+                                "last_execution_alert_ts": 0,
+                                "last_diagnostics_alert_ts": 0,
                             },
                         )
                         decision_payload = payload.get("DecisionStatus") or {}
@@ -1595,21 +1655,47 @@ def _indicator_monitor_loop():
                         verdict = str(payload.get("verdict") or "")
                         confidence_bucket = _confidence_bucket(payload.get("confidence"))
                         decision_confirmed = bool(decision_payload.get("confirmed"))
-                        previous_warning_ladder = str((notification_changes.get("warning_ladder") or {}).get("previous") or "")
-                        playbook_changed = "trade_playbook_stage" in notification_changes and bool(trade_playbook_stage)
+                        previous_trade_playbook_stage = str(alert_state.get("last_trade_playbook_stage", ""))
+                        previous_warning_ladder = str(alert_state.get("last_warning_ladder", ""))
+                        previous_event_regime = str(alert_state.get("last_event_regime", ""))
+                        previous_breakout_bias = str(alert_state.get("last_breakout_bias", ""))
+                        previous_confidence_bucket = str(alert_state.get("last_confidence_bucket", ""))
+                        playbook_changed = (
+                            "trade_playbook_stage" in notification_changes
+                            and bool(trade_playbook_stage)
+                            and _is_major_playbook_transition(previous_trade_playbook_stage, trade_playbook_stage)
+                        )
+                        warning_tier_changed = (
+                            _warning_tier_rank(previous_warning_ladder)
+                            != _warning_tier_rank(warning_ladder)
+                        )
                         warning_changed = (
                             "warning_ladder" in notification_changes
                             and bool(warning_ladder)
+                            and warning_tier_changed
                             and (
                                 _warning_alert_tier(warning_ladder) != "low"
                                 or _warning_alert_tier(previous_warning_ladder) != "low"
                             )
                         )
-                        event_regime_changed = "event_regime" in notification_changes and bool(event_regime)
+                        event_regime_changed = (
+                            "event_regime" in notification_changes
+                            and bool(event_regime)
+                            and not _is_context_flip_noise(
+                                previous_warning_ladder,
+                                warning_ladder,
+                                previous_event_regime,
+                                event_regime,
+                            )
+                        )
                         breakout_bias_changed = (
                             "breakout_bias" in notification_changes
                             and bool(breakout_bias)
                             and warning_ladder in {"High Breakout Risk", "Directional Expansion Likely", "Active Momentum Event"}
+                            and (
+                                breakout_bias != previous_breakout_bias
+                                and (breakout_bias in {"Bullish", "Bearish"} or previous_breakout_bias in {"Bullish", "Bearish"})
+                            )
                         )
                         market_structure_changed = "market_structure" in notification_changes and bool(market_structure)
                         candle_pattern_changed = (
@@ -1618,7 +1704,12 @@ def _indicator_monitor_loop():
                             and _is_significant_candle_pattern(candle_pattern)
                         )
                         verdict_changed = "verdict" in notification_changes and bool(verdict)
-                        confidence_changed = "confidence_bucket" in notification_changes and bool(confidence_bucket)
+                        confidence_changed = (
+                            "confidence_bucket" in notification_changes
+                            and bool(confidence_bucket)
+                            and confidence_bucket != previous_confidence_bucket
+                            and confidence_bucket in {"High", "Very High", "Low"}
+                        )
                         execution_permission_changed = "execution_permission" in notification_changes and bool(execution_permission)
                         if (
                             not candle_pattern_changed
@@ -1651,6 +1742,23 @@ def _indicator_monitor_loop():
                             or confidence_changed
                             or (execution_permission_changed and decision_confirmed)
                         )
+                        signal_class = ""
+                        if execution_permission_changed and decision_confirmed:
+                            signal_class = "execution"
+                        elif playbook_changed:
+                            signal_class = "playbook"
+                        elif warning_changed or event_regime_changed or breakout_bias_changed:
+                            signal_class = "context"
+                        elif (
+                            market_structure_changed
+                            or candle_pattern_changed
+                            or verdict_changed
+                            or confidence_changed
+                            or entry_readiness_changed
+                            or exit_urgency_changed
+                        ):
+                            signal_class = "diagnostics"
+
                         if should_alert and _is_forming_setup_wobble(
                             notification_changes,
                             trade_playbook_payload,
@@ -1679,6 +1787,10 @@ def _indicator_monitor_loop():
                             last_entry_readiness = str(alert_state.get("last_entry_readiness", ""))
                             last_exit_urgency = str(alert_state.get("last_exit_urgency", ""))
                             last_alert_ts = int(alert_state.get("last_alert_ts", 0) or 0)
+                            last_playbook_alert_ts = int(alert_state.get("last_playbook_alert_ts", 0) or 0)
+                            last_context_alert_ts = int(alert_state.get("last_context_alert_ts", 0) or 0)
+                            last_execution_alert_ts = int(alert_state.get("last_execution_alert_ts", 0) or 0)
+                            last_diagnostics_alert_ts = int(alert_state.get("last_diagnostics_alert_ts", 0) or 0)
                             duplicate_playbook = playbook_changed and trade_playbook_stage == last_trade_playbook_stage
                             duplicate_warning = warning_changed and warning_ladder == last_warning_ladder
                             duplicate_event_regime = event_regime_changed and event_regime == last_event_regime
@@ -1703,6 +1815,14 @@ def _indicator_monitor_loop():
                                 or duplicate_entry_readiness
                                 or duplicate_exit_urgency
                             ) and (now_ts - last_alert_ts) < ALERT_COOLDOWN_SECONDS:
+                                should_alert = False
+                            if should_alert and signal_class == "playbook" and (now_ts - last_playbook_alert_ts) < ALERT_CLASS_COOLDOWN_SECONDS:
+                                should_alert = False
+                            if should_alert and signal_class == "context" and (now_ts - last_context_alert_ts) < ALERT_CONTEXT_COOLDOWN_SECONDS:
+                                should_alert = False
+                            if should_alert and signal_class == "execution" and (now_ts - last_execution_alert_ts) < ALERT_CLASS_COOLDOWN_SECONDS:
+                                should_alert = False
+                            if should_alert and signal_class == "diagnostics" and (now_ts - last_diagnostics_alert_ts) < ALERT_CONTEXT_COOLDOWN_SECONDS:
                                 should_alert = False
                         if not should_alert:
                             last_snapshot = current_snapshot
@@ -1759,6 +1879,18 @@ def _indicator_monitor_loop():
                                 "last_entry_readiness": entry_readiness,
                                 "last_exit_urgency": exit_urgency,
                                 "last_alert_ts": now_ts,
+                                "last_playbook_alert_ts": (
+                                    now_ts if signal_class == "playbook" else int(alert_state.get("last_playbook_alert_ts", 0) or 0)
+                                ),
+                                "last_context_alert_ts": (
+                                    now_ts if signal_class == "context" else int(alert_state.get("last_context_alert_ts", 0) or 0)
+                                ),
+                                "last_execution_alert_ts": (
+                                    now_ts if signal_class == "execution" else int(alert_state.get("last_execution_alert_ts", 0) or 0)
+                                ),
+                                "last_diagnostics_alert_ts": (
+                                    now_ts if signal_class == "diagnostics" else int(alert_state.get("last_diagnostics_alert_ts", 0) or 0)
+                                ),
                             },
                         )
                         last_emit_ts = now_ts

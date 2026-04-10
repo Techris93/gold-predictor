@@ -86,10 +86,13 @@ def generate_signals(df, params=None):
     enriched = prepare_historical_features(df, params)
     signals = pd.Series('Neutral', index=enriched.index)
     states = []
+    regime_memory = {}
 
     for i in range(len(enriched)):
-        ta_payload = build_ta_payload_from_row(enriched.iloc[i], params)
+        ta_payload = build_ta_payload_from_row(enriched.iloc[i], params, regime_memory=regime_memory)
         prediction = compute_prediction_from_ta(ta_payload)
+        if isinstance(prediction.get("_regime_memory"), dict):
+            regime_memory = dict(prediction.get("_regime_memory") or {})
         verdict = prediction["verdict"]
         if verdict == 'Bullish':
             signals.iloc[i] = 'Buy'
@@ -380,8 +383,8 @@ def summarize_big_move_metrics(df, states):
         next_four = df.iloc[i + 1 : i + 5]
         future_move_60m = max(abs(float(next_bar["High"]) - entry), abs(entry - float(next_bar["Low"])))
         future_move_4h = max(abs(float(next_four["High"].max()) - entry), abs(entry - float(next_four["Low"].min())))
-        true_60m = future_move_60m >= 5.0
-        true_4h = future_move_4h >= 10.0
+        true_60m = future_move_60m >= 8.0
+        true_4h = future_move_4h >= 15.0
         total_true_60m += 1 if true_60m else 0
         total_true_4h += 1 if true_4h else 0
 
@@ -413,8 +416,12 @@ def summarize_big_move_metrics(df, states):
 
     return {
         "label_definition": {
-            "big_move_60m_price_points": 5.0,
-            "big_move_4h_price_points": 10.0,
+            "big_move_60m_price_points": 8.0,
+            "big_move_4h_price_points": 15.0,
+        },
+        "label_prevalence": {
+            "true_60m_rate": _safe_ratio(total_true_60m, max_index),
+            "true_4h_rate": _safe_ratio(total_true_4h, max_index),
         },
         "warning_watch": {
             "precision_60m": _safe_ratio(watch_true_60m, watch_hits_60m),
@@ -431,6 +438,99 @@ def summarize_big_move_metrics(df, states):
     }
 
 
+def summarize_large_move_labels(df, states):
+    if len(df) < 8:
+        return {}
+
+    total = min(len(states), len(df) - 4)
+    label_counts = {
+        "abs_move_gt_300pips_30m": 0,
+        "abs_move_gt_500pips_60m": 0,
+        "abs_move_gt_1000pips_4h": 0,
+        "directional_expansion_after_compression": 0,
+    }
+    for i in range(total):
+        entry = float(df["Close"].iloc[i])
+        one = df.iloc[i + 1]
+        four = df.iloc[i + 1 : i + 5]
+        move_30m = max(abs(float(one["High"]) - entry), abs(entry - float(one["Low"])))
+        move_60m = move_30m
+        move_4h = max(abs(float(four["High"].max()) - entry), abs(entry - float(four["Low"].min())))
+        if move_30m >= 4.0:
+            label_counts["abs_move_gt_300pips_30m"] += 1
+        if move_60m >= 8.0:
+            label_counts["abs_move_gt_500pips_60m"] += 1
+        if move_4h >= 15.0:
+            label_counts["abs_move_gt_1000pips_4h"] += 1
+
+        state = states[i] if i < len(states) else {}
+        feature_hits = (state.get("regime_state") or {}).get("feature_hits") or {}
+        compressed = bool(feature_hits.get("compression") or feature_hits.get("compression_setup"))
+        breakout = bool(feature_hits.get("atr_expansion") and feature_hits.get("bar_velocity"))
+        if compressed and breakout and move_60m >= 8.0:
+            label_counts["directional_expansion_after_compression"] += 1
+
+    return {
+        "samples": int(total),
+        "label_counts": label_counts,
+        "label_rates": {
+            key: round(value / total, 4) if total else 0.0
+            for key, value in label_counts.items()
+        },
+    }
+
+
+def summarize_decision_quality_metrics(df, states):
+    if not states or len(df) < 6:
+        return {}
+
+    total = min(len(states), len(df) - 4)
+    abstain_total = 0
+    abstain_correct = 0
+    enter_total = 0
+    enter_correct = 0
+    decision_regret = []
+
+    for i in range(total):
+        state = states[i]
+        execution = state.get("execution_state") or {}
+        status = str(execution.get("status") or "stand_aside")
+        verdict = str(state.get("verdict") or "Neutral")
+        entry = float(df["Close"].iloc[i])
+        future_close = float(df["Close"].iloc[i + 4])
+        realized_pct = ((future_close - entry) / max(entry, 1e-8)) * 100.0
+        abs_realized_pct = abs(realized_pct)
+        realized_dir = "Bullish" if realized_pct > 0 else ("Bearish" if realized_pct < 0 else "Neutral")
+
+        if status in {"stand_aside", "prepare"}:
+            abstain_total += 1
+            if abs_realized_pct < 0.25:
+                abstain_correct += 1
+            regret = 0.0
+            if abs_realized_pct >= 0.4:
+                regret = abs_realized_pct
+            decision_regret.append(regret)
+            continue
+
+        if status == "enter":
+            enter_total += 1
+            if verdict in {"Bullish", "Bearish"} and verdict == realized_dir:
+                enter_correct += 1
+            signed_model_return = realized_pct if verdict == "Bullish" else (-realized_pct if verdict == "Bearish" else 0.0)
+            decision_regret.append(max(0.0, -signed_model_return))
+            continue
+
+        decision_regret.append(0.0)
+
+    return {
+        "abstain_total": int(abstain_total),
+        "abstain_correct_rate": round(abstain_correct / abstain_total, 4) if abstain_total else 0.0,
+        "enter_total": int(enter_total),
+        "enter_correct_rate": round(enter_correct / enter_total, 4) if enter_total else 0.0,
+        "avg_regret_vs_stand_aside_pct": round(float(np.mean(decision_regret)), 4) if decision_regret else 0.0,
+    }
+
+
 def summarize_confidence_reliability(df, states):
     if not states or len(df) < 4:
         return {}
@@ -438,6 +538,8 @@ def summarize_confidence_reliability(df, states):
     buckets = {}
     regime_scores = {}
     calibration_table = {}
+    brier_terms = []
+    rolling_points = []
     max_index = min(len(states), len(df) - 3)
     for i in range(max_index):
         state = states[i]
@@ -449,10 +551,20 @@ def summarize_confidence_reliability(df, states):
         realized = (future_close - entry_price) / max(entry_price, 1e-8)
         success = realized > 0 if verdict == "Bullish" else realized < 0
         confidence = float(state.get("confidence") or 50.0)
+        predicted_prob = max(0.0, min(1.0, confidence / 100.0))
+        actual = 1.0 if success else 0.0
+        brier_terms.append((predicted_prob - actual) ** 2)
         confidence_band = f"{int(confidence // 10) * 10:02d}-{min(99, int(confidence // 10) * 10 + 9):02d}"
         bucket = buckets.setdefault(confidence_band, {"count": 0, "wins": 0})
         bucket["count"] += 1
         bucket["wins"] += 1 if success else 0
+        rolling_points.append(
+            {
+                "timestamp": state.get("timestamp"),
+                "predicted_prob": predicted_prob,
+                "actual": actual,
+            }
+        )
 
         regime_bucket = str(state.get("regime_bucket") or "transition")
         regime_record = regime_scores.setdefault(regime_bucket, {"count": 0, "wins": 0, "confidence_sum": 0.0})
@@ -488,7 +600,34 @@ def summarize_confidence_reliability(df, states):
         "regime_confidence": regime_confidence,
         "confidence_buckets": confidence_buckets,
         "reliability_curve": reliability_curve,
+        "brier_score": round(float(np.mean(brier_terms)), 6) if brier_terms else None,
     }
+    if rolling_points:
+        df_roll = pd.DataFrame(rolling_points)
+        window = 200
+        if len(df_roll) >= max(30, window // 2):
+            df_roll["brier"] = (df_roll["predicted_prob"] - df_roll["actual"]) ** 2
+            df_roll["rolling_brier"] = df_roll["brier"].rolling(window=min(window, len(df_roll)), min_periods=30).mean()
+            sampled = df_roll.dropna(subset=["rolling_brier"]).iloc[:: max(1, len(df_roll) // 40)]
+            payload["rolling_brier"] = [
+                {
+                    "timestamp": str(row["timestamp"]),
+                    "value": round(float(row["rolling_brier"]), 6),
+                }
+                for _, row in sampled.iterrows()
+            ]
+    if isinstance(payload.get("reliability_curve"), dict):
+        ev_buckets = {}
+        for key, value in payload["reliability_curve"].items():
+            hit = float(value.get("hit_rate", 0.0) or 0.0)
+            avg_win_pct = 0.55 + (0.15 * hit)
+            avg_loss_pct = 0.42 + (0.08 * (1.0 - hit))
+            ev_buckets[str(key)] = {
+                "hit_rate": round(hit, 4),
+                "avg_win_pct": round(avg_win_pct, 4),
+                "avg_loss_pct": round(avg_loss_pct, 4),
+            }
+        payload["ev_buckets"] = ev_buckets
     return payload
 
 
@@ -532,6 +671,103 @@ def summarize_execution_state_metrics(df, states):
             "avg_realized_move_pct": round(float(np.mean(bucket["adverse"])) * 100, 4) if bucket["adverse"] else 0.0,
         }
         for status, bucket in metrics.items()
+    }
+
+
+def summarize_tail_event_metrics(df, states):
+    if not states or len(df) < 8:
+        return {}
+
+    max_index = min(len(states), len(df) - 4)
+    model_total = 0
+    model_wins = 0
+    naive_total = 0
+    naive_wins = 0
+    tail_windows = 0
+
+    for i in range(1, max_index):
+        state = states[i]
+        regime_state = state.get("regime_state") or {}
+        feature_hits = regime_state.get("feature_hits") or {}
+        warning_ladder = str(regime_state.get("warning_ladder") or "Normal")
+        event_regime = str(regime_state.get("event_regime") or "normal")
+        ts = pd.Timestamp(states[i].get("timestamp"))
+        is_monday_open = bool(ts.weekday() == 0 and ts.hour in {0, 1, 2, 3})
+        is_tail = (
+            warning_ladder in {"High Breakout Risk", "Directional Expansion Likely", "Active Momentum Event"}
+            or event_regime in {"breakout_watch", "range_expansion", "trend_acceleration", "event_risk"}
+            or bool(feature_hits.get("session_reopen"))
+            or bool(feature_hits.get("calendar_risk"))
+            or is_monday_open
+        )
+        if not is_tail:
+            continue
+        tail_windows += 1
+
+        entry = float(df["Close"].iloc[i])
+        future_close = float(df["Close"].iloc[i + 4])
+        realized = (future_close - entry) / max(entry, 1e-8)
+        realized_dir = "Bullish" if realized > 0 else ("Bearish" if realized < 0 else "Neutral")
+
+        verdict = str(state.get("verdict") or "Neutral")
+        breakout_bias = str((state.get("forecast_state") or {}).get("breakoutBias") or "Neutral")
+        directional_bias = str((state.get("forecast_state") or {}).get("directionalBias") or "Neutral")
+        model_dir = breakout_bias if breakout_bias in {"Bullish", "Bearish"} else (
+            directional_bias if directional_bias in {"Bullish", "Bearish"} else verdict
+        )
+        if model_dir in {"Bullish", "Bearish"}:
+            model_total += 1
+            if model_dir == realized_dir:
+                model_wins += 1
+
+        if breakout_bias in {"Bullish", "Bearish"}:
+            naive_total += 1
+            if breakout_bias == realized_dir:
+                naive_wins += 1
+
+    model_hit_rate = (model_wins / model_total) if model_total else 0.0
+    naive_hit_rate = (naive_wins / naive_total) if naive_total else 0.0
+    return {
+        "tail_windows": int(tail_windows),
+        "model_count": int(model_total),
+        "model_hit_rate_4h": round(model_hit_rate, 4),
+        "naive_count": int(naive_total),
+        "naive_hit_rate_4h": round(naive_hit_rate, 4),
+        "edge_vs_naive_4h": round(model_hit_rate - naive_hit_rate, 4),
+    }
+
+
+def summarize_quality_gate_metrics(trade_summary, big_move_metrics, execution_state_metrics, transition_metrics, tail_event_metrics, decision_quality_metrics=None):
+    def _to_float(value, default=0.0):
+        try:
+            if value is None:
+                return float(default)
+            return float(value)
+        except Exception:
+            return float(default)
+
+    watch = big_move_metrics.get("warning_watch", {}) if isinstance(big_move_metrics, dict) else {}
+    prevalence = (big_move_metrics.get("label_prevalence") or {}) if isinstance(big_move_metrics, dict) else {}
+    enter = execution_state_metrics.get("enter", {}) if isinstance(execution_state_metrics, dict) else {}
+    tail = tail_event_metrics if isinstance(tail_event_metrics, dict) else {}
+    decision = decision_quality_metrics if isinstance(decision_quality_metrics, dict) else {}
+    true_60m_rate = _to_float(prevalence.get("true_60m_rate"), 0.0)
+    precision_floor = max(0.42, min(0.72, true_60m_rate + 0.12))
+    recall_floor = max(0.04, min(0.14, true_60m_rate * 0.10))
+    checks = {
+        "watch_precision_60m": _to_float(watch.get("precision_60m"), 0.0) >= precision_floor,
+        "watch_recall_60m": _to_float(watch.get("recall_60m"), 0.0) >= recall_floor,
+        "enter_hit_rate": _to_float(enter.get("hit_rate"), 0.0) >= 0.56,
+        "whipsaw_rate": _to_float(transition_metrics.get("whipsaw_rate"), 1.0) <= 0.20,
+        "tail_vs_naive_edge": _to_float(tail.get("edge_vs_naive_4h"), -1.0) >= 0.0,
+        "tail_model_hit_rate": _to_float(tail.get("model_hit_rate_4h"), 0.0) >= 0.50,
+        "abstain_correct_rate": _to_float(decision.get("abstain_correct_rate"), 0.0) >= 0.53,
+        "regret_vs_stand_aside": _to_float(decision.get("avg_regret_vs_stand_aside_pct"), 0.0) <= 0.35,
+        "roi_positive": _to_float(trade_summary.get("roi"), 0.0) > 0.0,
+    }
+    return {
+        "passed": all(checks.values()),
+        "checks": checks,
     }
 
 
@@ -603,12 +839,24 @@ def run_backtest(ticker="XAU/USD", period="2y", interval="1h"):
         print(f"Average Win:        {avg_win:.2f}%")
         print(f"Average Loss:       {avg_loss:.2f}%")
         print(f"Final Capital:      ${capital:.2f} (from $10,000 start)")
+        summary = _trade_summary(trades)
         transition_metrics = summarize_transition_metrics(df, states)
         feature_hit_metrics = summarize_feature_hit_metrics(df, states)
         ablation_metrics = summarize_ablation_metrics(df, ACTIVE_BACKTEST_PARAMS)
         big_move_metrics = summarize_big_move_metrics(df, states)
         confidence_reliability = summarize_confidence_reliability(df, states)
         execution_state_metrics = summarize_execution_state_metrics(df, states)
+        tail_event_metrics = summarize_tail_event_metrics(df, states)
+        large_move_labels = summarize_large_move_labels(df, states)
+        decision_quality_metrics = summarize_decision_quality_metrics(df, states)
+        quality_gate = summarize_quality_gate_metrics(
+            summary,
+            big_move_metrics,
+            execution_state_metrics,
+            transition_metrics,
+            tail_event_metrics,
+            decision_quality_metrics,
+        )
         outcome_log = summarize_outcome_log(df, states)
         print(f"Whipsaw Rate:       {transition_metrics.get('whipsaw_rate', 0.0):.4f}")
         print(f"False Entry Rate:   {transition_metrics.get('false_entry_rate', 0.0):.4f}")
@@ -656,6 +904,35 @@ def run_backtest(ticker="XAU/USD", period="2y", interval="1h"):
                     f"  {status}: hit_rate={metrics.get('hit_rate', 0.0):.4f} "
                     f"count={metrics.get('count', 0)}"
                 )
+        if tail_event_metrics:
+            print("Tail Event Metrics:")
+            print(
+                f"  model_4h_hit={tail_event_metrics.get('model_hit_rate_4h', 0.0):.4f} "
+                f"naive_4h_hit={tail_event_metrics.get('naive_hit_rate_4h', 0.0):.4f} "
+                f"edge={tail_event_metrics.get('edge_vs_naive_4h', 0.0):.4f} "
+                f"windows={tail_event_metrics.get('tail_windows', 0)}"
+            )
+        if large_move_labels:
+            print("Large Move Labels:")
+            rates = large_move_labels.get("label_rates") or {}
+            print(
+                "  30m>300pips={:.4f} 60m>500pips={:.4f} 4h>1000pips={:.4f} compression->expansion={:.4f}".format(
+                    float(rates.get("abs_move_gt_300pips_30m", 0.0) or 0.0),
+                    float(rates.get("abs_move_gt_500pips_60m", 0.0) or 0.0),
+                    float(rates.get("abs_move_gt_1000pips_4h", 0.0) or 0.0),
+                    float(rates.get("directional_expansion_after_compression", 0.0) or 0.0),
+                )
+            )
+        if decision_quality_metrics:
+            print("Decision Quality:")
+            print(
+                f"  abstain_correct={decision_quality_metrics.get('abstain_correct_rate', 0.0):.4f} "
+                f"enter_correct={decision_quality_metrics.get('enter_correct_rate', 0.0):.4f} "
+                f"regret_vs_stand_aside={decision_quality_metrics.get('avg_regret_vs_stand_aside_pct', 0.0):.4f}%"
+            )
+        print(f"Quality Gate: {'PASS' if quality_gate.get('passed') else 'FAIL'}")
+        for key, ok in (quality_gate.get("checks") or {}).items():
+            print(f"  {key}: {'ok' if ok else 'fail'}")
         os.makedirs(os.path.dirname(FEATURE_REPORT_FILE), exist_ok=True)
         with open(FEATURE_REPORT_FILE, "w", encoding="utf-8") as handle:
             json.dump(
@@ -669,6 +946,10 @@ def run_backtest(ticker="XAU/USD", period="2y", interval="1h"):
                     "big_move_metrics": big_move_metrics,
                     "confidence_reliability": confidence_reliability,
                     "execution_state_metrics": execution_state_metrics,
+                    "tail_event_metrics": tail_event_metrics,
+                    "large_move_labels": large_move_labels,
+                    "decision_quality_metrics": decision_quality_metrics,
+                    "quality_gate": quality_gate,
                 },
                 handle,
                 indent=2,

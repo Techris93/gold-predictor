@@ -124,6 +124,22 @@ def annotate_event_regime_features(frame: pd.DataFrame, event_windows: list[dict
         ((annotated["High"] - annotated[["Open", "Close"]].max(axis=1)) + (annotated[["Open", "Close"]].min(axis=1) - annotated["Low"]))
         / (annotated["TRUE_RANGE"].replace(0, np.nan))
     ).replace([np.inf, -np.inf], np.nan)
+    annotated["UPPER_WICK"] = (annotated["High"] - annotated[["Open", "Close"]].max(axis=1)).clip(lower=0.0)
+    annotated["LOWER_WICK"] = (annotated[["Open", "Close"]].min(axis=1) - annotated["Low"]).clip(lower=0.0)
+    annotated["WICK_ASYMMETRY"] = (
+        (annotated["UPPER_WICK"] - annotated["LOWER_WICK"])
+        / annotated["TRUE_RANGE"].replace(0, np.nan)
+    ).replace([np.inf, -np.inf], np.nan)
+    annotated["WICK_ASYMMETRY_PERSISTENCE"] = annotated["WICK_ASYMMETRY"].abs().rolling(6, min_periods=2).mean()
+    annotated["MICRO_RETURN_1"] = annotated["Close"].pct_change().replace([np.inf, -np.inf], np.nan) * 100.0
+    annotated["MICRO_RETURN_BURST"] = (
+        annotated["MICRO_RETURN_1"].abs().rolling(3, min_periods=2).mean()
+        / annotated["MICRO_RETURN_1"].abs().rolling(12, min_periods=4).mean().replace(0, np.nan)
+    ).replace([np.inf, -np.inf], np.nan)
+    annotated["VELOCITY_DECAY"] = (
+        annotated["BAR_VELOCITY"].rolling(3, min_periods=2).mean()
+        / annotated["BAR_VELOCITY"].rolling(12, min_periods=4).mean().replace(0, np.nan)
+    ).replace([np.inf, -np.inf], np.nan)
 
     rolling_high_24 = annotated["High"].rolling(24, min_periods=6).max()
     rolling_low_24 = annotated["Low"].rolling(24, min_periods=6).min()
@@ -266,6 +282,12 @@ def compute_event_regime_snapshot(
     expansion_watch_threshold: float = 48.0,
     high_breakout_threshold: float = 64.0,
     directional_expansion_threshold: float = 78.0,
+    previous_state: dict | None = None,
+    warning_upshift_buffer: float = 2.0,
+    warning_downshift_buffer: float = 4.0,
+    min_warning_dwell_bars: int = 3,
+    breakout_bias_deadband: float = 0.65,
+    breakout_bias_hold_bars: int = 3,
 ) -> dict:
     get_value = row.get if hasattr(row, "get") else lambda key, default=None: default
 
@@ -274,6 +296,9 @@ def compute_event_regime_snapshot(
     vol_of_vol = _safe_float(get_value("VOL_OF_VOL"), 0.0)
     gap_pct = _safe_float(get_value("GAP_PCT"), 0.0)
     bar_velocity = _safe_float(get_value("BAR_VELOCITY"), 0.0)
+    micro_return_burst = _safe_float(get_value("MICRO_RETURN_BURST"), 1.0)
+    velocity_decay = _safe_float(get_value("VELOCITY_DECAY"), 1.0)
+    wick_asym_persistence = _safe_float(get_value("WICK_ASYMMETRY_PERSISTENCE"), 0.0)
     asian_range_pos = get_value("ASIAN_RANGE_POSITION")
     range_pos_24 = get_value("RANGE_POSITION_24")
     atr_14 = _safe_float(get_value("ATR_14"), 0.0)
@@ -350,6 +375,8 @@ def compute_event_regime_snapshot(
 
     reopen_score = 8.0 if session_reopen else 0.0
     vol_of_vol_score = 6.0 if vol_of_vol >= 0.08 else 0.0
+    burst_score = 7.0 if micro_return_burst >= 1.35 else (3.0 if micro_return_burst >= 1.1 else 0.0)
+    decay_penalty = 6.0 if velocity_decay <= 0.82 else (2.5 if velocity_decay <= 0.95 else 0.0)
     cross_asset_diff = abs(cross_asset_summary["bullish_score"] - cross_asset_summary["bearish_score"])
     cross_asset_score = cross_asset_diff * 5.0
 
@@ -388,6 +415,8 @@ def compute_event_regime_snapshot(
         + calendar_score
         + reopen_score
         + vol_of_vol_score
+        + burst_score
+        - decay_penalty
         + cross_asset_score
         + cluster_bonus
     )
@@ -509,7 +538,15 @@ def compute_event_regime_snapshot(
     expected_range_expansion = round(atr_14 * (1.0 + max(0.0, atr_expansion_ratio - 1.0) + (0.35 if squeeze_on else 0.0)), 2)
 
     warning_ladder = "Normal"
-    if expansion_probability_30m >= max(effective_directional_threshold + 8.0, 76.0) or (bar_velocity >= 1.1 and atr_expansion_ratio >= 1.2):
+    if (
+        expansion_probability_30m >= max(effective_directional_threshold + 8.0, 76.0)
+        and bar_velocity >= 1.1
+        and atr_expansion_ratio >= 1.2
+        and micro_return_burst >= 1.15
+        and directional_confluence_count >= 4
+    ) or (
+        bar_velocity >= 1.2 and atr_expansion_ratio >= 1.25 and micro_return_burst >= 1.2
+    ):
         warning_ladder = "Active Momentum Event"
     elif (
         expansion_probability_60m >= effective_directional_threshold
@@ -518,11 +555,23 @@ def compute_event_regime_snapshot(
             and breakout_bias != "Neutral"
             and directional_confluence_count >= 4
         )
-    ) and breakout_bias != "Neutral":
+    ) and breakout_bias != "Neutral" and directional_confluence_count >= 5 and velocity_decay >= 0.95 and micro_return_burst >= 1.05:
         warning_ladder = "Directional Expansion Likely"
-    elif expansion_probability_60m >= effective_high_breakout_threshold:
+    elif (
+        expansion_probability_60m >= effective_high_breakout_threshold
+        and (momentum_stack or setup_cluster_count >= 3)
+        and velocity_decay >= 0.9
+    ):
         warning_ladder = "High Breakout Risk"
     elif expansion_probability_60m >= effective_watch_threshold:
+        warning_ladder = "Expansion Watch"
+
+    if (
+        warning_ladder in {"High Breakout Risk", "Directional Expansion Likely"}
+        and not event_active
+        and ("Doji" in candle_pattern or _safe_float(get_value("WICKINESS"), 0.0) >= 0.66)
+        and velocity_decay < 1.0
+    ):
         warning_ladder = "Expansion Watch"
 
     event_regime = "normal"
@@ -538,14 +587,106 @@ def compute_event_regime_snapshot(
     elif warning_ladder in {"Directional Expansion Likely", "High Breakout Risk"}:
         event_regime = "breakout_watch"
 
+    fakeout_risk_score = 0.0
+    if warning_ladder in {"Expansion Watch", "High Breakout Risk"}:
+        wickiness = _safe_float(get_value("WICKINESS"), 0.0)
+        if breakout_bias == "Neutral":
+            fakeout_risk_score += 2.0
+        if not momentum_stack:
+            fakeout_risk_score += 1.5
+        if "Mixed" in alignment_label:
+            fakeout_risk_score += 1.5
+        if "Doji" in candle_pattern:
+            fakeout_risk_score += 1.0
+        if wickiness >= 0.62:
+            fakeout_risk_score += 1.0
+        if wick_asym_persistence >= 0.38:
+            fakeout_risk_score += 0.9
+        if velocity_decay <= 0.9:
+            fakeout_risk_score += 1.2
+        if micro_return_burst < 1.0:
+            fakeout_risk_score += 0.8
+    fakeout_risk_score = _clamp(fakeout_risk_score, 0.0, 6.0)
+
+    previous_state = previous_state if isinstance(previous_state, dict) else {}
+    prev_warning = str(previous_state.get("warning_ladder") or "Normal")
+    prev_event_regime = str(previous_state.get("event_regime") or "normal")
+    prev_bias = str(previous_state.get("breakout_bias") or "Neutral")
+    warning_dwell_bars = max(0, int(_safe_float(previous_state.get("warning_dwell_bars"), 0)))
+    breakout_bias_dwell_bars = max(0, int(_safe_float(previous_state.get("breakout_bias_dwell_bars"), 0)))
+
+    ladder_rank = {
+        "Normal": 0,
+        "Expansion Watch": 1,
+        "High Breakout Risk": 2,
+        "Directional Expansion Likely": 3,
+        "Active Momentum Event": 4,
+    }
+    stable_warning_rank = ladder_rank.get(prev_warning, ladder_rank.get(warning_ladder, 0))
+    target_warning_rank = ladder_rank.get(warning_ladder, 0)
+
+    if target_warning_rank > stable_warning_rank:
+        if target_warning_rank <= 2 and expansion_probability_60m < (effective_high_breakout_threshold + float(warning_upshift_buffer)):
+            target_warning_rank = stable_warning_rank
+        if target_warning_rank >= 3 and expansion_probability_60m < (effective_directional_threshold + float(warning_upshift_buffer)):
+            target_warning_rank = stable_warning_rank
+    elif target_warning_rank < stable_warning_rank:
+        can_downgrade = warning_dwell_bars >= max(1, int(min_warning_dwell_bars))
+        if stable_warning_rank >= 3 and expansion_probability_60m >= (effective_high_breakout_threshold - float(warning_downshift_buffer)):
+            can_downgrade = False
+        if stable_warning_rank == 2 and expansion_probability_60m >= (effective_watch_threshold - float(warning_downshift_buffer)):
+            can_downgrade = False
+        if not can_downgrade:
+            target_warning_rank = stable_warning_rank
+
+    stable_warning_ladder = next(
+        (name for name, rank in ladder_rank.items() if rank == target_warning_rank),
+        warning_ladder,
+    )
+    warning_dwell_bars = (warning_dwell_bars + 1) if stable_warning_ladder == prev_warning else 1
+
+    bias_delta = bullish_bias - bearish_bias
+    stable_breakout_bias = breakout_bias
+    if prev_bias in {"Bullish", "Bearish"} and breakout_bias != prev_bias:
+        weak_flip = abs(bias_delta) < max(0.1, float(breakout_bias_deadband))
+        if weak_flip or breakout_bias_dwell_bars < max(1, int(breakout_bias_hold_bars)):
+            stable_breakout_bias = prev_bias
+    breakout_bias_dwell_bars = (breakout_bias_dwell_bars + 1) if stable_breakout_bias == prev_bias else 1
+
+    if event_active:
+        stable_event_regime = "event_risk"
+    elif stable_warning_ladder == "Active Momentum Event" and stable_breakout_bias != "Neutral":
+        if "Doji" in candle_pattern and bar_velocity >= 1.0:
+            stable_event_regime = "panic_reversal"
+        elif "Drift" in market_structure and "Strong" in alignment_label:
+            stable_event_regime = "trend_acceleration"
+        else:
+            stable_event_regime = "range_expansion"
+    elif stable_warning_ladder in {"Directional Expansion Likely", "High Breakout Risk"}:
+        stable_event_regime = "breakout_watch"
+    else:
+        stable_event_regime = "normal"
+
+    if (
+        prev_event_regime == "breakout_watch"
+        and stable_event_regime == "normal"
+        and warning_dwell_bars < max(1, int(min_warning_dwell_bars))
+    ):
+        stable_event_regime = prev_event_regime
+
     return {
         "big_move_risk": round(big_move_score, 2),
         "expansion_probability_30m": round(expansion_probability_30m, 2),
         "expansion_probability_60m": round(expansion_probability_60m, 2),
         "expected_range_expansion": expected_range_expansion,
-        "breakout_bias": breakout_bias,
-        "event_regime": event_regime,
-        "warning_ladder": warning_ladder,
+        "breakout_bias": stable_breakout_bias,
+        "event_regime": stable_event_regime,
+        "warning_ladder": stable_warning_ladder,
+        "raw_breakout_bias": breakout_bias,
+        "raw_event_regime": event_regime,
+        "raw_warning_ladder": warning_ladder,
+        "warning_dwell_bars": int(warning_dwell_bars),
+        "breakout_bias_dwell_bars": int(breakout_bias_dwell_bars),
         "cross_asset_bias": cross_asset_summary["bias"],
         "cross_asset_available": cross_asset_summary["available_count"],
         "minutes_to_next_event": round(_safe_float(minutes_to_next_event), 1) if minutes_to_next_event is not None else None,
@@ -557,12 +698,16 @@ def compute_event_regime_snapshot(
             "level_proximity": level_proximity_score >= 6.0,
             "atr_expansion": atr_expansion_ratio >= 1.1,
             "bar_velocity": bar_velocity >= 0.8,
+            "micro_return_burst": micro_return_burst >= 1.1,
+            "velocity_decay_healthy": velocity_decay >= 1.0,
+            "wick_asymmetry_persistent": wick_asym_persistence >= 0.3,
             "calendar_risk": event_active or (_safe_float(minutes_to_next_event, 9999.0) <= 90.0 if minutes_to_next_event is not None else False),
-            "cross_asset_confirmation": cross_asset_summary["bias"] == breakout_bias and breakout_bias != "Neutral",
+            "cross_asset_confirmation": cross_asset_summary["bias"] == stable_breakout_bias and stable_breakout_bias != "Neutral",
             "momentum_stack": momentum_stack,
             "compression_setup": compression_setup,
             "setup_cluster": setup_cluster_count >= 3,
             "directional_confluence": directional_confluence_count >= 3,
+            "fakeout_risk": fakeout_risk_score >= 3.0,
         },
         "components": {
             "compression_score": round(compression_score, 2),
@@ -573,8 +718,12 @@ def compute_event_regime_snapshot(
             "asian_breakout_score": round(asian_breakout_score, 2),
             "calendar_score": round(calendar_score, 2),
             "cross_asset_score": round(cross_asset_score, 2),
+            "burst_score": round(burst_score, 2),
+            "decay_penalty": round(decay_penalty, 2),
             "cluster_bonus": round(cluster_bonus, 2),
+            "fakeout_risk_score": round(fakeout_risk_score, 2),
             "directional_confluence_count": int(directional_confluence_count),
+            "bias_delta": round(bias_delta, 3),
             "adaptive_threshold_discount": round(adaptive_threshold_discount, 2),
             "effective_watch_threshold": round(effective_watch_threshold, 2),
             "effective_high_breakout_threshold": round(effective_high_breakout_threshold, 2),

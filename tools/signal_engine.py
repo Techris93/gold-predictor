@@ -78,10 +78,24 @@ DEFAULT_STRATEGY_PARAMS = {
     "anti_chop_trigger_buffer": 0.35,
     "anti_chop_tradeability_floor": 68.0,
     "anti_chop_penalty": 8.0,
+    "warning_upshift_buffer": 2.0,
+    "warning_downshift_buffer": 4.0,
+    "warning_min_dwell_bars": 3,
+    "breakout_bias_deadband": 0.65,
+    "breakout_bias_hold_bars": 3,
+    "fakeout_risk_penalty": 6.0,
+    "meta_entry_score_threshold": 63.0,
+    "meta_fakeout_prob_cap": 0.42,
+    "meta_exit_prob_cap": 0.58,
+    "min_expected_edge_pct": 0.06,
+    "estimated_avg_win_pct": 0.55,
+    "estimated_avg_loss_pct": 0.42,
+    "transaction_cost_pct": 0.05,
 }
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 CONFIDENCE_CALIBRATION_FILE = BASE_DIR / "tools" / "reports" / "confidence_calibration.json"
+REGIME_PARAMS_FILE = BASE_DIR / "config" / "regime_params.json"
 
 
 def normalize_strategy_params(params=None):
@@ -99,6 +113,45 @@ def _load_confidence_calibration():
         return data if isinstance(data, dict) else {}
     except Exception:
         return {}
+
+
+def _load_regime_overrides():
+    try:
+        if not REGIME_PARAMS_FILE.exists():
+            return {}
+        data = json.loads(REGIME_PARAMS_FILE.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _select_regime_profile(ta_data):
+    ta_data = ta_data if isinstance(ta_data, dict) else {}
+    vol_regime = str(((ta_data.get("volatility_regime") or {}).get("market_regime")) or "")
+    event = ta_data.get("event_regime") or {}
+    warning = str((event.get("warning_ladder")) or "Normal")
+    event_regime = str((event.get("event_regime")) or "normal")
+    if event_regime == "panic_reversal":
+        return "post_shock_reversal"
+    if warning in {"Directional Expansion Likely", "Active Momentum Event"} or event_regime in {"breakout_watch", "range_expansion", "trend_acceleration"}:
+        return "event_breakout"
+    if vol_regime == "Trending":
+        return "trend_continuation"
+    if vol_regime == "Range-Bound":
+        return "quiet_range"
+    return "transition"
+
+
+def _apply_regime_overrides(base_params, ta_data):
+    params = dict(base_params or {})
+    profile = _select_regime_profile(ta_data)
+    overrides = _load_regime_overrides()
+    profile_overrides = {}
+    if isinstance(overrides.get("profiles"), dict):
+        profile_overrides = overrides["profiles"].get(profile) or {}
+    if isinstance(profile_overrides, dict):
+        params.update(profile_overrides)
+    return params, profile
 
 
 def _regime_bucket(regime_label, warning_ladder, event_regime):
@@ -207,6 +260,187 @@ def _build_execution_state(action_state, action, tradeability_label, no_trade_re
         "antiChopReasons": list(anti_chop_reasons or []),
         "executionConfidence": round(float(confidence or 50)),
     }
+
+
+def _compute_meta_model_scores(
+    direction_score,
+    trigger_score,
+    tradeability_score,
+    stability_score,
+    fakeout_risk_score,
+    exit_risk_score,
+    warning_ladder,
+    alignment_label,
+):
+    warning_weight = {
+        "Normal": 0.0,
+        "Expansion Watch": 0.12,
+        "High Breakout Risk": 0.20,
+        "Directional Expansion Likely": 0.26,
+        "Active Momentum Event": 0.30,
+    }.get(str(warning_ladder or "Normal"), 0.0)
+    alignment_bonus = 0.08 if str(alignment_label).startswith("Strong") else 0.0
+    entry_timing_score = max(
+        0.0,
+        min(
+            100.0,
+            (float(direction_score) * 5.2)
+            + (float(trigger_score) * 8.5)
+            + (float(tradeability_score) * 0.42)
+            + (float(stability_score) * 0.28)
+            + (warning_weight * 100.0)
+            + (alignment_bonus * 100.0)
+            - (float(fakeout_risk_score) * 8.0),
+        ),
+    )
+    fakeout_probability = max(
+        0.0,
+        min(
+            1.0,
+            (float(fakeout_risk_score) / 6.5)
+            + (0.12 if "Mixed" in str(alignment_label) else 0.0)
+            + (0.08 if str(warning_ladder) in {"Expansion Watch", "High Breakout Risk"} else 0.0),
+        ),
+    )
+    exit_risk_probability = max(
+        0.0,
+        min(1.0, (float(exit_risk_score) / 10.0) + (0.06 if "Mixed" in str(alignment_label) else 0.0)),
+    )
+    return {
+        "entry_timing_score": round(entry_timing_score, 2),
+        "fakeout_probability": round(fakeout_probability, 4),
+        "exit_risk_probability": round(exit_risk_probability, 4),
+    }
+
+
+def _expected_value_edge_pct(confidence, strategy_params, regime_bucket):
+    confidence = float(confidence or 50.0)
+    calib = _load_confidence_calibration()
+    bucket_stats = (calib.get("ev_buckets") or {}) if isinstance(calib, dict) else {}
+    stats = bucket_stats.get(str(regime_bucket or "")) if isinstance(bucket_stats, dict) else None
+    if stats is None and isinstance(bucket_stats, dict):
+        band_floor = int(max(50, min(90, (int(confidence // 10) * 10))))
+        band_key = f"{band_floor:02d}-{min(99, band_floor + 9):02d}"
+        stats = bucket_stats.get(band_key)
+
+    avg_win = float(strategy_params.get("estimated_avg_win_pct", 0.55))
+    avg_loss = float(strategy_params.get("estimated_avg_loss_pct", 0.42))
+    tx_cost = float(strategy_params.get("transaction_cost_pct", 0.05))
+    if isinstance(stats, dict):
+        avg_win = float(stats.get("avg_win_pct", avg_win) or avg_win)
+        avg_loss = float(stats.get("avg_loss_pct", avg_loss) or avg_loss)
+
+    p_win = max(0.0, min(1.0, confidence / 100.0))
+    edge = (p_win * avg_win) - ((1.0 - p_win) * avg_loss) - tx_cost
+    return round(edge, 4)
+
+
+def _warning_rank(value):
+    ranks = {
+        "Normal": 0,
+        "Expansion Watch": 1,
+        "High Breakout Risk": 2,
+        "Directional Expansion Likely": 3,
+        "Active Momentum Event": 4,
+    }
+    return ranks.get(str(value or "Normal"), 0)
+
+
+def _warning_from_rank(rank):
+    mapping = {
+        0: "Normal",
+        1: "Expansion Watch",
+        2: "High Breakout Risk",
+        3: "Directional Expansion Likely",
+        4: "Active Momentum Event",
+    }
+    return mapping.get(int(rank), "Normal")
+
+
+def _stabilize_runtime_regime_state(regime_state, memory, strategy_params):
+    regime_state = dict(regime_state or {})
+    memory = dict(memory or {})
+
+    raw_warning = str(regime_state.get("warning_ladder") or "Normal")
+    raw_event_regime = str(regime_state.get("event_regime") or "normal")
+    raw_breakout_bias = str(regime_state.get("breakout_bias") or "Neutral")
+    big_move_risk = float(regime_state.get("big_move_risk") or 0.0)
+    expansion_60m = float(regime_state.get("expansion_probability_60m") or 0.0)
+    bias_delta = float(((regime_state.get("components") or {}).get("bias_delta")) or 0.0)
+
+    watch_threshold = float(strategy_params.get("expansion_watch_threshold", 48.0))
+    high_threshold = float(strategy_params.get("high_breakout_threshold", 64.0))
+    directional_threshold = float(strategy_params.get("directional_expansion_threshold", 78.0))
+    up_buffer = float(strategy_params.get("warning_upshift_buffer", 2.0))
+    down_buffer = float(strategy_params.get("warning_downshift_buffer", 4.0))
+    min_dwell = max(1, int(strategy_params.get("warning_min_dwell_bars", 3) or 3))
+    bias_deadband = float(strategy_params.get("breakout_bias_deadband", 0.65))
+    bias_hold = max(1, int(strategy_params.get("breakout_bias_hold_bars", 3) or 3))
+
+    prev_warning = str(memory.get("warning_ladder") or raw_warning)
+    prev_event_regime = str(memory.get("event_regime") or raw_event_regime)
+    prev_bias = str(memory.get("breakout_bias") or raw_breakout_bias)
+    warning_dwell = max(0, int(memory.get("warning_dwell_bars", 0) or 0))
+    bias_dwell = max(0, int(memory.get("breakout_bias_dwell_bars", 0) or 0))
+
+    raw_rank = _warning_rank(raw_warning)
+    stable_rank = _warning_rank(prev_warning)
+    threshold_by_rank = {
+        1: watch_threshold,
+        2: high_threshold,
+        3: directional_threshold,
+        4: directional_threshold + 8.0,
+    }
+
+    target_rank = raw_rank
+    if raw_rank > stable_rank:
+        required = float(threshold_by_rank.get(raw_rank, watch_threshold))
+        if expansion_60m < (required + up_buffer) and big_move_risk < (required + up_buffer):
+            target_rank = stable_rank
+    elif raw_rank < stable_rank:
+        required = float(threshold_by_rank.get(stable_rank, watch_threshold))
+        can_downgrade = warning_dwell >= min_dwell
+        if expansion_60m > (required - down_buffer) or big_move_risk > (required - down_buffer):
+            can_downgrade = False
+        if not can_downgrade:
+            target_rank = stable_rank
+
+    stable_warning = _warning_from_rank(target_rank)
+    warning_dwell = (warning_dwell + 1) if stable_warning == prev_warning else 1
+
+    stable_bias = raw_breakout_bias
+    if prev_bias in {"Bullish", "Bearish"} and raw_breakout_bias != prev_bias:
+        if abs(bias_delta) < max(0.1, bias_deadband) or bias_dwell < bias_hold:
+            stable_bias = prev_bias
+    bias_dwell = (bias_dwell + 1) if stable_bias == prev_bias else 1
+
+    stable_event = raw_event_regime
+    if stable_warning == "Normal":
+        stable_event = "normal"
+    elif stable_warning in {"Expansion Watch", "High Breakout Risk", "Directional Expansion Likely"}:
+        stable_event = "breakout_watch"
+    elif stable_warning == "Active Momentum Event" and stable_event == "normal":
+        stable_event = "range_expansion"
+    if prev_event_regime == "breakout_watch" and stable_event == "normal" and warning_dwell < min_dwell:
+        stable_event = prev_event_regime
+
+    regime_state["raw_warning_ladder"] = raw_warning
+    regime_state["raw_event_regime"] = raw_event_regime
+    regime_state["raw_breakout_bias"] = raw_breakout_bias
+    regime_state["warning_ladder"] = stable_warning
+    regime_state["event_regime"] = stable_event
+    regime_state["breakout_bias"] = stable_bias
+    regime_state["warning_dwell_bars"] = int(warning_dwell)
+    regime_state["breakout_bias_dwell_bars"] = int(bias_dwell)
+
+    next_memory = {
+        "warning_ladder": stable_warning,
+        "event_regime": stable_event,
+        "breakout_bias": stable_bias,
+        "warning_dwell_bars": int(warning_dwell),
+        "breakout_bias_dwell_bars": int(bias_dwell),
+    }
+    return regime_state, next_memory
 
 
 def _bias_vote(*biases):
@@ -338,6 +572,7 @@ def compute_prediction_from_ta(ta_data):
         }
 
     strategy_params = normalize_strategy_params(ta_data.get("active_strategy_params"))
+    strategy_params, active_regime_profile = _apply_regime_overrides(strategy_params, ta_data)
 
     verdict = "Neutral"
     trend = ta_data.get("ema_trend", "Neutral")
@@ -351,6 +586,12 @@ def compute_prediction_from_ta(ta_data):
     pa_pattern = (ta_data.get("price_action") or {}).get("latest_candle_pattern", "None")
     feature_hits = extract_price_action_feature_hits(pa_struct, pa_pattern)
     regime_state = ta_data.get("event_regime", {}) if isinstance(ta_data.get("event_regime"), dict) else {}
+    regime_memory = ta_data.get("_regime_memory", {}) if isinstance(ta_data.get("_regime_memory"), dict) else {}
+    regime_state, next_regime_memory = _stabilize_runtime_regime_state(
+        regime_state=regime_state,
+        memory=regime_memory,
+        strategy_params=strategy_params,
+    )
     support_resistance = ta_data.get("support_resistance", {}) if isinstance(ta_data.get("support_resistance"), dict) else {}
     event_risk = ta_data.get("event_risk", {}) if isinstance(ta_data.get("event_risk"), dict) else {}
     rsi = ta_data.get("rsi_14", 50)
@@ -397,6 +638,7 @@ def compute_prediction_from_ta(ta_data):
     anti_chop_trigger_buffer = float(strategy_params.get("anti_chop_trigger_buffer", 0.35))
     anti_chop_tradeability_floor = float(strategy_params.get("anti_chop_tradeability_floor", 68.0))
     anti_chop_penalty = float(strategy_params.get("anti_chop_penalty", 8.0))
+    fakeout_risk_penalty = float(strategy_params.get("fakeout_risk_penalty", 6.0))
 
     event_breakout_bias = str(regime_state.get("breakout_bias", "Neutral"))
     cross_asset_bias = str(regime_state.get("cross_asset_bias", "Neutral"))
@@ -711,8 +953,14 @@ def compute_prediction_from_ta(ta_data):
         no_trade_reasons.append("Trend strength is too weak.")
     if verdict == "Neutral" and max(bull_trigger, bear_trigger) < trigger_min_score:
         no_trade_reasons.append("No clean trigger is present.")
+    fakeout_risk_score = float(((regime_state.get("components") or {}).get("fakeout_risk_score")) or 0.0)
+    if fakeout_risk_score >= 3.0:
+        anti_chop_reasons.append("Breakout risk is elevated, but fakeout risk remains high.")
+
     if anti_chop_reasons:
         penalty += anti_chop_penalty
+    if fakeout_risk_score >= 3.0:
+        penalty += fakeout_risk_penalty
         if action_state in {"SETUP_LONG", "SETUP_SHORT"}:
             action_state = "WAIT"
             action = "hold"
@@ -735,6 +983,38 @@ def compute_prediction_from_ta(ta_data):
         tradeability_label,
         stability_score,
     )
+    meta_scores = _compute_meta_model_scores(
+        direction_score=direction_score,
+        trigger_score=max(bull_trigger, bear_trigger),
+        tradeability_score=tradeability_score,
+        stability_score=stability_score,
+        fakeout_risk_score=fakeout_risk_score,
+        exit_risk_score=exit_risk_score,
+        warning_ladder=warning_ladder,
+        alignment_label=alignment_label,
+    )
+    expected_edge_pct = _expected_value_edge_pct(confidence, strategy_params, regime_bucket)
+    entry_threshold = float(strategy_params.get("meta_entry_score_threshold", 63.0))
+    fakeout_cap = float(strategy_params.get("meta_fakeout_prob_cap", 0.42))
+    exit_cap = float(strategy_params.get("meta_exit_prob_cap", 0.58))
+    min_expected_edge_pct = float(strategy_params.get("min_expected_edge_pct", 0.06))
+
+    if action_state in {"LONG_ACTIVE", "SHORT_ACTIVE", "SETUP_LONG", "SETUP_SHORT"}:
+        if meta_scores["entry_timing_score"] < entry_threshold:
+            no_trade_reasons.append("Entry timing model is not yet confirming momentum quality.")
+        if meta_scores["fakeout_probability"] > fakeout_cap:
+            no_trade_reasons.append("Fakeout probability is elevated for the current setup.")
+        if meta_scores["exit_risk_probability"] > exit_cap and action_state in {"SETUP_LONG", "SETUP_SHORT"}:
+            no_trade_reasons.append("Exit risk model is too high for a fresh entry.")
+        if expected_edge_pct < min_expected_edge_pct:
+            no_trade_reasons.append("Expected value edge is below the execution threshold.")
+
+        if no_trade_reasons and action_state in {"LONG_ACTIVE", "SHORT_ACTIVE", "SETUP_LONG", "SETUP_SHORT"}:
+            action_state = "WAIT"
+            action = "hold"
+            verdict = "Neutral"
+            confidence = min(confidence, no_trade_confidence_cap)
+
     forecast_state = _build_forecast_state(
         regime_bucket,
         regime_state,
@@ -749,6 +1029,10 @@ def compute_prediction_from_ta(ta_data):
         anti_chop_reasons,
         confidence,
     )
+    execution_state["entryTimingScore"] = meta_scores["entry_timing_score"]
+    execution_state["fakeoutProbability"] = meta_scores["fakeout_probability"]
+    execution_state["exitRiskProbability"] = meta_scores["exit_risk_probability"]
+    execution_state["expectedEdgePct"] = expected_edge_pct
 
     trade_guidance = compute_trade_guidance(
         ta_data,
@@ -864,12 +1148,17 @@ def compute_prediction_from_ta(ta_data):
         "MarketState": {
             "regime": regime_label,
             "regime_bucket": regime_bucket,
+            "active_regime_profile": active_regime_profile,
             "directional_bias": directional_bias,
             "tradeability": tradeability_label,
             "action": action,
             "action_state": action_state,
             "anti_chop_active": bool(anti_chop_reasons),
             "anti_chop_reasons": anti_chop_reasons,
+            "entry_timing_score": meta_scores["entry_timing_score"],
+            "fakeout_probability": meta_scores["fakeout_probability"],
+            "exit_risk_probability": meta_scores["exit_risk_probability"],
+            "expected_edge_pct": expected_edge_pct,
             "scores": {
                 "direction": round(direction_score, 2),
                 "tradeability": round(tradeability_score, 2),
@@ -892,9 +1181,15 @@ def compute_prediction_from_ta(ta_data):
             "expansion_probability_30m": round(expansion_probability_30m, 2),
             "expansion_probability_60m": round(expansion_probability_60m, 2),
             "expected_range_expansion": regime_state.get("expected_range_expansion"),
+            "active_regime_profile": active_regime_profile,
             "breakout_bias": event_breakout_bias,
             "event_regime": event_regime_label,
             "warning_ladder": warning_ladder,
+            "raw_breakout_bias": regime_state.get("raw_breakout_bias", event_breakout_bias),
+            "raw_event_regime": regime_state.get("raw_event_regime", event_regime_label),
+            "raw_warning_ladder": regime_state.get("raw_warning_ladder", warning_ladder),
+            "warning_dwell_bars": regime_state.get("warning_dwell_bars"),
+            "breakout_bias_dwell_bars": regime_state.get("breakout_bias_dwell_bars"),
             "cross_asset_bias": regime_state.get("cross_asset_bias", "Neutral"),
             "cross_asset_available": regime_state.get("cross_asset_available", 0),
             "minutes_to_next_event": regime_state.get("minutes_to_next_event"),
@@ -903,6 +1198,7 @@ def compute_prediction_from_ta(ta_data):
         },
         "ForecastState": forecast_state,
         "ExecutionState": execution_state,
+        "_regime_memory": next_regime_memory,
     }
 
 
@@ -995,7 +1291,7 @@ def prepare_historical_features(df, params=None):
     return annotate_event_regime_features(frame)
 
 
-def build_ta_payload_from_row(row, params=None):
+def build_ta_payload_from_row(row, params=None, regime_memory=None):
     strategy_params = normalize_strategy_params(params)
     return {
         "current_price": round(float(row["Close"]), 2),
@@ -1042,5 +1338,12 @@ def build_ta_payload_from_row(row, params=None):
             expansion_watch_threshold=float(strategy_params.get("expansion_watch_threshold", 48.0)),
             high_breakout_threshold=float(strategy_params.get("high_breakout_threshold", 64.0)),
             directional_expansion_threshold=float(strategy_params.get("directional_expansion_threshold", 78.0)),
+            previous_state=regime_memory if isinstance(regime_memory, dict) else None,
+            warning_upshift_buffer=float(strategy_params.get("warning_upshift_buffer", 2.0)),
+            warning_downshift_buffer=float(strategy_params.get("warning_downshift_buffer", 4.0)),
+            min_warning_dwell_bars=int(strategy_params.get("warning_min_dwell_bars", 3)),
+            breakout_bias_deadband=float(strategy_params.get("breakout_bias_deadband", 0.65)),
+            breakout_bias_hold_bars=int(strategy_params.get("breakout_bias_hold_bars", 3)),
         ),
+        "_regime_memory": regime_memory if isinstance(regime_memory, dict) else {},
     }

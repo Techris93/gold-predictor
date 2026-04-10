@@ -64,7 +64,13 @@ class StrategyParams:
 
 
 def fetch_history(ticker: str, period: str, interval: str) -> pd.DataFrame:
-    return fetch_td_history(period=period, interval=interval, ticker=ticker)
+    try:
+        return fetch_td_history(period=period, interval=interval, ticker=ticker)
+    except Exception:
+        fallback = BASE_DIR / "data" / "swarm" / "cache" / "XAU_USD_365d_1h.csv"
+        if fallback.exists():
+            return pd.read_csv(fallback, index_col=0, parse_dates=True).sort_index()
+        raise
 
 
 def _to_strategy_dict(p: StrategyParams) -> Dict[str, int]:
@@ -385,6 +391,82 @@ def make_report(results: List[Dict[str, object]], baseline: Dict[str, object]) -
     }
 
 
+def build_regime_param_overrides(best_params: Dict[str, object]) -> Dict[str, object]:
+    p = best_params if isinstance(best_params, dict) else {}
+    base = {
+        "direction_entry_threshold": 8.0,
+        "direction_hold_threshold": 5.0,
+        "anti_chop_tradeability_floor": 68.0,
+        "anti_chop_penalty": 8.0,
+        "meta_entry_score_threshold": 63.0,
+        "meta_fakeout_prob_cap": 0.42,
+        "meta_exit_prob_cap": 0.58,
+        "min_expected_edge_pct": 0.06,
+    }
+    quiet_range = {
+        **base,
+        "direction_entry_threshold": 9.5,
+        "direction_hold_threshold": 6.2,
+        "anti_chop_tradeability_floor": 74.0,
+        "anti_chop_penalty": 10.0,
+        "meta_entry_score_threshold": 70.0,
+        "meta_fakeout_prob_cap": 0.32,
+        "meta_exit_prob_cap": 0.54,
+        "min_expected_edge_pct": 0.08,
+    }
+    trend_continuation = {
+        **base,
+        "direction_entry_threshold": 7.0,
+        "direction_hold_threshold": 4.5,
+        "anti_chop_tradeability_floor": 64.0,
+        "meta_entry_score_threshold": 60.0,
+        "meta_fakeout_prob_cap": 0.46,
+    }
+    event_breakout = {
+        **base,
+        "direction_entry_threshold": 8.0,
+        "direction_hold_threshold": 5.0,
+        "anti_chop_tradeability_floor": 68.0,
+        "anti_chop_penalty": 9.0,
+        "meta_entry_score_threshold": 64.0,
+        "meta_fakeout_prob_cap": 0.36,
+        "meta_exit_prob_cap": 0.54,
+        "min_expected_edge_pct": 0.07,
+        "warning_min_dwell_bars": 5,
+    }
+    post_shock_reversal = {
+        **base,
+        "direction_entry_threshold": 8.5,
+        "direction_hold_threshold": 5.5,
+        "anti_chop_tradeability_floor": 70.0,
+        "meta_entry_score_threshold": 66.0,
+        "meta_fakeout_prob_cap": 0.34,
+        "meta_exit_prob_cap": 0.52,
+    }
+    transition = {
+        **base,
+        "direction_entry_threshold": 8.5,
+        "direction_hold_threshold": 5.5,
+        "anti_chop_tradeability_floor": 70.0,
+        "meta_entry_score_threshold": 66.0,
+        "meta_fakeout_prob_cap": 0.38,
+    }
+    if "ema_short" in p and "ema_long" in p:
+        for profile in [quiet_range, trend_continuation, event_breakout, post_shock_reversal, transition]:
+            profile["ema_short"] = int(p["ema_short"])
+            profile["ema_long"] = int(p["ema_long"])
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "profiles": {
+            "quiet_range": quiet_range,
+            "trend_continuation": trend_continuation,
+            "event_breakout": event_breakout,
+            "post_shock_reversal": post_shock_reversal,
+            "transition": transition,
+        },
+    }
+
+
 def maybe_commit_promoted_result(
     report: Dict[str, object],
     latest_file: Path,
@@ -404,6 +486,7 @@ def maybe_commit_promoted_result(
 
     repo_root = Path(__file__).resolve().parents[1]
     rec_file = reports_dir / "autoresearch_recommendation.json"
+    regime_file = repo_root / "config" / "regime_params.json"
 
     recommendation = {
         "generated_at": report.get("generated_at"),
@@ -423,7 +506,10 @@ def maybe_commit_promoted_result(
 
         latest_rel = str(latest_file.relative_to(repo_root))
         rec_rel = str(rec_file.relative_to(repo_root))
-        subprocess.run(["git", "add", latest_rel, rec_rel], cwd=repo_root, check=True)
+        add_targets = [latest_rel, rec_rel]
+        if regime_file.exists():
+            add_targets.append(str(regime_file.relative_to(repo_root)))
+        subprocess.run(["git", "add", *add_targets], cwd=repo_root, check=True)
 
         # If nothing is staged, avoid empty commit errors.
         staged_diff = subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=repo_root, check=False)
@@ -455,6 +541,7 @@ def main() -> None:
     parser.add_argument("--train-bars", type=int, default=1000)
     parser.add_argument("--test-bars", type=int, default=250)
     parser.add_argument("--step-bars", type=int, default=125)
+    parser.add_argument("--monthly", action="store_true", help="Use monthly walk-forward cadence (train 180d / test 30d / step 30d).")
     parser.add_argument("--fee-bps", type=float, default=3.0)
     parser.add_argument("--slippage-bps", type=float, default=2.0)
     parser.add_argument("--max-runs", type=int, default=0, help="Limit number of parameter sets for quick runs.")
@@ -464,9 +551,26 @@ def main() -> None:
     parser.add_argument("--branch-prefix", default="autoresearch", help="Prefix for auto-created research branches.")
     args = parser.parse_args()
 
+    if args.monthly:
+        args.train_bars = 24 * 180
+        args.test_bars = 24 * 30
+        args.step_bars = 24 * 30
+
     print("[autoresearch] fetching data...")
     base_df = fetch_history(args.ticker, args.period, args.interval)
     print(f"[autoresearch] candles loaded: {len(base_df)}")
+    if args.monthly and (args.train_bars + args.test_bars) > len(base_df):
+        train_bars = max(500, int(len(base_df) * 0.70))
+        test_bars = max(120, int(len(base_df) * 0.15))
+        if train_bars + test_bars >= len(base_df):
+            test_bars = max(120, len(base_df) - train_bars - 1)
+        args.train_bars = train_bars
+        args.test_bars = test_bars
+        args.step_bars = max(120, min(test_bars, int(len(base_df) * 0.15)))
+        print(
+            "[autoresearch] adjusted monthly windows for available data:",
+            f"train={args.train_bars}, test={args.test_bars}, step={args.step_bars}",
+        )
 
     candidates = param_grid()
     if args.max_runs > 0:
@@ -512,12 +616,18 @@ def main() -> None:
             print(f"[autoresearch] completed {idx}/{len(candidates)}")
 
     report = make_report(results, baseline)
+    report["evaluation_mode"] = "monthly_walkforward" if args.monthly else "default_walkforward"
 
     reports_dir = Path(__file__).resolve().parent / "reports"
     reports_dir.mkdir(parents=True, exist_ok=True)
 
     latest_file = reports_dir / "autoresearch_last.json"
     latest_file.write_text(json.dumps(report, indent=2), encoding="utf-8")
+
+    regime_params_file = BASE_DIR / "config" / "regime_params.json"
+    best_params = (report.get("best") or {}).get("params") or {}
+    regime_overrides = build_regime_param_overrides(best_params)
+    regime_params_file.write_text(json.dumps(regime_overrides, indent=2), encoding="utf-8")
 
     top = report["best"]
     print("\n[autoresearch] ===== SUMMARY =====")
@@ -531,6 +641,7 @@ def main() -> None:
     print("Best median metrics:", top["summary"])
     print("Promotion decision:", report["promote"], "|", report["promotion_reason"])
     print("Report file:", str(latest_file))
+    print("Regime overrides file:", str(regime_params_file))
 
     maybe_commit_promoted_result(
         report=report,

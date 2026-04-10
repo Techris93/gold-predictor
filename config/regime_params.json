@@ -1,0 +1,66 @@
+{
+  "generated_at": "2026-04-10T11:26:52.619764+00:00",
+  "profiles": {
+    "quiet_range": {
+      "direction_entry_threshold": 9.5,
+      "direction_hold_threshold": 6.2,
+      "anti_chop_tradeability_floor": 74.0,
+      "anti_chop_penalty": 10.0,
+      "meta_entry_score_threshold": 70.0,
+      "meta_fakeout_prob_cap": 0.32,
+      "meta_exit_prob_cap": 0.54,
+      "min_expected_edge_pct": 0.08,
+      "ema_short": 9,
+      "ema_long": 26
+    },
+    "trend_continuation": {
+      "direction_entry_threshold": 7.0,
+      "direction_hold_threshold": 4.5,
+      "anti_chop_tradeability_floor": 64.0,
+      "anti_chop_penalty": 8.0,
+      "meta_entry_score_threshold": 60.0,
+      "meta_fakeout_prob_cap": 0.46,
+      "meta_exit_prob_cap": 0.58,
+      "min_expected_edge_pct": 0.06,
+      "ema_short": 9,
+      "ema_long": 26
+    },
+    "event_breakout": {
+      "direction_entry_threshold": 8.0,
+      "direction_hold_threshold": 5.0,
+      "anti_chop_tradeability_floor": 68.0,
+      "anti_chop_penalty": 9.0,
+      "meta_entry_score_threshold": 64.0,
+      "meta_fakeout_prob_cap": 0.36,
+      "meta_exit_prob_cap": 0.54,
+      "min_expected_edge_pct": 0.07,
+      "warning_min_dwell_bars": 5,
+      "ema_short": 9,
+      "ema_long": 26
+    },
+    "post_shock_reversal": {
+      "direction_entry_threshold": 8.5,
+      "direction_hold_threshold": 5.5,
+      "anti_chop_tradeability_floor": 70.0,
+      "anti_chop_penalty": 8.0,
+      "meta_entry_score_threshold": 66.0,
+      "meta_fakeout_prob_cap": 0.34,
+      "meta_exit_prob_cap": 0.52,
+      "min_expected_edge_pct": 0.06,
+      "ema_short": 9,
+      "ema_long": 26
+    },
+    "transition": {
+      "direction_entry_threshold": 8.5,
+      "direction_hold_threshold": 5.5,
+      "anti_chop_tradeability_floor": 70.0,
+      "anti_chop_penalty": 8.0,
+      "meta_entry_score_threshold": 66.0,
+      "meta_fakeout_prob_cap": 0.38,
+      "meta_exit_prob_cap": 0.58,
+      "min_expected_edge_pct": 0.06,
+      "ema_short": 9,
+      "ema_long": 26
+    }
+  }
+}
