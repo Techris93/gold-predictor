@@ -61,8 +61,7 @@ DIRECTIONAL_REVERSAL_CONFIRMATION_COUNT = _read_int_env("DIRECTIONAL_REVERSAL_CO
 ALERT_COOLDOWN_SECONDS = _read_int_env("ALERT_COOLDOWN_SECONDS", 900, 0)
 ALERT_CLASS_COOLDOWN_SECONDS = _read_int_env("ALERT_CLASS_COOLDOWN_SECONDS", 600, 0)
 ALERT_CONTEXT_COOLDOWN_SECONDS = _read_int_env("ALERT_CONTEXT_COOLDOWN_SECONDS", 900, 0)
-PRICE_ACTION_ALERT_COOLDOWN_SECONDS = _read_int_env("PRICE_ACTION_ALERT_COOLDOWN_SECONDS", 0, 0)
-CANDLE_PATTERN_ALERT_COOLDOWN_SECONDS = _read_int_env("CANDLE_PATTERN_ALERT_COOLDOWN_SECONDS", 600, 0)
+PRICE_ACTION_ALERT_COOLDOWN_SECONDS = _read_int_env("PRICE_ACTION_ALERT_COOLDOWN_SECONDS", 900, 0)
 DECISION_FLIP_MIN_HOLD_SECONDS = _read_int_env("DECISION_FLIP_MIN_HOLD_SECONDS", 300, 0)
 PLAYBOOK_CONFIRMATION_COUNT = _read_int_env("PLAYBOOK_CONFIRMATION_COUNT", 2, 1)
 ENTER_PLAYBOOK_CONFIRMATION_COUNT = _read_int_env("ENTER_PLAYBOOK_CONFIRMATION_COUNT", 3, 1)
@@ -1671,7 +1670,6 @@ def _indicator_monitor_loop():
                                 "last_execution_alert_ts": 0,
                                 "last_diagnostics_alert_ts": 0,
                                 "last_price_action_alert_ts": 0,
-                                "last_candle_pattern_alert_ts": 0,
                                 "last_boundary_wobble_ts": 0,
                             },
                         )
@@ -1797,6 +1795,8 @@ def _indicator_monitor_loop():
                         ):
                             signal_class = "diagnostics"
 
+                        throttled_price_action = False
+
                         if should_alert and _is_forming_setup_wobble(
                             notification_changes,
                             trade_playbook_payload,
@@ -1807,12 +1807,6 @@ def _indicator_monitor_loop():
                         if should_alert and permission_status == "exit_recommended":
                             should_alert = NOTIFY_EXIT_READS
                         if should_alert:
-                            _record_live_signal_outcome(
-                                payload,
-                                current_snapshot,
-                                notification_changes,
-                                now_ts,
-                            )
                             last_trade_playbook_stage = str(alert_state.get("last_trade_playbook_stage", ""))
                             last_execution_permission = str(alert_state.get("last_execution_permission", ""))
                             last_market_structure = str(alert_state.get("last_market_structure", ""))
@@ -1830,7 +1824,6 @@ def _indicator_monitor_loop():
                             last_execution_alert_ts = int(alert_state.get("last_execution_alert_ts", 0) or 0)
                             last_diagnostics_alert_ts = int(alert_state.get("last_diagnostics_alert_ts", 0) or 0)
                             last_price_action_alert_ts = int(alert_state.get("last_price_action_alert_ts", 0) or 0)
-                            last_candle_pattern_alert_ts = int(alert_state.get("last_candle_pattern_alert_ts", 0) or 0)
                             last_boundary_wobble_ts = int(alert_state.get("last_boundary_wobble_ts", 0) or 0)
                             duplicate_playbook = playbook_changed and trade_playbook_stage == last_trade_playbook_stage
                             duplicate_warning = warning_changed and warning_ladder == last_warning_ladder
@@ -1866,15 +1859,14 @@ def _indicator_monitor_loop():
                             if should_alert and signal_class == "diagnostics" and (now_ts - last_diagnostics_alert_ts) < ALERT_CONTEXT_COOLDOWN_SECONDS:
                                 should_alert = False
                             if should_alert and signal_class == "price_action" and (now_ts - last_price_action_alert_ts) < PRICE_ACTION_ALERT_COOLDOWN_SECONDS:
+                                throttled_price_action = True
                                 should_alert = False
                             if (
                                 should_alert
-                                and candle_pattern_changed
-                                and not market_structure_changed
-                                and (now_ts - last_candle_pattern_alert_ts) < CANDLE_PATTERN_ALERT_COOLDOWN_SECONDS
+                                and boundary_wobble
+                                and not (market_structure_changed or candle_pattern_changed)
+                                and (now_ts - last_boundary_wobble_ts) < BOUNDARY_WOBBLE_COOLDOWN_SECONDS
                             ):
-                                should_alert = False
-                            if should_alert and boundary_wobble and (now_ts - last_boundary_wobble_ts) < BOUNDARY_WOBBLE_COOLDOWN_SECONDS:
                                 should_alert = False
                         if (
                             should_alert
@@ -1886,8 +1878,16 @@ def _indicator_monitor_loop():
                             if boundary_wobble:
                                 alert_state["last_boundary_wobble_ts"] = now_ts
                                 _save_json_file(ALERT_STATE_FILE, alert_state)
-                            last_snapshot = current_snapshot
+                            if not throttled_price_action:
+                                last_snapshot = current_snapshot
                             continue
+
+                        _record_live_signal_outcome(
+                            payload,
+                            current_snapshot,
+                            notification_changes,
+                            now_ts,
+                        )
 
                         alert_title = _notification_title_for_changes(notification_changes)
                         alert_message = _summarize_changes_for_push(notification_changes)
@@ -1954,9 +1954,6 @@ def _indicator_monitor_loop():
                                 ),
                                 "last_price_action_alert_ts": (
                                     now_ts if signal_class == "price_action" else int(alert_state.get("last_price_action_alert_ts", 0) or 0)
-                                ),
-                                "last_candle_pattern_alert_ts": (
-                                    now_ts if candle_pattern_changed else int(alert_state.get("last_candle_pattern_alert_ts", 0) or 0)
                                 ),
                                 "last_boundary_wobble_ts": (
                                     now_ts if boundary_wobble else int(alert_state.get("last_boundary_wobble_ts", 0) or 0)
