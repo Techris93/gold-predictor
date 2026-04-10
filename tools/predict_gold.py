@@ -13,7 +13,7 @@ import json
 import os
 import re
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 
 # Load environment variables from .env
@@ -227,8 +227,29 @@ def _load_event_risk_windows():
 
 
 def _event_risk_context(now_ts):
+    def _parse_utc(value):
+        try:
+            return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except Exception:
+            return None
+
+    def _release_offset_minutes(name):
+        label = str(name or "").lower()
+        if any(token in label for token in ["cpi", "ppi", "employment", "nfp"]):
+            return 30
+        if "fomc" in label:
+            return 45
+        return 0
+
+    def _release_ts(window, start_dt):
+        release = _parse_utc((window or {}).get("release") or (window or {}).get("release_time"))
+        if release is not None:
+            return int(release.replace(tzinfo=release.tzinfo or timezone.utc).timestamp())
+        return int((start_dt + timedelta(minutes=_release_offset_minutes((window or {}).get("name")))).timestamp())
+
     active = []
     upcoming = []
+    release_candidates = []
     for window in _load_event_risk_windows():
         if not isinstance(window, dict):
             continue
@@ -239,10 +260,13 @@ def _event_risk_context(now_ts):
             continue
         start_ts = int(start.replace(tzinfo=start.tzinfo or timezone.utc).timestamp())
         end_ts = int(end.replace(tzinfo=end.tzinfo or timezone.utc).timestamp())
+        release_ts = _release_ts(window, start)
         if start_ts <= now_ts <= end_ts:
             active.append(window)
         elif now_ts < start_ts:
             upcoming.append((start_ts, window))
+        if release_ts >= now_ts:
+            release_candidates.append((release_ts, window))
 
     next_event = None
     if active:
@@ -252,10 +276,19 @@ def _event_risk_context(now_ts):
         upcoming.sort(key=lambda item: item[0])
         next_event = upcoming[0][1]
 
+    next_release_event = None
+    minutes_to_next_release = None
+    if release_candidates:
+        release_candidates.sort(key=lambda item: item[0])
+        next_release_ts, next_release_event = release_candidates[0]
+        minutes_to_next_release = max((next_release_ts - now_ts) / 60.0, 0.0)
+
     return {
         "active": bool(active),
         "active_events": active[:3],
         "next_event": next_event,
+        "next_release_event": next_release_event,
+        "minutes_to_next_release": (round(minutes_to_next_release, 1) if minutes_to_next_release is not None else None),
         "now_utc": datetime.now(timezone.utc).isoformat(),
     }
 

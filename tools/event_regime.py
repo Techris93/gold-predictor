@@ -314,9 +314,11 @@ def compute_event_regime_snapshot(
     # Prefer live event-risk context for runtime responses; row-derived values can be stale
     # when the latest market candle is behind wall clock.
     event_active = bool(event_risk_dict.get("active")) or bool(int(_safe_float(get_value("EVENT_ACTIVE"), 0.0)))
-    minutes_to_next_event = get_value("MINUTES_TO_NEXT_EVENT")
-    next_event = event_risk_dict.get("next_event") or {}
-    if isinstance(next_event, dict) and next_event.get("start"):
+    minutes_to_next_event = event_risk_dict.get("minutes_to_next_release")
+    if minutes_to_next_event is None:
+        minutes_to_next_event = get_value("MINUTES_TO_NEXT_EVENT")
+    next_event = event_risk_dict.get("next_release_event") or event_risk_dict.get("next_event") or {}
+    if minutes_to_next_event is None and isinstance(next_event, dict) and next_event.get("start"):
         try:
             anchor_ts = event_risk_dict.get("now_utc")
             if anchor_ts:
@@ -338,7 +340,7 @@ def compute_event_regime_snapshot(
         except Exception:
             if minutes_to_next_event is None:
                 minutes_to_next_event = None
-    if event_active:
+    if event_active and minutes_to_next_event is None:
         minutes_to_next_event = 0.0
 
     compression_score = 0.0
