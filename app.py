@@ -1795,7 +1795,7 @@ def _indicator_monitor_loop():
                         ):
                             signal_class = "diagnostics"
 
-                        throttled_price_action = False
+                        cooldown_suppressed = False
 
                         if should_alert and _is_forming_setup_wobble(
                             notification_changes,
@@ -1849,17 +1849,22 @@ def _indicator_monitor_loop():
                                 or duplicate_entry_readiness
                                 or duplicate_exit_urgency
                             ) and (now_ts - last_alert_ts) < ALERT_COOLDOWN_SECONDS:
+                                cooldown_suppressed = True
                                 should_alert = False
                             if should_alert and signal_class == "playbook" and (now_ts - last_playbook_alert_ts) < ALERT_CLASS_COOLDOWN_SECONDS:
+                                cooldown_suppressed = True
                                 should_alert = False
                             if should_alert and signal_class == "context" and (now_ts - last_context_alert_ts) < ALERT_CONTEXT_COOLDOWN_SECONDS:
+                                cooldown_suppressed = True
                                 should_alert = False
                             if should_alert and signal_class == "execution" and (now_ts - last_execution_alert_ts) < ALERT_CLASS_COOLDOWN_SECONDS:
+                                cooldown_suppressed = True
                                 should_alert = False
                             if should_alert and signal_class == "diagnostics" and (now_ts - last_diagnostics_alert_ts) < ALERT_CONTEXT_COOLDOWN_SECONDS:
+                                cooldown_suppressed = True
                                 should_alert = False
                             if should_alert and signal_class == "price_action" and (now_ts - last_price_action_alert_ts) < PRICE_ACTION_ALERT_COOLDOWN_SECONDS:
-                                throttled_price_action = True
+                                cooldown_suppressed = True
                                 should_alert = False
                             if (
                                 should_alert
@@ -1878,7 +1883,7 @@ def _indicator_monitor_loop():
                             if boundary_wobble:
                                 alert_state["last_boundary_wobble_ts"] = now_ts
                                 _save_json_file(ALERT_STATE_FILE, alert_state)
-                            if not throttled_price_action:
+                            if not cooldown_suppressed:
                                 last_snapshot = current_snapshot
                             continue
 
