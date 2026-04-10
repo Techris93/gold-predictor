@@ -752,8 +752,8 @@ def summarize_quality_gate_metrics(trade_summary, big_move_metrics, execution_st
     tail = tail_event_metrics if isinstance(tail_event_metrics, dict) else {}
     decision = decision_quality_metrics if isinstance(decision_quality_metrics, dict) else {}
     true_60m_rate = _to_float(prevalence.get("true_60m_rate"), 0.0)
-    precision_floor = max(0.42, min(0.72, true_60m_rate + 0.12))
-    recall_floor = max(0.04, min(0.14, true_60m_rate * 0.10))
+    precision_floor = max(0.55, min(0.80, true_60m_rate + 0.16))
+    recall_floor = max(0.08, min(0.20, true_60m_rate * 0.18))
     checks = {
         "watch_precision_60m": _to_float(watch.get("precision_60m"), 0.0) >= precision_floor,
         "watch_recall_60m": _to_float(watch.get("recall_60m"), 0.0) >= recall_floor,

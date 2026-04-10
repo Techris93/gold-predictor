@@ -78,11 +78,12 @@ DEFAULT_STRATEGY_PARAMS = {
     "anti_chop_trigger_buffer": 0.35,
     "anti_chop_tradeability_floor": 68.0,
     "anti_chop_penalty": 8.0,
-    "warning_upshift_buffer": 2.0,
-    "warning_downshift_buffer": 4.0,
-    "warning_min_dwell_bars": 3,
-    "breakout_bias_deadband": 0.65,
-    "breakout_bias_hold_bars": 3,
+    "warning_upshift_buffer": 3.5,
+    "warning_downshift_buffer": 7.0,
+    "warning_min_dwell_bars": 5,
+    "warning_raw_streak_required": 2,
+    "breakout_bias_deadband": 0.9,
+    "breakout_bias_hold_bars": 4,
     "fakeout_risk_penalty": 6.0,
     "meta_entry_score_threshold": 63.0,
     "meta_fakeout_prob_cap": 0.42,
@@ -371,17 +372,21 @@ def _stabilize_runtime_regime_state(regime_state, memory, strategy_params):
     watch_threshold = float(strategy_params.get("expansion_watch_threshold", 48.0))
     high_threshold = float(strategy_params.get("high_breakout_threshold", 64.0))
     directional_threshold = float(strategy_params.get("directional_expansion_threshold", 78.0))
-    up_buffer = float(strategy_params.get("warning_upshift_buffer", 2.0))
-    down_buffer = float(strategy_params.get("warning_downshift_buffer", 4.0))
-    min_dwell = max(1, int(strategy_params.get("warning_min_dwell_bars", 3) or 3))
-    bias_deadband = float(strategy_params.get("breakout_bias_deadband", 0.65))
-    bias_hold = max(1, int(strategy_params.get("breakout_bias_hold_bars", 3) or 3))
+    up_buffer = float(strategy_params.get("warning_upshift_buffer", 3.5))
+    down_buffer = float(strategy_params.get("warning_downshift_buffer", 7.0))
+    min_dwell = max(1, int(strategy_params.get("warning_min_dwell_bars", 5) or 5))
+    raw_warning_streak_required = max(1, int(strategy_params.get("warning_raw_streak_required", 2) or 2))
+    bias_deadband = float(strategy_params.get("breakout_bias_deadband", 0.9))
+    bias_hold = max(1, int(strategy_params.get("breakout_bias_hold_bars", 4) or 4))
 
     prev_warning = str(memory.get("warning_ladder") or raw_warning)
     prev_event_regime = str(memory.get("event_regime") or raw_event_regime)
     prev_bias = str(memory.get("breakout_bias") or raw_breakout_bias)
+    prev_raw_warning = str(memory.get("raw_warning_ladder") or raw_warning)
+    raw_warning_streak = max(0, int(memory.get("raw_warning_streak", 0) or 0))
     warning_dwell = max(0, int(memory.get("warning_dwell_bars", 0) or 0))
     bias_dwell = max(0, int(memory.get("breakout_bias_dwell_bars", 0) or 0))
+    raw_warning_streak = (raw_warning_streak + 1) if raw_warning == prev_raw_warning else 1
 
     raw_rank = _warning_rank(raw_warning)
     stable_rank = _warning_rank(prev_warning)
@@ -393,7 +398,9 @@ def _stabilize_runtime_regime_state(regime_state, memory, strategy_params):
     }
 
     target_rank = raw_rank
-    if raw_rank > stable_rank:
+    if raw_rank != stable_rank and raw_warning_streak < raw_warning_streak_required:
+        target_rank = stable_rank
+    elif raw_rank > stable_rank:
         required = float(threshold_by_rank.get(raw_rank, watch_threshold))
         if expansion_60m < (required + up_buffer) and big_move_risk < (required + up_buffer):
             target_rank = stable_rank
@@ -437,6 +444,8 @@ def _stabilize_runtime_regime_state(regime_state, memory, strategy_params):
         "warning_ladder": stable_warning,
         "event_regime": stable_event,
         "breakout_bias": stable_bias,
+        "raw_warning_ladder": raw_warning,
+        "raw_warning_streak": int(raw_warning_streak),
         "warning_dwell_bars": int(warning_dwell),
         "breakout_bias_dwell_bars": int(bias_dwell),
     }
@@ -1339,11 +1348,11 @@ def build_ta_payload_from_row(row, params=None, regime_memory=None):
             high_breakout_threshold=float(strategy_params.get("high_breakout_threshold", 64.0)),
             directional_expansion_threshold=float(strategy_params.get("directional_expansion_threshold", 78.0)),
             previous_state=regime_memory if isinstance(regime_memory, dict) else None,
-            warning_upshift_buffer=float(strategy_params.get("warning_upshift_buffer", 2.0)),
-            warning_downshift_buffer=float(strategy_params.get("warning_downshift_buffer", 4.0)),
-            min_warning_dwell_bars=int(strategy_params.get("warning_min_dwell_bars", 3)),
-            breakout_bias_deadband=float(strategy_params.get("breakout_bias_deadband", 0.65)),
-            breakout_bias_hold_bars=int(strategy_params.get("breakout_bias_hold_bars", 3)),
+            warning_upshift_buffer=float(strategy_params.get("warning_upshift_buffer", 3.5)),
+            warning_downshift_buffer=float(strategy_params.get("warning_downshift_buffer", 7.0)),
+            min_warning_dwell_bars=int(strategy_params.get("warning_min_dwell_bars", 5)),
+            breakout_bias_deadband=float(strategy_params.get("breakout_bias_deadband", 0.9)),
+            breakout_bias_hold_bars=int(strategy_params.get("breakout_bias_hold_bars", 4)),
         ),
         "_regime_memory": regime_memory if isinstance(regime_memory, dict) else {},
     }

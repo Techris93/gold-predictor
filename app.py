@@ -66,6 +66,8 @@ PLAYBOOK_CONFIRMATION_COUNT = _read_int_env("PLAYBOOK_CONFIRMATION_COUNT", 2, 1)
 ENTER_PLAYBOOK_CONFIRMATION_COUNT = _read_int_env("ENTER_PLAYBOOK_CONFIRMATION_COUNT", 3, 1)
 EXIT_PLAYBOOK_CONFIRMATION_COUNT = _read_int_env("EXIT_PLAYBOOK_CONFIRMATION_COUNT", 2, 1)
 PLAYBOOK_FLIP_MIN_HOLD_SECONDS = _read_int_env("PLAYBOOK_FLIP_MIN_HOLD_SECONDS", 600, 0)
+BOUNDARY_WOBBLE_COOLDOWN_SECONDS = _read_int_env("BOUNDARY_WOBBLE_COOLDOWN_SECONDS", 1200, 0)
+ENTER_STAGE_PROTECT_SECONDS = _read_int_env("ENTER_STAGE_PROTECT_SECONDS", 900, 0)
 NOTIFY_EXIT_READS = _read_bool_env("NOTIFY_EXIT_READS", True)
 PUSH_EXCLUDED_FIELDS = {
     "rsi_14",
@@ -606,6 +608,26 @@ def _is_context_flip_noise(previous_warning, current_warning, previous_event_reg
     )
 
 
+def _is_warning_boundary_wobble(
+    previous_warning,
+    current_warning,
+    previous_event_regime,
+    current_event_regime,
+    trade_playbook_stage,
+    execution_status,
+):
+    if execution_status not in {"no_trade", "watchlist_only"}:
+        return False
+    if trade_playbook_stage not in {"prepare", "stalk_entry", "stand_aside"}:
+        return False
+    return _is_context_flip_noise(
+        previous_warning,
+        current_warning,
+        previous_event_regime,
+        current_event_regime,
+    )
+
+
 def _is_significant_candle_pattern(value):
     value = str(value or "")
     if not value or value == "None":
@@ -619,9 +641,6 @@ def _is_forming_setup_wobble(changes, trade_playbook, execution_permission, deci
 
     execution_status = str((execution_permission or {}).get("status") or "no_trade")
     if execution_status not in {"no_trade", "watchlist_only"}:
-        return False
-
-    if bool((decision_status or {}).get("confirmed")):
         return False
 
     changed_keys = set(changes.keys())
@@ -1123,6 +1142,16 @@ def _stabilize_trade_playbook(trade_playbook, execution_permission, decision_sta
     ):
         can_flip = False
 
+    # Protect against rapid enter -> prepare churn when move-risk sits on boundary.
+    if (
+        stable_stage in {"enter", "hold"}
+        and raw_stage in {"prepare", "stalk_entry", "stand_aside"}
+        and execution_status in {"no_trade", "watchlist_only"}
+        and raw_warning_ladder in {"Expansion Watch", "High Breakout Risk"}
+        and held_for_seconds < max(PLAYBOOK_FLIP_MIN_HOLD_SECONDS, ENTER_STAGE_PROTECT_SECONDS)
+    ):
+        can_flip = False
+
     preserve_context = (
         not can_flip
         and stable_stage in {"enter", "hold", "stalk_entry"}
@@ -1500,6 +1529,8 @@ def _build_prediction_response():
             "warning_ladder": "Normal",
             "event_regime": "normal",
             "breakout_bias": "Neutral",
+            "raw_warning_ladder": "Normal",
+            "raw_warning_streak": 0,
             "warning_dwell_bars": 0,
             "breakout_bias_dwell_bars": 0,
         },
@@ -1637,6 +1668,7 @@ def _indicator_monitor_loop():
                                 "last_context_alert_ts": 0,
                                 "last_execution_alert_ts": 0,
                                 "last_diagnostics_alert_ts": 0,
+                                "last_boundary_wobble_ts": 0,
                             },
                         )
                         decision_payload = payload.get("DecisionStatus") or {}
@@ -1688,6 +1720,14 @@ def _indicator_monitor_loop():
                                 event_regime,
                             )
                         )
+                        boundary_wobble = _is_warning_boundary_wobble(
+                            previous_warning_ladder,
+                            warning_ladder,
+                            previous_event_regime,
+                            event_regime,
+                            trade_playbook_stage,
+                            permission_status,
+                        )
                         breakout_bias_changed = (
                             "breakout_bias" in notification_changes
                             and bool(breakout_bias)
@@ -1697,6 +1737,10 @@ def _indicator_monitor_loop():
                                 and (breakout_bias in {"Bullish", "Bearish"} or previous_breakout_bias in {"Bullish", "Bearish"})
                             )
                         )
+                        if boundary_wobble:
+                            warning_changed = False
+                            event_regime_changed = False
+                            breakout_bias_changed = False
                         market_structure_changed = "market_structure" in notification_changes and bool(market_structure)
                         candle_pattern_changed = (
                             "candle_pattern" in notification_changes
@@ -1791,6 +1835,7 @@ def _indicator_monitor_loop():
                             last_context_alert_ts = int(alert_state.get("last_context_alert_ts", 0) or 0)
                             last_execution_alert_ts = int(alert_state.get("last_execution_alert_ts", 0) or 0)
                             last_diagnostics_alert_ts = int(alert_state.get("last_diagnostics_alert_ts", 0) or 0)
+                            last_boundary_wobble_ts = int(alert_state.get("last_boundary_wobble_ts", 0) or 0)
                             duplicate_playbook = playbook_changed and trade_playbook_stage == last_trade_playbook_stage
                             duplicate_warning = warning_changed and warning_ladder == last_warning_ladder
                             duplicate_event_regime = event_regime_changed and event_regime == last_event_regime
@@ -1824,7 +1869,14 @@ def _indicator_monitor_loop():
                                 should_alert = False
                             if should_alert and signal_class == "diagnostics" and (now_ts - last_diagnostics_alert_ts) < ALERT_CONTEXT_COOLDOWN_SECONDS:
                                 should_alert = False
+                            if should_alert and boundary_wobble and (now_ts - last_boundary_wobble_ts) < BOUNDARY_WOBBLE_COOLDOWN_SECONDS:
+                                should_alert = False
+                        if should_alert and boundary_wobble:
+                            should_alert = False
                         if not should_alert:
+                            if boundary_wobble:
+                                alert_state["last_boundary_wobble_ts"] = now_ts
+                                _save_json_file(ALERT_STATE_FILE, alert_state)
                             last_snapshot = current_snapshot
                             continue
 
@@ -1890,6 +1942,9 @@ def _indicator_monitor_loop():
                                 ),
                                 "last_diagnostics_alert_ts": (
                                     now_ts if signal_class == "diagnostics" else int(alert_state.get("last_diagnostics_alert_ts", 0) or 0)
+                                ),
+                                "last_boundary_wobble_ts": (
+                                    now_ts if boundary_wobble else int(alert_state.get("last_boundary_wobble_ts", 0) or 0)
                                 ),
                             },
                         )
