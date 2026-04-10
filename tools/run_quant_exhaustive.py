@@ -1,7 +1,8 @@
+import argparse
 import json
-from itertools import product
-from pathlib import Path
+import random
 import sys
+from pathlib import Path
 
 import pandas as pd
 
@@ -10,16 +11,16 @@ if str(BASE) not in sys.path:
     sys.path.insert(0, str(BASE))
 
 from tools.backtest import (
+    _simulate_from_signals,
+    _trade_summary,
     generate_signals,
     summarize_big_move_metrics,
     summarize_decision_quality_metrics,
     summarize_execution_state_metrics,
     summarize_large_move_labels,
+    summarize_quality_gate_metrics,
     summarize_tail_event_metrics,
     summarize_transition_metrics,
-    summarize_quality_gate_metrics,
-    _simulate_from_signals,
-    _trade_summary,
 )
 from tools.signal_engine import normalize_strategy_params
 
@@ -98,11 +99,8 @@ def score_candidate(summary, big_move, exec_metrics, tail_metrics, transition_me
     )
 
 
-def main():
-    df = pd.read_csv(DATA_FILE, index_col=0, parse_dates=True)
-    current = json.loads(CONFIG_FILE.read_text())
-
-    search = {
+def build_search_space():
+    return {
         "expansion_watch_threshold": [34.0, 38.0, 40.0],
         "high_breakout_threshold": [50.0, 54.0, 56.0],
         "directional_expansion_threshold": [64.0, 68.0, 70.0],
@@ -122,48 +120,96 @@ def main():
         "direction_hold_threshold": [4.0, 5.0],
     }
 
+
+def evaluate_candidate(df, current, search, keys, index_tuple):
+    params_update = {}
+    for key, idx in zip(keys, index_tuple):
+        params_update[key] = search[key][idx]
+    params = normalize_strategy_params({**current, **params_update})
+
+    signals, states, _ = generate_signals(df, params=params)
+    trades = _simulate_from_signals(df, signals)
+    summary = _trade_summary(trades)
+    big_move = summarize_big_move_metrics(df, states)
+    exec_metrics = summarize_execution_state_metrics(df, states)
+    tail_metrics = summarize_tail_event_metrics(df, states)
+    transition_metrics = summarize_transition_metrics(df, states)
+    decision_quality = summarize_decision_quality_metrics(df, states)
+    label_metrics = summarize_large_move_labels(df, states)
+    quality_gate = summarize_quality_gate_metrics(
+        summary,
+        big_move,
+        exec_metrics,
+        transition_metrics,
+        tail_metrics,
+        decision_quality,
+    )
+    score = score_candidate(summary, big_move, exec_metrics, tail_metrics, transition_metrics, quality_gate, decision_quality)
+
+    return {
+        "score": round(score, 4),
+        "params": {k: params[k] for k in keys},
+        "trade_summary": summary,
+        "big_move": big_move,
+        "execution": exec_metrics,
+        "tail_event": tail_metrics,
+        "transition": transition_metrics,
+        "decision_quality": decision_quality,
+        "labels": label_metrics,
+        "quality_gate": quality_gate,
+        "_index_tuple": list(index_tuple),
+    }
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Staged quant tuning search (replaces impractical full exhaustive grid).")
+    parser.add_argument("--random-evals", type=int, default=20000, help="Stage-1 random samples.")
+    parser.add_argument("--refine-topk", type=int, default=50, help="How many top random candidates to locally refine.")
+    parser.add_argument("--max-evals", type=int, default=25000, help="Hard cap on total evaluations.")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed.")
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+    df = pd.read_csv(DATA_FILE, index_col=0, parse_dates=True)
+    current = json.loads(CONFIG_FILE.read_text())
+    search = build_search_space()
     keys = list(search)
-    best = None
+
+    full_space = 1
+    for key in keys:
+        full_space *= len(search[key])
+
+    rng = random.Random(args.seed)
+    tested = set()
     results = []
+    best = None
     count = 0
 
-    for values in product(*[search[k] for k in keys]):
+    random_target = min(max(1, int(args.random_evals)), full_space, max(1, int(args.max_evals)))
+    print(
+        "STAGED_SEARCH",
+        json.dumps(
+            {
+                "full_space": full_space,
+                "stage1_random_target": random_target,
+                "refine_topk": int(args.refine_topk),
+                "max_evals": int(args.max_evals),
+                "seed": int(args.seed),
+            }
+        ),
+        flush=True,
+    )
+
+    while len(tested) < random_target and count < int(args.max_evals):
+        idx_tuple = tuple(rng.randrange(len(search[k])) for k in keys)
+        if idx_tuple in tested:
+            continue
+        tested.add(idx_tuple)
         count += 1
-        params = normalize_strategy_params({**current, **dict(zip(keys, values))})
-
-        signals, states, _ = generate_signals(df, params=params)
-        trades = _simulate_from_signals(df, signals)
-        summary = _trade_summary(trades)
-        big_move = summarize_big_move_metrics(df, states)
-        exec_metrics = summarize_execution_state_metrics(df, states)
-        tail_metrics = summarize_tail_event_metrics(df, states)
-        transition_metrics = summarize_transition_metrics(df, states)
-        decision_quality = summarize_decision_quality_metrics(df, states)
-        label_metrics = summarize_large_move_labels(df, states)
-        quality_gate = summarize_quality_gate_metrics(
-            summary,
-            big_move,
-            exec_metrics,
-            transition_metrics,
-            tail_metrics,
-            decision_quality,
-        )
-        score = score_candidate(summary, big_move, exec_metrics, tail_metrics, transition_metrics, quality_gate, decision_quality)
-
-        item = {
-            "score": round(score, 4),
-            "params": {k: params[k] for k in keys},
-            "trade_summary": summary,
-            "big_move": big_move,
-            "execution": exec_metrics,
-            "tail_event": tail_metrics,
-            "transition": transition_metrics,
-            "decision_quality": decision_quality,
-            "labels": label_metrics,
-            "quality_gate": quality_gate,
-        }
+        item = evaluate_candidate(df, current, search, keys, idx_tuple)
         results.append(item)
-
         if best is None or item["score"] > best["score"]:
             best = item
             print(
@@ -176,19 +222,68 @@ def main():
                         "watch": best["big_move"].get("warning_watch", {}),
                         "directional": best["big_move"].get("warning_directional", {}),
                         "enter": best["execution"].get("enter", {}),
+                        "stage": "random",
                     },
                     default=float,
                 ),
                 flush=True,
             )
-
         if count % 100 == 0:
             print("PROGRESS", count, flush=True)
+
+    topk = min(max(1, int(args.refine_topk)), len(results))
+    seeds = sorted(results, key=lambda x: x["score"], reverse=True)[:topk]
+
+    for seed_item in seeds:
+        base = tuple(int(x) for x in seed_item.get("_index_tuple", []))
+        if len(base) != len(keys):
+            continue
+        neighborhood = {base}
+        for dim in range(len(keys)):
+            for step in (-1, 1):
+                nxt = list(base)
+                nxt[dim] += step
+                if 0 <= nxt[dim] < len(search[keys[dim]]):
+                    neighborhood.add(tuple(nxt))
+        for idx_tuple in neighborhood:
+            if count >= int(args.max_evals):
+                break
+            if idx_tuple in tested:
+                continue
+            tested.add(idx_tuple)
+            count += 1
+            item = evaluate_candidate(df, current, search, keys, idx_tuple)
+            results.append(item)
+            if best is None or item["score"] > best["score"]:
+                best = item
+                print(
+                    "NEW_BEST",
+                    json.dumps(
+                        {
+                            "score": best["score"],
+                            "params": best["params"],
+                            "trade_summary": best["trade_summary"],
+                            "watch": best["big_move"].get("warning_watch", {}),
+                            "directional": best["big_move"].get("warning_directional", {}),
+                            "enter": best["execution"].get("enter", {}),
+                            "stage": "refine",
+                        },
+                        default=float,
+                    ),
+                    flush=True,
+                )
+            if count % 100 == 0:
+                print("PROGRESS", count, flush=True)
+        if count >= int(args.max_evals):
+            break
 
     OUT_FILE.write_text(
         json.dumps(
             {
+                "mode": "staged_search",
                 "tested": count,
+                "full_space": full_space,
+                "coverage_ratio": round((count / full_space), 8) if full_space else 0.0,
                 "best": best,
                 "top10": sorted(results, key=lambda x: x["score"], reverse=True)[:10],
             },
@@ -200,7 +295,9 @@ def main():
     )
 
     print("FINAL", str(OUT_FILE), flush=True)
-    print(json.dumps(best, indent=2, default=float), flush=True)
+    print("TESTED", count, flush=True)
+    if best is not None:
+        print(json.dumps(best, indent=2, default=float), flush=True)
 
 
 if __name__ == "__main__":
