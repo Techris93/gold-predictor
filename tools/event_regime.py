@@ -310,15 +310,33 @@ def compute_event_regime_snapshot(
     dist_week_low = get_value("DIST_PRIOR_WEEK_LOW_PCT")
 
     cross_asset_summary = summarize_cross_asset_context(cross_asset_context)
-    event_active = bool((event_risk or {}).get("active")) or bool(int(_safe_float(get_value("EVENT_ACTIVE"), 0.0)))
+    event_risk_dict = event_risk if isinstance(event_risk, dict) else {}
+    # Prefer live event-risk context for runtime responses; row-derived values can be stale
+    # when the latest market candle is behind wall clock.
+    event_active = bool(event_risk_dict.get("active")) or bool(int(_safe_float(get_value("EVENT_ACTIVE"), 0.0)))
     minutes_to_next_event = get_value("MINUTES_TO_NEXT_EVENT")
-    if minutes_to_next_event is None and isinstance(event_risk, dict):
-        next_event = event_risk.get("next_event") or {}
-        if isinstance(next_event, dict) and next_event.get("start"):
-            try:
-                delta = (pd.Timestamp(str(next_event["start"])) - pd.Timestamp.utcnow().tz_localize("UTC")).total_seconds() / 60.0
-                minutes_to_next_event = max(delta, 0.0)
-            except Exception:
+    next_event = event_risk_dict.get("next_event") or {}
+    if isinstance(next_event, dict) and next_event.get("start"):
+        try:
+            anchor_ts = event_risk_dict.get("now_utc")
+            if anchor_ts:
+                now_utc = pd.Timestamp(str(anchor_ts))
+            else:
+                now_utc = pd.Timestamp.utcnow()
+            if now_utc.tzinfo is None:
+                now_utc = now_utc.tz_localize("UTC")
+            else:
+                now_utc = now_utc.tz_convert("UTC")
+            event_start = pd.Timestamp(str(next_event["start"]))
+            if event_start.tzinfo is None:
+                event_start = event_start.tz_localize("UTC")
+            else:
+                event_start = event_start.tz_convert("UTC")
+            live_delta = (event_start - now_utc).total_seconds() / 60.0
+            # When live event context is present, it is authoritative for user-facing countdown.
+            minutes_to_next_event = max(live_delta, 0.0)
+        except Exception:
+            if minutes_to_next_event is None:
                 minutes_to_next_event = None
 
     compression_score = 0.0

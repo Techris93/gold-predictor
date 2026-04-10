@@ -253,6 +253,7 @@ def _event_risk_context(now_ts):
         "active": bool(active),
         "active_events": active[:3],
         "next_event": next_event,
+        "now_utc": datetime.now(timezone.utc).isoformat(),
     }
 
 
