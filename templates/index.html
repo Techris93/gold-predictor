@@ -35,22 +35,20 @@
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js" crossorigin="anonymous"></script>
     <style>
       :root {
-        --bg-color: #0b0e14;
-        --card-bg: rgba(20, 24, 34, 0.7);
-        --gold-primary: #ffd700;
-        --gold-gradient: linear-gradient(
-          135deg,
-          #bf953f,
-          #fcf6ba,
-          #b38728,
-          #fbf5b7,
-          #aa771c
-        );
-        --bullish: #00e676;
-        --bearish: #ff1744;
-        --neutral: #9e9e9e;
-        --text-main: #ffffff;
-        --text-muted: #8e9bae;
+        --bg-color: #060913;
+        --surface: rgba(16, 21, 36, 0.92);
+        --surface-soft: rgba(22, 28, 46, 0.9);
+        --surface-hard: rgba(10, 14, 27, 0.96);
+        --border: rgba(237, 191, 97, 0.26);
+        --border-soft: rgba(237, 191, 97, 0.14);
+        --gold-primary: #e8c069;
+        --gold-strong: #f1cf7f;
+        --gold-gradient: linear-gradient(135deg, #e2ba63 0%, #f5dea0 52%, #d3a64f 100%);
+        --bullish: #62d884;
+        --bearish: #ef6467;
+        --neutral: #b5becd;
+        --text-main: #eff3fb;
+        --text-muted: #8f99ad;
       }
 
       * {
@@ -61,306 +59,282 @@
       }
 
       body {
-        background-color: var(--bg-color);
+        background:
+          radial-gradient(90% 50% at 12% 8%, rgba(232, 192, 105, 0.1), transparent 60%),
+          radial-gradient(70% 45% at 88% 6%, rgba(232, 192, 105, 0.08), transparent 62%),
+          var(--bg-color);
         color: var(--text-main);
         min-height: 100vh;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        padding: 2rem 1rem;
-        background-image:
-          radial-gradient(
-            circle at 15% 50%,
-            rgba(191, 149, 63, 0.08),
-            transparent 25%
-          ),
-          radial-gradient(
-            circle at 85% 30%,
-            rgba(191, 149, 63, 0.05),
-            transparent 25%
-          );
         overflow-x: hidden;
+        padding: 16px;
       }
 
-      .header {
+      .app-shell {
+        max-width: 860px;
+        margin: 0 auto;
+      }
+
+      .app-header {
         text-align: center;
-        margin-bottom: 2rem;
-        animation: fadeIn 1s ease-out;
+        margin-bottom: 14px;
       }
 
       h1 {
-        font-size: 2.5rem;
-        font-weight: 800;
-        background: var(--gold-gradient);
-        -webkit-background-clip: text;
-        background-clip: text;
-        -webkit-text-fill-color: transparent;
-        margin-bottom: 0.5rem;
-        letter-spacing: -1px;
-      }
-
-      .subtitle {
-        color: var(--text-muted);
-        font-size: 0.9rem;
-        font-weight: 300;
-        letter-spacing: 1px;
+        color: var(--gold-primary);
         text-transform: uppercase;
+        font-size: clamp(1.25rem, 3.6vw, 2rem);
+        letter-spacing: 0.04em;
+        margin-bottom: 12px;
       }
 
-      .glass-card {
-        background: var(--card-bg);
-        backdrop-filter: blur(16px);
-        -webkit-backdrop-filter: blur(16px);
-        border: 1px solid rgba(255, 215, 0, 0.1);
-        border-radius: 24px;
-        padding: 2rem;
-        width: 100%;
-        max-width: 450px;
-        box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
-        margin-bottom: 1.5rem;
-        transition:
-          transform 0.3s ease,
-          border-color 0.3s ease;
+      .dashboard-shell {
+        background: linear-gradient(180deg, rgba(18, 23, 38, 0.94), rgba(11, 16, 30, 0.95));
+        border: 1px solid var(--border-soft);
+        border-radius: 22px;
+        padding: 14px;
+        box-shadow: 0 24px 42px rgba(0, 0, 0, 0.45);
       }
 
-      .glass-card:hover {
-        border-color: rgba(255, 215, 0, 0.3);
-        transform: translateY(-2px);
-      }
-
-      .verdict-container {
+      .top-price {
         text-align: center;
-        padding-bottom: 2rem;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-        margin-bottom: 2rem;
+        margin-bottom: 12px;
       }
 
       .price {
-        font-size: 3rem;
-        font-weight: 300;
-        margin: 1rem 0;
-        letter-spacing: -1px;
+        color: var(--gold-primary);
+        font-size: clamp(2.2rem, 8vw, 3.6rem);
+        line-height: 1;
+        font-weight: 500;
+        letter-spacing: -0.02em;
+      }
+
+      .market-status {
+        margin-top: 8px;
+        color: var(--text-muted);
+        font-size: 0.84rem;
+      }
+
+      .prediction-card {
+        border: 1px solid var(--border);
+        border-radius: 18px;
+        background: linear-gradient(160deg, rgba(34, 39, 58, 0.9), rgba(16, 21, 34, 0.9));
+        padding: 14px;
+        margin-bottom: 12px;
+      }
+
+      .card-kicker {
+        text-align: center;
+        color: var(--text-main);
+        font-size: 0.9rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        margin-bottom: 10px;
       }
 
       .badge {
-        display: inline-block;
-        padding: 0.5rem 1.5rem;
-        border-radius: 50px;
-        font-size: 1.2rem;
+        display: block;
+        width: fit-content;
+        margin: 0 auto;
+        padding: 9px 28px;
+        border-radius: 999px;
+        font-size: clamp(1.3rem, 3.6vw, 2rem);
         font-weight: 800;
         text-transform: uppercase;
-        letter-spacing: 2px;
-        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+        letter-spacing: 0.03em;
+        color: #1e1f23;
+        background: var(--gold-gradient);
+        border: 1px solid rgba(245, 222, 160, 0.72);
+        box-shadow: 0 0 0 4px rgba(232, 192, 105, 0.11), 0 10px 24px rgba(0, 0, 0, 0.3);
       }
 
       .badge.bullish {
-        background-color: rgba(0, 230, 118, 0.15);
-        color: var(--bullish);
-        border: 1px solid rgba(0, 230, 118, 0.3);
+        color: #05220f;
+        background: linear-gradient(120deg, #70e799, #44b96b);
+        border-color: rgba(112, 231, 153, 0.62);
       }
 
       .badge.bearish {
-        background-color: rgba(255, 23, 68, 0.15);
-        color: var(--bearish);
-        border: 1px solid rgba(255, 23, 68, 0.3);
+        color: #2c0b0d;
+        background: linear-gradient(120deg, #ff8d8f, #ef6467);
+        border-color: rgba(255, 141, 143, 0.62);
       }
 
       .badge.neutral {
-        background-color: rgba(158, 158, 158, 0.15);
-        color: var(--neutral);
-        border: 1px solid rgba(158, 158, 158, 0.3);
+        color: #2a2f39;
       }
 
       .confidence {
-        margin-top: 1rem;
-        font-size: 0.9rem;
-        color: var(--text-muted);
+        margin-top: 10px;
+        text-align: center;
+        color: var(--text-main);
+        font-size: 1.02rem;
+        font-weight: 700;
+      }
+
+      #confidence-val {
+        color: var(--gold-strong);
       }
 
       .confidence-bar-bg {
         width: 100%;
-        height: 6px;
-        background: rgba(255, 255, 255, 0.05);
-        border-radius: 10px;
-        margin-top: 0.5rem;
+        height: 14px;
+        background: rgba(232, 192, 105, 0.2);
+        border-radius: 999px;
         overflow: hidden;
+        margin-top: 10px;
       }
 
       .confidence-bar-fill {
         height: 100%;
-        background: var(--gold-gradient);
-        border-radius: 10px;
         width: 0%;
-        transition: width 1s cubic-bezier(0.4, 0, 0.2, 1);
+        border-radius: 999px;
+        background: var(--gold-gradient);
+        transition: width 1s ease;
+      }
+
+      .socket-state {
+        margin-top: 8px;
+        color: var(--text-muted);
+        text-align: center;
+        font-size: 0.8rem;
+      }
+
+      .info-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+      }
+
+      .section-card {
+        border-radius: 14px;
+        border: 1px solid rgba(160, 174, 197, 0.22);
+        background: linear-gradient(160deg, rgba(30, 36, 56, 0.78), rgba(18, 24, 42, 0.88));
+        padding: 12px;
+      }
+
+      .span-2 {
+        grid-column: span 2;
+      }
+
+      .section-title {
+        color: var(--text-main);
+        text-transform: uppercase;
+        font-size: 0.86rem;
+        font-weight: 800;
+        letter-spacing: 0.03em;
+        margin-bottom: 8px;
       }
 
       .metric-row {
         display: flex;
         justify-content: space-between;
-        align-items: center;
-        margin-bottom: 1rem;
-        padding: 0.8rem;
-        background: rgba(0, 0, 0, 0.2);
-        border-radius: 12px;
+        align-items: baseline;
+        gap: 10px;
+        margin-bottom: 6px;
       }
 
-      .ar-card {
-        margin-bottom: 0.5rem;
-      }
-
-      .ar-toggle {
-        width: 100%;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 0.75rem;
-        margin-bottom: 0.75rem;
-        padding: 0.75rem 0.9rem;
-        background: rgba(255, 215, 0, 0.06);
-        border: 1px solid rgba(255, 215, 0, 0.18);
-        border-radius: 12px;
-        color: inherit;
-        cursor: pointer;
-      }
-
-      .ar-toggle:focus-visible {
-        outline: 2px solid rgba(255, 215, 0, 0.45);
-        outline-offset: 6px;
-        border-radius: 10px;
-      }
-
-      .ar-heading {
-        color: var(--gold-primary);
-        font-size: 0.8rem;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 1px;
-      }
-
-      .ar-heading-wrap {
-        display: flex;
-        flex-direction: column;
-        align-items: flex-start;
-        gap: 0.18rem;
-      }
-
-      .ar-subtext {
-        color: var(--text-muted);
-        font-size: 0.72rem;
-        letter-spacing: 0.2px;
-      }
-
-      .ar-toggle-meta {
-        display: flex;
-        align-items: center;
-        gap: 0.6rem;
-        margin-left: auto;
-        color: var(--text-muted);
-        font-size: 0.78rem;
-      }
-
-      .ar-toggle-badge {
-        color: var(--gold-primary);
-        font-weight: 600;
-      }
-
-      .ar-chevron {
-        width: 16px;
-        height: 16px;
-        flex-shrink: 0;
-        transition: transform 0.18s ease;
-        color: var(--gold-primary);
-      }
-
-      .ar-toggle[aria-expanded="false"] .ar-chevron {
-        transform: rotate(-90deg);
+      .metric-row:last-child {
+        margin-bottom: 0;
       }
 
       .metric-label {
-        color: var(--text-muted);
-        font-size: 0.85rem;
+        color: #d2d8e5;
+        font-size: 0.9rem;
       }
 
       .metric-value {
-        font-weight: 600;
         font-size: 0.95rem;
+        color: var(--text-main);
+        text-align: right;
+      }
+
+      .metric-value.compact {
+        font-size: 0.82rem;
+        line-height: 1.4;
+        max-width: 62%;
+      }
+
+      .value-bullish {
+        color: var(--bullish);
+      }
+
+      .value-bearish {
+        color: var(--bearish);
       }
 
       .decision-card {
-        margin-top: 1rem;
-        padding: 1rem;
-        border-radius: 16px;
-        background: rgba(255, 215, 0, 0.05);
-        border: 1px solid rgba(255, 215, 0, 0.14);
+        margin-top: 10px;
+        border-radius: 14px;
+        border: 1px solid var(--border);
+        background: linear-gradient(160deg, rgba(31, 34, 48, 0.84), rgba(18, 21, 34, 0.92));
+        padding: 12px;
       }
 
       .decision-title {
         color: var(--gold-primary);
-        font-size: 0.76rem;
-        font-weight: 700;
+        font-size: 0.86rem;
+        font-weight: 800;
         text-transform: uppercase;
-        letter-spacing: 1px;
-        margin-bottom: 0.85rem;
+        margin-bottom: 8px;
       }
 
-      .decision-grid {
-        display: grid;
-        gap: 0.85rem;
-      }
-
-      .decision-grid[hidden] {
-        display: none;
-      }
-
-      .decision-toggle {
-        width: 100%;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 0.75rem;
-        margin: 0.9rem 0 0.85rem;
-        padding: 0.75rem 0.9rem;
-        background: rgba(255, 215, 0, 0.06);
-        border: 1px solid rgba(255, 215, 0, 0.18);
-        border-radius: 12px;
-        color: inherit;
-        cursor: pointer;
-      }
-
-      .decision-toggle:focus-visible {
-        outline: 2px solid rgba(255, 215, 0, 0.45);
-        outline-offset: 6px;
+      .decision-status {
+        margin-bottom: 8px;
+        padding: 10px;
         border-radius: 10px;
+        border: 1px solid rgba(160, 174, 197, 0.2);
+        background: rgba(14, 18, 31, 0.85);
       }
 
-      .decision-toggle-label {
-        color: var(--gold-primary);
-        font-size: 0.76rem;
-        font-weight: 700;
-        text-transform: uppercase;
-        letter-spacing: 1px;
-      }
-
-      .decision-toggle-subtext {
+      .decision-status-label {
         color: var(--text-muted);
-        font-size: 0.74rem;
-        letter-spacing: 0.2px;
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        margin-bottom: 4px;
       }
 
-      .decision-toggle[aria-expanded="false"] .ar-chevron {
-        transform: rotate(-90deg);
+      .decision-status-value {
+        font-size: 0.95rem;
+        font-weight: 700;
+        color: var(--neutral);
+      }
+
+      .decision-status-value.buy,
+      .decision-status-value.enter,
+      .decision-status-value.hold {
+        color: var(--bullish);
+      }
+
+      .decision-status-value.sell {
+        color: var(--bearish);
+      }
+
+      .decision-status-value.exit,
+      .decision-status-value.prepare,
+      .decision-status-value.stalk_entry {
+        color: var(--gold-primary);
+      }
+
+      .decision-status-value.wait,
+      .decision-status-value.stand_aside {
+        color: var(--neutral);
       }
 
       .decision-block {
-        padding: 0.8rem 0.9rem;
-        border-radius: 12px;
-        background: rgba(0, 0, 0, 0.18);
+        margin-top: 8px;
+        padding: 10px;
+        border-radius: 10px;
+        border: 1px solid rgba(160, 174, 197, 0.2);
+        background: rgba(13, 18, 31, 0.85);
       }
 
       .decision-heading {
-        font-size: 0.8rem;
-        font-weight: 700;
-        margin-bottom: 0.45rem;
+        font-size: 0.82rem;
+        font-weight: 800;
+        margin-bottom: 6px;
+        text-transform: uppercase;
       }
 
       .decision-heading.buy {
@@ -375,31 +349,28 @@
         color: var(--gold-primary);
       }
 
+      .playbook-why,
       .decision-points {
         list-style: none;
         display: grid;
-        gap: 0.4rem;
+        gap: 6px;
       }
 
+      .playbook-why li,
       .decision-points li {
         color: var(--text-muted);
-        font-size: 0.8rem;
-        line-height: 1.4;
+        font-size: 0.82rem;
+        line-height: 1.35;
       }
 
       .decision-points li.pass {
-        color: #d5dfef;
-      }
-
-      .decision-points li.fail {
-        color: var(--text-muted);
-        opacity: 0.78;
+        color: #d9e0ee;
       }
 
       .decision-points li .check-icon {
         display: inline-block;
-        width: 1.1rem;
-        font-weight: 700;
+        width: 1rem;
+        margin-right: 2px;
       }
 
       .decision-points li.pass .check-icon {
@@ -410,156 +381,124 @@
         color: var(--bearish);
       }
 
-      .decision-status {
-        margin-bottom: 0.9rem;
-        padding: 0.95rem 1rem;
-        border-radius: 14px;
-        background: rgba(0, 0, 0, 0.22);
-        border: 1px solid rgba(255, 255, 255, 0.08);
-      }
-
-      .decision-status-label {
-        color: var(--text-muted);
-        font-size: 0.72rem;
-        text-transform: uppercase;
-        letter-spacing: 0.8px;
-        margin-bottom: 0.35rem;
-      }
-
-      .decision-status-value {
-        font-size: 0.92rem;
-        font-weight: 700;
-        line-height: 1.4;
-      }
-
-      .decision-status-value.buy {
-        color: var(--bullish);
-      }
-
-      .decision-status-value.sell {
-        color: var(--bearish);
-      }
-
-      .decision-status-value.exit {
-        color: var(--gold-primary);
-      }
-
-      .decision-status-value.wait {
-        color: var(--neutral);
-      }
-
-      .decision-status-value.prepare {
-        color: var(--gold-primary);
-      }
-
-      .decision-status-value.hold {
-        color: var(--bullish);
-      }
-
-      .decision-status-value.stalk_entry {
-        color: #f2c94c;
-      }
-
-      .decision-status-value.enter {
-        color: var(--bullish);
-      }
-
-      .decision-status-value.stand_aside {
-        color: var(--neutral);
-      }
-
-      .playbook-why {
-        list-style: none;
-        display: grid;
-        gap: 0.38rem;
-      }
-
-      .playbook-why li {
-        color: var(--text-muted);
-        font-size: 0.8rem;
-        line-height: 1.35;
-      }
-
       .decision-points strong {
         color: var(--text-main);
-        font-weight: 600;
       }
 
-      .value-bullish {
-        color: var(--bullish);
+      .decision-toggle,
+      .ar-toggle {
+        width: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        border-radius: 10px;
+        border: 1px solid var(--border-soft);
+        background: rgba(232, 192, 105, 0.1);
+        color: inherit;
+        padding: 9px 10px;
+        margin-top: 10px;
+        cursor: pointer;
       }
-      .value-bearish {
-        color: var(--bearish);
+
+      .decision-toggle-label,
+      .ar-heading {
+        color: var(--gold-primary);
+        text-transform: uppercase;
+        font-size: 0.75rem;
+        font-weight: 800;
+      }
+
+      .decision-toggle-subtext,
+      .ar-subtext {
+        color: var(--text-muted);
+        font-size: 0.74rem;
+      }
+
+      .ar-heading-wrap {
+        display: grid;
+        gap: 2px;
+      }
+
+      .ar-toggle-meta {
+        margin-left: auto;
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+      }
+
+      .ar-toggle-badge {
+        color: var(--gold-primary);
+        font-size: 0.76rem;
+        font-weight: 700;
+      }
+
+      .ar-chevron {
+        width: 16px;
+        height: 16px;
+        color: var(--gold-primary);
+        transition: transform 0.2s ease;
+      }
+
+      .ar-toggle[aria-expanded="false"] .ar-chevron,
+      .decision-toggle[aria-expanded="false"] .ar-chevron {
+        transform: rotate(-90deg);
+      }
+
+      .decision-grid[hidden] {
+        display: none;
       }
 
       .refresh-btn {
-        background: var(--gold-gradient);
-        color: #000;
-        border: none;
-        border-radius: 50px;
-        padding: 1rem 2rem;
-        font-size: 1rem;
-        font-weight: 800;
-        cursor: pointer;
+        margin-top: 12px;
         width: 100%;
-        max-width: 450px;
-        box-shadow: 0 4px 15px rgba(255, 215, 0, 0.2);
-        transition:
-          transform 0.2s,
-          box-shadow 0.2s;
+        border: none;
+        border-radius: 999px;
+        padding: 14px 16px;
+        background: var(--gold-gradient);
+        color: #1a1f29;
+        font-size: 1.4rem;
+        font-weight: 900;
         text-transform: uppercase;
-        letter-spacing: 1px;
+        letter-spacing: 0.02em;
+        cursor: pointer;
       }
 
-      .refresh-btn:active {
-        transform: scale(0.98);
+      .refresh-btn.alt {
+        background: rgba(232, 192, 105, 0.12);
+        color: var(--gold-primary);
+        border: 1px solid rgba(232, 192, 105, 0.3);
+        font-size: 0.9rem;
       }
 
       .loading {
         position: fixed;
         inset: 0;
-        width: 100vw;
-        height: 100vh;
-        min-height: 100dvh;
-        background: var(--bg-color);
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-        align-items: center;
-        text-align: center;
-        padding:
-          max(20px, env(safe-area-inset-top))
-          max(16px, env(safe-area-inset-right))
-          max(20px, env(safe-area-inset-bottom))
-          max(16px, env(safe-area-inset-left));
         z-index: 999;
-        transition: opacity 0.5s ease;
+        display: grid;
+        place-items: center;
+        background: var(--bg-color);
+        transition: opacity 0.3s ease;
+      }
+
+      .loading-wrap {
+        text-align: center;
+      }
+
+      .loading-copy {
+        margin-top: 14px;
+        color: var(--text-muted);
+        letter-spacing: 0.12em;
+        font-size: 0.78rem;
       }
 
       .spinner {
-        width: 50px;
-        height: 50px;
-        border: 3px solid rgba(255, 215, 0, 0.1);
-        border-radius: 50%;
+        width: 54px;
+        height: 54px;
+        border: 3px solid rgba(232, 192, 105, 0.2);
         border-top-color: var(--gold-primary);
-        animation: spin 1s ease-in-out infinite;
-      }
-
-      @keyframes spin {
-        to {
-          transform: rotate(360deg);
-        }
-      }
-
-      @keyframes fadeIn {
-        from {
-          opacity: 0;
-          transform: translateY(20px);
-        }
-        to {
-          opacity: 1;
-          transform: translateY(0);
-        }
+        border-radius: 999px;
+        animation: spin 1s linear infinite;
       }
 
       .hide {
@@ -579,9 +518,8 @@
         margin-top: 8px;
         padding: 10px 12px;
         border-radius: 10px;
-        background: rgba(17, 23, 34, 0.92);
-        border: 1px solid rgba(255, 215, 0, 0.18);
-        box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+        background: var(--surface-hard);
+        border: 1px solid var(--border-soft);
       }
 
       .push-title {
@@ -589,22 +527,11 @@
         font-size: 0.78rem;
         font-weight: 700;
         margin-bottom: 4px;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
       }
 
       .push-body {
         color: var(--text-main);
-        font-size: 0.8rem;
-        line-height: 1.3;
-      }
-
-      .socket-state {
-        margin-top: 0.8rem;
-        text-align: center;
-        color: var(--text-muted);
-        font-size: 0.7rem;
-        letter-spacing: 0.5px;
+        font-size: 0.82rem;
       }
 
       .badge.update-pulse {
@@ -615,43 +542,53 @@
         animation: pricePulse 0.9s ease-out;
       }
 
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
       @keyframes badgePulse {
         0% {
           transform: scale(1);
-          box-shadow: 0 0 0 0 rgba(212, 175, 55, 0.45);
+          box-shadow: 0 0 0 0 rgba(232, 192, 105, 0.42);
         }
         40% {
-          transform: scale(1.04);
+          transform: scale(1.03);
         }
         100% {
           transform: scale(1);
-          box-shadow: 0 0 0 14px rgba(212, 175, 55, 0);
+          box-shadow: 0 0 0 14px rgba(232, 192, 105, 0);
         }
       }
 
       @keyframes pricePulse {
         0% {
-          text-shadow: 0 0 0 rgba(212, 175, 55, 0);
+          text-shadow: 0 0 0 rgba(232, 192, 105, 0);
         }
         35% {
-          text-shadow: 0 0 18px rgba(212, 175, 55, 0.55);
+          text-shadow: 0 0 18px rgba(232, 192, 105, 0.55);
         }
         100% {
-          text-shadow: 0 0 0 rgba(212, 175, 55, 0);
+          text-shadow: 0 0 0 rgba(232, 192, 105, 0);
         }
       }
 
-      /* Responsive fixes */
-      @media (max-width: 480px) {
-        h1 {
-          font-size: 2rem;
+      @media (max-width: 720px) {
+        .info-grid {
+          grid-template-columns: 1fr;
         }
-        .glass-card {
-          padding: 1.5rem;
-          border-radius: 20px;
+
+        .span-2 {
+          grid-column: auto;
         }
-        .price {
-          font-size: 2.5rem;
+
+        .dashboard-shell {
+          padding: 12px;
+        }
+
+        .refresh-btn {
+          font-size: 1.2rem;
         }
       }
     </style>
@@ -659,389 +596,319 @@
   <body>
     <!-- Loading Screen -->
     <div class="loading" id="loading-screen">
-      <div class="spinner"></div>
-      <div
-        style="
-          margin-top: 20px;
-          color: var(--text-muted);
-          font-weight: 300;
-          letter-spacing: 2px;
-        "
-      >
-        ANALYZING MARKETS
+      <div class="loading-wrap">
+        <div class="spinner"></div>
+        <div class="loading-copy">ANALYZING MARKETS</div>
       </div>
     </div>
 
-    <!-- Main Content -->
-    <div class="header">
-      <h1>XAUUSD PREDICTION</h1>
-      <div class="subtitle">Agentic Quantitative Analyst</div>
-    </div>
+    <div class="app-shell">
+      <div class="app-header">
+        <h1>XAUUSD AI Analysis Dashboard</h1>
+      </div>
 
-    <div class="glass-card">
-      <div class="verdict-container">
-        <div class="price" id="current-price">$0.00</div>
-        <div id="verdict-badge" class="badge neutral">Loading</div>
+      <div class="dashboard-shell">
+        <div class="top-price">
+          <div class="price" id="current-price">$0.00</div>
+          <div class="market-status" id="price-source">Gold Price (Real-Time)</div>
+        </div>
 
-        <div class="confidence">
-          AI Confidence:
-          <span id="confidence-val" style="color: white; font-weight: 600"
-            >0%</span
-          >
-          <div class="confidence-bar-bg">
-            <div class="confidence-bar-fill" id="confidence-bar"></div>
+        <div class="prediction-card">
+          <div class="card-kicker">AI Prediction</div>
+          <div id="verdict-badge" class="badge neutral">Loading</div>
+          <div class="confidence">
+            AI Confidence: <span id="confidence-val">0%</span>
+            <div class="confidence-bar-bg">
+              <div class="confidence-bar-fill" id="confidence-bar"></div>
+            </div>
           </div>
+          <div class="socket-state" id="socket-state">Push channel: connecting...</div>
+          <div class="socket-state" id="bg-push-state">Background push: not enabled</div>
         </div>
 
-        <div class="socket-state" id="socket-state">Push channel: connecting...</div>
-        <div class="socket-state" id="bg-push-state">Background push: not enabled</div>
-      </div>
+        <div class="info-grid">
+          <section class="section-card">
+            <div class="section-title">Price Action</div>
+            <div class="metric-row">
+              <span class="metric-label">Market Structure</span>
+              <span class="metric-value" id="pa-structure">---</span>
+            </div>
+            <div class="metric-row">
+              <span class="metric-label">Candle Pattern</span>
+              <span class="metric-value" id="pa-pattern">---</span>
+            </div>
+          </section>
 
-      <div style="margin-bottom: 2rem">
-        <div
-          style="
-            margin-bottom: 1rem;
-            color: var(--gold-primary);
-            font-size: 0.8rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-          "
-        >
-          Price Action
-        </div>
+          <section class="section-card">
+            <div class="section-title">Technical Indicators</div>
+            <div class="metric-row">
+              <span class="metric-label">Trend Structure</span>
+              <span class="metric-value" id="ta-trend">---</span>
+            </div>
+            <div class="metric-row">
+              <span class="metric-label">RSI Momentum (14)</span>
+              <span class="metric-value" id="ta-rsi">---</span>
+            </div>
+            <div class="metric-row">
+              <span class="metric-label">EMA 20 / EMA 50</span>
+              <span class="metric-value"><span id="ta-ema20">---</span> / <span id="ta-ema50">---</span></span>
+            </div>
+            <div class="metric-row">
+              <span class="metric-label">Market Regime</span>
+              <span class="metric-value" id="ta-regime">---</span>
+            </div>
+            <div class="metric-row">
+              <span class="metric-label">Trend Alignment (15m / 1H / 4H)</span>
+              <span class="metric-value" id="ta-alignment">---</span>
+            </div>
+            <div class="metric-row">
+              <span class="metric-label">ADX / ATR%</span>
+              <span class="metric-value"><span id="ta-adx">---</span> / <span id="ta-atrpct">---</span></span>
+            </div>
+            <div class="metric-row">
+              <span class="metric-label">Active Params</span>
+              <span class="metric-value compact" id="ta-active-params">---</span>
+            </div>
+          </section>
 
-        <div class="metric-row">
-          <span class="metric-label">Market Structure</span>
-          <span class="metric-value" id="pa-structure">---</span>
-        </div>
-        <div class="metric-row">
-          <span class="metric-label">Candle Pattern</span>
-          <span class="metric-value" id="pa-pattern">---</span>
-        </div>
-      </div>
+          <section class="section-card">
+            <div class="section-title">Market State</div>
+            <div class="metric-row">
+              <span class="metric-label">Regime</span>
+              <span class="metric-value" id="ms-regime">---</span>
+            </div>
+            <div class="metric-row">
+              <span class="metric-label">Directional Bias</span>
+              <span class="metric-value" id="ms-bias">---</span>
+            </div>
+            <div class="metric-row">
+              <span class="metric-label">Tradeability</span>
+              <span class="metric-value" id="ms-tradeability">---</span>
+            </div>
+            <div class="metric-row">
+              <span class="metric-label">Action State</span>
+              <span class="metric-value" id="ms-action-state">---</span>
+            </div>
+            <div class="metric-row">
+              <span class="metric-label">Action</span>
+              <span class="metric-value" id="ms-action">---</span>
+            </div>
+            <div class="metric-row">
+              <span class="metric-label">Composite Scores</span>
+              <span class="metric-value compact" id="ms-scores">---</span>
+            </div>
+          </section>
 
-      <div>
-        <div
-          style="
-            margin-bottom: 1rem;
-            color: var(--gold-primary);
-            font-size: 0.8rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-          "
-        >
-          Technical Indicators
-        </div>
+          <section class="section-card">
+            <div class="section-title">Event Regime</div>
+            <div class="metric-row">
+              <span class="metric-label">Big Move Risk</span>
+              <span class="metric-value" id="rs-risk">---</span>
+            </div>
+            <div class="metric-row">
+              <span class="metric-label">30m / 60m Expansion</span>
+              <span class="metric-value" id="rs-probabilities">---</span>
+            </div>
+            <div class="metric-row">
+              <span class="metric-label">Breakout Bias</span>
+              <span class="metric-value" id="rs-bias">---</span>
+            </div>
+            <div class="metric-row">
+              <span class="metric-label">Event Regime</span>
+              <span class="metric-value" id="rs-event-regime">---</span>
+            </div>
+            <div class="metric-row">
+              <span class="metric-label">Warning Ladder</span>
+              <span class="metric-value" id="rs-warning-ladder">---</span>
+            </div>
+            <div class="metric-row">
+              <span class="metric-label">Expected Range / Cross-Asset</span>
+              <span class="metric-value compact" id="rs-context">---</span>
+            </div>
+          </section>
 
-        <div class="metric-row">
-          <span class="metric-label">Trend Structure</span>
-          <span class="metric-value" id="ta-trend">---</span>
-        </div>
-        <div class="metric-row">
-          <span class="metric-label">RSI Momentum (14)</span>
-          <span class="metric-value" id="ta-rsi">---</span>
-        </div>
-        <div class="metric-row">
-          <span class="metric-label">EMA 20 / EMA 50</span>
-          <span class="metric-value" style="font-weight: 400"
-            ><span id="ta-ema20">---</span> /
-            <span id="ta-ema50">---</span></span
-          >
-        </div>
-        <div class="metric-row">
-          <span class="metric-label">Market Regime</span>
-          <span class="metric-value" id="ta-regime">---</span>
-        </div>
-        <div class="metric-row">
-          <span class="metric-label">Trend Alignment (15m / 1H / 4H)</span>
-          <span class="metric-value" id="ta-alignment">---</span>
-        </div>
-        <div class="metric-row">
-          <span class="metric-label">ADX / ATR%</span>
-          <span class="metric-value" style="font-weight: 400"
-            ><span id="ta-adx">---</span> /
-            <span id="ta-atrpct">---</span></span
-          >
-        </div>
-        <div class="metric-row" style="align-items: flex-start; gap: 0.75rem;">
-          <span class="metric-label">Active Params</span>
-          <span class="metric-value" id="ta-active-params" style="font-size: 0.78rem; text-align: right; max-width: 56%; line-height: 1.5; white-space: normal;">---</span>
-        </div>
-      </div>
+          <section class="section-card span-2">
+            <div class="section-title">Trade Guidance</div>
+            <div id="trade-guidance">
+              <div class="metric-row">
+                <span class="metric-label">Sell Setup</span>
+                <span class="metric-value" id="tg-sell">---</span>
+              </div>
+              <div class="metric-row">
+                <span class="metric-label">Buy Setup</span>
+                <span class="metric-value" id="tg-buy">---</span>
+              </div>
+              <div class="metric-row">
+                <span class="metric-label">Exit Warning</span>
+                <span class="metric-value" id="tg-exit">---</span>
+              </div>
+              <div class="metric-row">
+                <span class="metric-label">Summary</span>
+                <span class="metric-value compact" id="tg-summary">---</span>
+              </div>
+            </div>
 
-      <div style="margin: 2rem 0">
-        <div
-          style="
-            margin-bottom: 1rem;
-            color: var(--gold-primary);
-            font-size: 0.8rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-          "
-        >
-          Market State
-        </div>
+            <div class="decision-card">
+              <div class="decision-title">Execution Checklist</div>
+              <div class="decision-status">
+                <div class="decision-status-label">Current Read</div>
+                <div class="decision-status-value wait" id="decision-status">
+                  Evaluating checklist...
+                </div>
+              </div>
+              <div class="decision-status">
+                <div class="decision-status-label">Execution Permission</div>
+                <div class="decision-status-value wait" id="execution-permission">
+                  Evaluating market state...
+                </div>
+              </div>
+              <div class="decision-status">
+                <div class="decision-status-label">Trade Playbook</div>
+                <div class="decision-status-value wait" id="trade-playbook-stage">
+                  Building combined entry/exit playbook...
+                </div>
+              </div>
 
-        <div class="metric-row">
-          <span class="metric-label">Regime</span>
-          <span class="metric-value" id="ms-regime">---</span>
-        </div>
-        <div class="metric-row">
-          <span class="metric-label">Directional Bias</span>
-          <span class="metric-value" id="ms-bias">---</span>
-        </div>
-        <div class="metric-row">
-          <span class="metric-label">Tradeability</span>
-          <span class="metric-value" id="ms-tradeability">---</span>
-        </div>
-        <div class="metric-row">
-          <span class="metric-label">Action State</span>
-          <span class="metric-value" id="ms-action-state">---</span>
-        </div>
-        <div class="metric-row">
-          <span class="metric-label">Action</span>
-          <span class="metric-value" id="ms-action">---</span>
-        </div>
-        <div class="metric-row" style="align-items: flex-start; gap: 0.75rem;">
-          <span class="metric-label">Composite Scores</span>
-          <span class="metric-value" id="ms-scores" style="font-size: 0.78rem; text-align: right; max-width: 56%; line-height: 1.5; white-space: normal;">---</span>
-        </div>
-      </div>
-      <div style="margin: 2rem 0">
-        <div
-          style="
-            margin-bottom: 1rem;
-            color: var(--gold-primary);
-            font-size: 0.8rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-          "
-        >
-          Event Regime
-        </div>
+              <div class="metric-row">
+                <span class="metric-label">Forecast Bucket</span>
+                <span class="metric-value" id="forecast-bucket">---</span>
+              </div>
+              <div class="metric-row">
+                <span class="metric-label">Execution State</span>
+                <span class="metric-value" id="execution-state">---</span>
+              </div>
+              <div class="metric-row">
+                <span class="metric-label">Anti-Chop Filter</span>
+                <span class="metric-value compact" id="anti-chop-state">---</span>
+              </div>
 
-        <div class="metric-row">
-          <span class="metric-label">Big Move Risk</span>
-          <span class="metric-value" id="rs-risk">---</span>
-        </div>
-        <div class="metric-row">
-          <span class="metric-label">30m / 60m Expansion</span>
-          <span class="metric-value" id="rs-probabilities">---</span>
-        </div>
-        <div class="metric-row">
-          <span class="metric-label">Breakout Bias</span>
-          <span class="metric-value" id="rs-bias">---</span>
-        </div>
-        <div class="metric-row">
-          <span class="metric-label">Event Regime</span>
-          <span class="metric-value" id="rs-event-regime">---</span>
-        </div>
-        <div class="metric-row">
-          <span class="metric-label">Warning Ladder</span>
-          <span class="metric-value" id="rs-warning-ladder">---</span>
-        </div>
-        <div class="metric-row" style="align-items: flex-start; gap: 0.75rem;">
-          <span class="metric-label">Expected Range / Cross-Asset</span>
-          <span class="metric-value" id="rs-context" style="font-size: 0.78rem; text-align: right; max-width: 56%; line-height: 1.5; white-space: normal;">---</span>
-        </div>
-      </div>
-      <div style="margin-bottom: 2rem">
-        <div
-          style="
-            margin-bottom: 1rem;
-            color: var(--gold-primary);
-            font-size: 0.8rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-          "
-        >
-          Trade Guidance
-        </div>
-        <div id="trade-guidance">
-          <div class="metric-row">
-            <span class="metric-label">Sell Setup</span>
-            <span class="metric-value" id="tg-sell">---</span>
-          </div>
-          <div class="metric-row">
-            <span class="metric-label">Buy Setup</span>
-            <span class="metric-value" id="tg-buy">---</span>
-          </div>
-          <div class="metric-row">
-            <span class="metric-label">Exit Warning</span>
-            <span class="metric-value" id="tg-exit">---</span>
-          </div>
-          <div class="metric-row">
-            <span class="metric-label">Summary</span>
-            <span
-              class="metric-value"
-              id="tg-summary"
-              style="font-size: 0.8rem; text-align: right; max-width: 56%"
-              >---</span
+              <div class="decision-block">
+                <div class="decision-heading exit">Playbook Read</div>
+                <div class="metric-value compact" id="trade-playbook-text">
+                  Waiting for event-regime and directional alignment...
+                </div>
+                <ul class="playbook-why" id="trade-playbook-why">
+                  <li>Playbook rationale will appear here once the market state is loaded.</li>
+                </ul>
+              </div>
+
+              <button
+                type="button"
+                class="decision-toggle"
+                id="decision-toggle"
+                aria-expanded="false"
+                aria-controls="decision-details"
+              >
+                <span class="ar-heading-wrap">
+                  <span class="decision-toggle-label">Detailed Checklist</span>
+                  <span class="decision-toggle-subtext">Tap to open buy, sell, and exit rules</span>
+                </span>
+                <span class="ar-toggle-meta">
+                  <span class="ar-toggle-badge">Optional</span>
+                  <svg class="ar-chevron" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+                  </svg>
+                </span>
+              </button>
+
+              <div class="decision-grid" id="decision-details" hidden>
+                <div class="decision-block">
+                  <div class="decision-heading buy">Buy Only When</div>
+                  <ul class="decision-points" id="buy-checklist">
+                    <li><span class="check-icon">-</span><strong>Verdict:</strong> Bullish with confidence around 70% or higher.</li>
+                    <li><span class="check-icon">-</span><strong>Trend + structure:</strong> Trend Structure is Bullish and Market Structure is bullish drift, breakout, or continuation.</li>
+                    <li><span class="check-icon">-</span><strong>Alignment:</strong> 15m / 1H / 4H shows strong bullish alignment.</li>
+                    <li><span class="check-icon">-</span><strong>Trigger:</strong> Candle is not a doji and Summary does not say there is no clean trigger.</li>
+                    <li><span class="check-icon">-</span><strong>Guidance:</strong> Buy Setup is Watch or Strong while Exit Warning stays Low or Moderate.</li>
+                  </ul>
+                </div>
+                <div class="decision-block">
+                  <div class="decision-heading sell">Sell Only When</div>
+                  <ul class="decision-points" id="sell-checklist">
+                    <li><span class="check-icon">-</span><strong>Verdict:</strong> Bearish with confidence around 70% or higher.</li>
+                    <li><span class="check-icon">-</span><strong>Trend + structure:</strong> Trend Structure is Bearish and Market Structure shows bearish drift, breakdown, or rejection.</li>
+                    <li><span class="check-icon">-</span><strong>Alignment:</strong> 15m / 1H / 4H shows strong bearish alignment.</li>
+                    <li><span class="check-icon">-</span><strong>Trigger:</strong> Candle is not indecisive and Summary supports downside continuation or rejection.</li>
+                    <li><span class="check-icon">-</span><strong>Guidance:</strong> Sell Setup is Watch or Strong while Exit Warning stays Low or Moderate.</li>
+                  </ul>
+                </div>
+                <div class="decision-block">
+                  <div class="decision-heading exit">Exit Or Stand Aside When</div>
+                  <ul class="decision-points" id="exit-checklist">
+                    <li><span class="check-icon">-</span><strong>Neutral:</strong> Verdict is Neutral, alignment is mixed, or Summary says no clean trigger is present.</li>
+                    <li><span class="check-icon">-</span><strong>Warning:</strong> Exit Warning is High or confidence drops sharply.</li>
+                    <li><span class="check-icon">-</span><strong>Conflict:</strong> Market Structure and Trend Structure point in different directions.</li>
+                    <li><span class="check-icon">-</span><strong>Indecision:</strong> Candle Pattern is Doji or another weak reversal candle near key levels.</li>
+                    <li><span class="check-icon">-</span><strong>Rule:</strong> If Buy Setup and Sell Setup are both Weak, do not force a trade.</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="section-card span-2 ar-card">
+            <button
+              type="button"
+              class="ar-toggle"
+              id="ar-toggle"
+              aria-expanded="false"
+              aria-controls="ar-summary"
             >
-          </div>
-        </div>
-        <div class="decision-card">
-          <div class="decision-title">Execution Checklist</div>
-          <div class="decision-status">
-            <div class="decision-status-label">Current Read</div>
-            <div class="decision-status-value wait" id="decision-status">
-              Evaluating checklist...
+              <span class="ar-heading-wrap">
+                <span class="ar-heading">Autoresearch</span>
+                <span class="ar-subtext">Tap to expand research details</span>
+              </span>
+              <span class="ar-toggle-meta">
+                <span class="ar-toggle-badge" id="ar-toggle-status">Pending</span>
+                <svg class="ar-chevron" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+                </svg>
+              </span>
+            </button>
+            <div id="ar-summary" hidden>
+              <div class="metric-row">
+                <span class="metric-label">Status</span>
+                <span class="metric-value" id="ar-status">Pending</span>
+              </div>
+              <div class="metric-row">
+                <span class="metric-label">Top ROI</span>
+                <span class="metric-value" id="ar-score">---</span>
+              </div>
+              <div class="metric-row">
+                <span class="metric-label">Winning Params</span>
+                <span class="metric-value compact" id="ar-pass-rate">---</span>
+              </div>
+              <div class="metric-row">
+                <span class="metric-label">Promotion Gate</span>
+                <span class="metric-value" id="ar-promote">---</span>
+              </div>
+              <div class="metric-row">
+                <span class="metric-label">Active Strategy</span>
+                <span class="metric-value" id="ar-active-strategy">---</span>
+              </div>
+              <div class="metric-row">
+                <span class="metric-label">Last Swarm Run</span>
+                <span class="metric-value" id="ar-updated">---</span>
+              </div>
             </div>
-          </div>
-          <div class="decision-status" style="margin-top: 0.85rem;">
-            <div class="decision-status-label">Execution Permission</div>
-            <div class="decision-status-value wait" id="execution-permission">
-              Evaluating market state...
-            </div>
-          </div>
-          <div class="decision-status" style="margin-top: 0.85rem;">
-            <div class="decision-status-label">Trade Playbook</div>
-            <div class="decision-status-value wait" id="trade-playbook-stage">
-              Building combined entry/exit playbook...
-            </div>
-          </div>
-          <div class="metric-row" style="margin-top: 0.85rem;">
-            <span class="metric-label">Forecast Bucket</span>
-            <span class="metric-value" id="forecast-bucket">---</span>
-          </div>
-          <div class="metric-row">
-            <span class="metric-label">Execution State</span>
-            <span class="metric-value" id="execution-state">---</span>
-          </div>
-          <div class="metric-row" style="align-items: flex-start; gap: 0.75rem;">
-            <span class="metric-label">Anti-Chop Filter</span>
-            <span class="metric-value" id="anti-chop-state" style="font-size: 0.78rem; text-align: right; max-width: 56%; line-height: 1.5; white-space: normal;">---</span>
-          </div>
-          <div class="decision-block" style="margin-bottom: 0.85rem;">
-            <div class="decision-heading exit">Playbook Read</div>
-            <div class="metric-value" id="trade-playbook-text" style="font-size: 0.84rem; line-height: 1.5; font-weight: 500;">
-              Waiting for event-regime and directional alignment...
-            </div>
-            <ul class="playbook-why" id="trade-playbook-why" style="margin-top: 0.75rem;">
-              <li>Playbook rationale will appear here once the market state is loaded.</li>
-            </ul>
-          </div>
-          <button
-            type="button"
-            class="decision-toggle"
-            id="decision-toggle"
-            aria-expanded="false"
-            aria-controls="decision-details"
-          >
-            <span class="ar-heading-wrap">
-              <span class="decision-toggle-label">Detailed Checklist</span>
-              <span class="decision-toggle-subtext">Tap to open buy, sell, and exit rules</span>
-            </span>
-            <span class="ar-toggle-meta">
-              <span class="ar-toggle-badge">Optional</span>
-              <svg class="ar-chevron" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
-              </svg>
-            </span>
-          </button>
-          <div class="decision-grid" id="decision-details" hidden>
-            <div class="decision-block">
-              <div class="decision-heading buy">Buy Only When</div>
-              <ul class="decision-points" id="buy-checklist">
-                <li><span class="check-icon">-</span><strong>Verdict:</strong> Bullish with confidence around 70% or higher.</li>
-                <li><span class="check-icon">-</span><strong>Trend + structure:</strong> Trend Structure is Bullish and Market Structure is bullish drift, breakout, or continuation.</li>
-                <li><span class="check-icon">-</span><strong>Alignment:</strong> 15m / 1H / 4H shows strong bullish alignment.</li>
-                <li><span class="check-icon">-</span><strong>Trigger:</strong> Candle is not a doji and Summary does not say there is no clean trigger.</li>
-                <li><span class="check-icon">-</span><strong>Guidance:</strong> Buy Setup is Watch or Strong while Exit Warning stays Low or Moderate.</li>
-              </ul>
-            </div>
-            <div class="decision-block">
-              <div class="decision-heading sell">Sell Only When</div>
-              <ul class="decision-points" id="sell-checklist">
-                <li><span class="check-icon">-</span><strong>Verdict:</strong> Bearish with confidence around 70% or higher.</li>
-                <li><span class="check-icon">-</span><strong>Trend + structure:</strong> Trend Structure is Bearish and Market Structure shows bearish drift, breakdown, or rejection.</li>
-                <li><span class="check-icon">-</span><strong>Alignment:</strong> 15m / 1H / 4H shows strong bearish alignment.</li>
-                <li><span class="check-icon">-</span><strong>Trigger:</strong> Candle is not indecisive and Summary supports downside continuation or rejection.</li>
-                <li><span class="check-icon">-</span><strong>Guidance:</strong> Sell Setup is Watch or Strong while Exit Warning stays Low or Moderate.</li>
-              </ul>
-            </div>
-            <div class="decision-block">
-              <div class="decision-heading exit">Exit Or Stand Aside When</div>
-              <ul class="decision-points" id="exit-checklist">
-                <li><span class="check-icon">-</span><strong>Neutral:</strong> Verdict is Neutral, alignment is mixed, or Summary says no clean trigger is present.</li>
-                <li><span class="check-icon">-</span><strong>Warning:</strong> Exit Warning is High or confidence drops sharply.</li>
-                <li><span class="check-icon">-</span><strong>Conflict:</strong> Market Structure and Trend Structure point in different directions.</li>
-                <li><span class="check-icon">-</span><strong>Indecision:</strong> Candle Pattern is Doji or another weak reversal candle near key levels.</li>
-                <li><span class="check-icon">-</span><strong>Rule:</strong> If Buy Setup and Sell Setup are both Weak, do not force a trade.</li>
-              </ul>
-            </div>
-          </div>
+          </section>
         </div>
       </div>
 
-      <div class="ar-card">
-        <button
-          type="button"
-          class="ar-toggle"
-          id="ar-toggle"
-          aria-expanded="false"
-          aria-controls="ar-summary"
-        >
-          <span class="ar-heading-wrap">
-            <span class="ar-heading">Autoresearch</span>
-            <span class="ar-subtext">Tap to expand research details</span>
-          </span>
-          <span class="ar-toggle-meta">
-            <span class="ar-toggle-badge" id="ar-toggle-status">Pending</span>
-            <svg class="ar-chevron" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-              <path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
-            </svg>
-          </span>
-        </button>
-        <div id="ar-summary" hidden>
-          <div class="metric-row">
-            <span class="metric-label">Status</span>
-            <span class="metric-value" id="ar-status">Pending</span>
-          </div>
-          <div class="metric-row">
-            <span class="metric-label">Top ROI</span>
-            <span class="metric-value" id="ar-score">---</span>
-          </div>
-          <div class="metric-row">
-            <span class="metric-label">Winning Params</span>
-            <span class="metric-value" id="ar-pass-rate" style="font-size: 0.8rem; text-align: right; max-width: 56%">---</span>
-          </div>
-          <div class="metric-row">
-            <span class="metric-label">Promotion Gate</span>
-            <span class="metric-value" id="ar-promote">---</span>
-          </div>
-          <div class="metric-row">
-            <span class="metric-label">Active Strategy</span>
-            <span class="metric-value" id="ar-active-strategy">---</span>
-          </div>
-          <div class="metric-row">
-            <span class="metric-label">Last Swarm Run</span>
-            <span class="metric-value" id="ar-updated" style="font-size: 0.8rem"
-              >---</span
-            >
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <button class="refresh-btn" onclick="fetchPrediction()">
-      Refresh Analysis
-    </button>
+      <button class="refresh-btn" onclick="fetchPrediction()">
+        Refresh Analysis
+      </button>
 
     <!-- Notification opt-in button — shown only when permission not yet granted -->
-    <button
-      class="refresh-btn"
+      <button
+      class="refresh-btn alt"
       id="enable-alerts-btn"
-      style="margin-top:0.8rem;background:rgba(255,215,0,0.12);color:var(--gold-primary);border:1px solid rgba(255,215,0,0.35);display:none;"
+      style="display:none;"
       onclick="requestAlertsPermission()"
-    >
+      >
       🔔 Enable Push Alerts
     </button>
+    </div>
 
     <div class="push-feed" id="push-feed"></div>
 
@@ -1844,6 +1711,16 @@
           regime.adx_14 !== undefined ? regime.adx_14 : "N/A";
         document.getElementById("ta-atrpct").innerText =
           regime.atr_percent !== undefined ? `${regime.atr_percent}%` : "N/A";
+        const activeParamsEl = document.getElementById("ta-active-params");
+        if (activeParamsEl) {
+          const entries = Object.entries(activeParams || {});
+          activeParamsEl.innerText = entries.length
+            ? entries
+                .slice(0, 5)
+                .map(([key, value]) => `${humanizeWords(key)} ${value}`)
+                .join(" · ")
+            : "No active param overrides";
+        }
 
         const marketState =
           data.MarketState && typeof data.MarketState === "object"
