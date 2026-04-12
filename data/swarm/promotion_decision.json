@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-04-04T23:40:47.976906+00:00",
+  "generated_at": "2026-04-12T14:20:59.763027+00:00",
   "promote": true,
   "promotion_reason": "Promoted: candidate cleared ROI, robustness, and risk gates.",
   "candidate": {
@@ -8,7 +8,7 @@
       "ema_long": 100,
       "rsi_window": 14,
       "rsi_overbought": 70,
-      "rsi_oversold": 20,
+      "rsi_oversold": 30,
       "adx_window": 14,
       "adx_trending_threshold": 22,
       "adx_weak_trend_threshold": 18,
@@ -18,25 +18,28 @@
       "cmf_strong_buy_threshold": 0.1,
       "cmf_strong_sell_threshold": -0.1,
       "trend_base_weight": 2.5,
-      "alignment_weight": 1.0,
+      "alignment_weight": 1.2,
       "trend_regime_bonus": 1.0,
       "weak_trend_bonus": 0.4,
       "strong_volume_weight": 1.5,
       "bias_volume_weight": 1.0,
-      "breakout_weight": 2.0,
-      "structure_weight": 1.0,
+      "breakout_weight": 0.0,
+      "structure_weight": 0.0,
+      "swing_structure_weight": 0.0,
+      "drift_weight": 1.0,
+      "range_pressure_weight": 0.0,
       "engulfing_weight": 1.0,
       "reversal_candle_weight": 0.6,
       "rsi_extreme_weight": 1.5,
       "rsi_warning_weight": 0.6,
       "rsi_warning_band": 10,
-      "verdict_margin_threshold": 1.2,
-      "confidence_margin_multiplier": 8.0,
+      "verdict_margin_threshold": 1.0,
+      "confidence_margin_multiplier": 7.0,
       "confidence_evidence_multiplier": 1.4,
-      "rangebound_penalty": 8.0,
+      "rangebound_penalty": 6.0,
       "weak_trend_penalty": 3.0,
       "volume_unavailable_penalty": 5.0,
-      "mixed_alignment_penalty": 6.0,
+      "mixed_alignment_penalty": 4.0,
       "neutral_confidence_cap": 63,
       "sr_reaction_weight": 1.6,
       "sr_proximity_weight": 0.5,
@@ -61,76 +64,103 @@
         "15min",
         "1h",
         "4h"
-      ]
+      ],
+      "expansion_watch_threshold": 48.0,
+      "high_breakout_threshold": 64.0,
+      "directional_expansion_threshold": 78.0,
+      "event_watch_setup_weight": 0.35,
+      "event_breakout_setup_weight": 0.7,
+      "event_directional_setup_weight": 1.15,
+      "event_momentum_setup_weight": 1.55,
+      "event_alignment_boost": 0.35,
+      "event_conflict_penalty": 0.85,
+      "anti_chop_margin_buffer": 0.8,
+      "anti_chop_trigger_buffer": 0.35,
+      "anti_chop_tradeability_floor": 68.0,
+      "anti_chop_penalty": 8.0,
+      "warning_upshift_buffer": 3.5,
+      "warning_downshift_buffer": 7.0,
+      "warning_min_dwell_bars": 5,
+      "warning_raw_streak_required": 2,
+      "breakout_bias_deadband": 0.9,
+      "breakout_bias_hold_bars": 4,
+      "fakeout_risk_penalty": 6.0,
+      "meta_entry_score_threshold": 63.0,
+      "meta_fakeout_prob_cap": 0.42,
+      "meta_exit_prob_cap": 0.58,
+      "min_expected_edge_pct": 0.06,
+      "estimated_avg_win_pct": 0.55,
+      "estimated_avg_loss_pct": 0.42,
+      "transaction_cost_pct": 0.05
     },
     "summary": {
-      "roi": 48.62,
-      "trades": 74,
-      "pass_rate": 0.4189,
-      "max_drawdown": 0.0712,
-      "profit_factor": 1.9681,
-      "expectancy": 0.0057,
-      "ending_capital": 14862.18
+      "roi": 39.93,
+      "trades": 33,
+      "pass_rate": 0.4848,
+      "max_drawdown": 0.0842,
+      "profit_factor": 2.4295,
+      "expectancy": 0.0109,
+      "ending_capital": 13992.64
     }
   },
   "baseline": {
     "params": {
       "ema_short": 20,
-      "ema_long": 50,
+      "ema_long": 100,
       "rsi_overbought": 70,
       "rsi_oversold": 20,
       "cmf_window": 14,
-      "alignment_weight": 1.2,
-      "strong_volume_weight": 2.0,
-      "verdict_margin_threshold": 1.0,
+      "alignment_weight": 1.0,
+      "strong_volume_weight": 1.5,
+      "verdict_margin_threshold": 1.2,
       "confidence_margin_multiplier": 8.0,
       "rangebound_penalty": 8.0,
       "mixed_alignment_penalty": 6.0
     },
     "summary": {
-      "roi": 36.14,
-      "trades": 72,
-      "pass_rate": 0.4167,
-      "max_drawdown": 0.0713,
-      "profit_factor": 1.6975,
-      "expectancy": 0.0047,
-      "ending_capital": 13613.65
+      "roi": 29.09,
+      "trades": 33,
+      "pass_rate": 0.4242,
+      "max_drawdown": 0.1155,
+      "profit_factor": 1.9623,
+      "expectancy": 0.0084,
+      "ending_capital": 12909.34
     }
   },
   "checks": {
     "roi_improvement": {
       "pass": true,
-      "value": 12.48,
+      "value": 10.84,
       "threshold": 1.5
     },
     "pass_rate_floor": {
       "pass": true,
-      "value": 0.4189,
+      "value": 0.4848,
       "threshold": 0.3
     },
     "pass_rate_regression": {
       "pass": true,
-      "value": 0.0022,
+      "value": 0.0606,
       "threshold": -0.03
     },
     "trade_count": {
       "pass": true,
-      "value": 74,
+      "value": 33,
       "threshold": 10
     },
     "drawdown_guardrail": {
       "pass": true,
-      "value": 0.0712,
-      "threshold": 0.082
+      "value": 0.0842,
+      "threshold": 0.1328
     },
     "profit_factor": {
       "pass": true,
-      "value": 1.9681,
+      "value": 2.4295,
       "threshold": 1.4
     },
     "expectancy": {
       "pass": true,
-      "value": 0.0057,
+      "value": 0.0109,
       "threshold": 0.0
     }
   }
