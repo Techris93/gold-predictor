@@ -89,13 +89,13 @@
         color: var(--text-main);
         min-height: 100vh;
         overflow-x: hidden;
-        padding: 16px;
+        padding: 16px 16px calc(20px + env(safe-area-inset-bottom, 0px));
       }
 
       .app-shell {
         max-width: 860px;
         margin: 0 auto;
-        padding-bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+        padding-bottom: calc(30px + env(safe-area-inset-bottom, 0px));
       }
 
       .app-header {
@@ -503,9 +503,9 @@
         padding: 14px 18px;
         background: var(--gold-gradient);
         color: #1a1f29;
-        font-size: 1.4rem;
+        font-size: clamp(1rem, 2.7vw, 1.22rem);
         font-weight: 900;
-        line-height: 1.15;
+        line-height: 1.25;
         text-transform: uppercase;
         letter-spacing: 0.02em;
         text-align: center;
@@ -651,7 +651,7 @@
         }
 
         .refresh-btn {
-          font-size: 1.2rem;
+          font-size: 1rem;
           min-height: 54px;
           padding: 13px 16px;
         }
