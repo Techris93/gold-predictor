@@ -107,6 +107,7 @@ EVENT_RISK_CONFIG_PATH = os.path.join(BASE_DIR, "config", "event_risk_windows.js
 TECHNICAL_ANALYSIS_CACHE_SECONDS = max(5, int(os.getenv("TECHNICAL_ANALYSIS_CACHE_SECONDS", "20")))
 MTF_CACHE_SECONDS = max(15, int(os.getenv("MTF_CACHE_SECONDS", "45")))
 CROSS_ASSET_CACHE_SECONDS = max(30, int(os.getenv("CROSS_ASSET_CACHE_SECONDS", "90")))
+TECHNICAL_BASE_INTERVAL = str(os.getenv("TECHNICAL_BASE_INTERVAL", "15min") or "15min").strip().lower()
 
 
 def _calc_trend_from_close(close_series):
@@ -178,18 +179,23 @@ def _get_cached_cross_asset_context():
     return context
 
 
-def _fetch_mtf_trends(td_symbol, h1_trend):
+def _fetch_mtf_trends(td_symbol, h1_trend=None):
     """Fetches multi-timeframe trends strictly from Twelve Data."""
     mtf_intervals = ACTIVE_STRATEGY_PARAMS.get("mtf_intervals", ["15min", "1h", "4h"])
     m15_interval = mtf_intervals[0] if len(mtf_intervals) > 0 else "15min"
+    h1_interval = mtf_intervals[1] if len(mtf_intervals) > 1 else "1h"
     h4_interval = mtf_intervals[2] if len(mtf_intervals) > 2 else "4h"
     m15 = _fetch_td_trend(symbol=td_symbol, interval=m15_interval, outputsize=200)
+    h1 = _fetch_td_trend(symbol=td_symbol, interval=h1_interval, outputsize=200)
     h4 = _fetch_td_trend(symbol=td_symbol, interval=h4_interval, outputsize=200)
+    h1_value = h1.get("trend", "Neutral")
+    if h1_trend in {"Bullish", "Bearish", "Neutral"}:
+        h1_value = str(h1_trend)
 
     trend_map = {"Bullish": 1, "Bearish": -1, "Neutral": 0}
     alignment_score = (
         trend_map.get(m15.get('trend', 'Neutral'), 0)
-        + trend_map.get(h1_trend, 0)
+        + trend_map.get(h1_value, 0)
         + trend_map.get(h4.get('trend', 'Neutral'), 0)
     )
 
@@ -201,16 +207,18 @@ def _fetch_mtf_trends(td_symbol, h1_trend):
 
     return {
         "m15_trend": m15.get("trend", "Neutral"),
-        "h1_trend": h1_trend,
+        "h1_trend": h1_value,
         "h4_trend": h4.get("trend", "Neutral"),
         "alignment_score": alignment_score,
         "alignment_label": alignment_label,
         "data_points": {
             "m15": m15.get("data_points", 0),
+            "h1": h1.get("data_points", 0),
             "h4": h4.get("data_points", 0),
         },
         "sources": {
             "m15": m15.get("source", "unknown"),
+            "h1": h1.get("source", "unknown"),
             "h4": h4.get("source", "unknown"),
         },
     }
@@ -388,7 +396,7 @@ def get_technical_analysis():
         last_td_error = None
         for _ in range(2):
             try:
-                ts = td_client.time_series(symbol=td_symbol, interval="1h", outputsize=100)
+                ts = td_client.time_series(symbol=td_symbol, interval=TECHNICAL_BASE_INTERVAL, outputsize=200)
                 df = ts.as_pandas()
 
                 if df.empty:
@@ -506,15 +514,18 @@ def get_technical_analysis():
             volume_signal = "Slight Selling Bias"
 
         # Multi-timeframe trend confirmation (15m + 1h + 4h) from Twelve Data only.
-        mtf = _fetch_mtf_trends(td_symbol=td_symbol, h1_trend=ema_trend)
+        mtf = _fetch_mtf_trends(td_symbol=td_symbol, h1_trend=None)
+        effective_trend = mtf.get("h1_trend", ema_trend) if TECHNICAL_BASE_INTERVAL in {"15m", "15min"} else ema_trend
 
         result = {
             "data_source": data_source,
+            "base_interval": TECHNICAL_BASE_INTERVAL,
             "last_updated_at": now_ts,
             "stale_data": False,
             "served_from_cache": False,
             "current_price": round(latest['Close'], 2),
-            "ema_trend": ema_trend,
+            "ema_trend": effective_trend,
+            "execution_trend": ema_trend,
             "ema_20": round(latest['EMA_20'], 2),
             "ema_50": round(latest['EMA_50'], 2),
             "rsi_14": round(latest['RSI_14'], 2),
@@ -533,6 +544,7 @@ def get_technical_analysis():
                 "alignment_label": mtf['alignment_label'],
                 "data_points": {
                     "m15": mtf['data_points']['m15'],
+                    "h1": mtf['data_points']['h1'],
                     "h4": mtf['data_points']['h4']
                 },
                 "sources": mtf['sources']
@@ -557,7 +569,7 @@ def get_technical_analysis():
         result["cross_asset_context"] = cross_asset_context
         result["event_regime"] = compute_event_regime_snapshot(
             latest,
-            trend=ema_trend,
+            trend=effective_trend,
             alignment_label=mtf["alignment_label"],
             market_structure=pa_structure,
             candle_pattern=candle_pattern,

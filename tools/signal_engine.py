@@ -434,6 +434,7 @@ def _build_rr_signal_state(
     mtf_directional_matches = sum(1 for value in mtf_votes if value == direction and direction in {"Bullish", "Bearish"})
     mtf_conflict_count = sum(1 for value in mtf_votes if value in {"Bullish", "Bearish"} and value != direction and direction in {"Bullish", "Bearish"})
     mtf_quality = mtf_directional_matches / 3.0 if direction in {"Bullish", "Bearish"} else 0.0
+    h1_filter_pass = direction in {"Bullish", "Bearish"} and h1_trend == direction
 
     bar_ts = ta_data.get("bar_timestamp_utc")
     now_hour_utc = datetime.now(timezone.utc).hour
@@ -539,6 +540,8 @@ def _build_rr_signal_state(
         blockers.append("Execution state not directional")
     if mtf_directional_matches < 2:
         blockers.append("Insufficient multi-timeframe directional agreement")
+    if direction in {"Bullish", "Bearish"} and not h1_filter_pass:
+        blockers.append("H1 directional filter is not aligned")
     if no_trade_reasons:
         reason = str(no_trade_reasons[0])
         soft_match = any(term in reason for term in soft_no_trade_terms)
@@ -622,6 +625,8 @@ def _build_rr_signal_state(
         "direction": direction,
         "mtfAgreement": mtf_directional_matches,
         "mtfConflict": mtf_conflict_count,
+        "h1DirectionalFilterPass": h1_filter_pass,
+        "h1Trend": h1_trend,
         "targetMovePips": round(target_move_pips, 1),
         "projectedMovePips": round(projected_move_pips, 1),
         "moveProbability": round(move_probability, 4),
@@ -1584,18 +1589,37 @@ def prepare_historical_features(df, params=None):
 
     frame["EMA_TREND"] = _trend_series_from_close(frame["Close"], ema_short, ema_long)
 
+    inferred_minutes = 60.0
+    try:
+        if isinstance(frame.index, pd.DatetimeIndex) and len(frame.index) >= 3:
+            diffs = frame.index.to_series().diff().dropna()
+            if not diffs.empty:
+                inferred_minutes = float(diffs.dt.total_seconds().median() / 60.0)
+    except Exception:
+        inferred_minutes = 60.0
+    base_is_15m = inferred_minutes <= 20.0
+
     trend_4h = _trend_series_from_close(
         frame["Close"].resample("4h").last().dropna(),
         ema_short,
         ema_long,
     )
+    trend_1h = _trend_series_from_close(
+        frame["Close"].resample("1h").last().dropna(),
+        ema_short,
+        ema_long,
+    )
     frame["H4_TREND"] = trend_4h.reindex(frame.index, method="ffill").fillna("Neutral")
-    frame["M15_TREND"] = frame["EMA_TREND"]
+    frame["H1_TREND"] = trend_1h.reindex(frame.index, method="ffill").fillna("Neutral")
+    if base_is_15m:
+        frame["M15_TREND"] = frame["EMA_TREND"]
+    else:
+        frame["M15_TREND"] = frame["H1_TREND"]
 
     trend_map = {"Bullish": 1, "Bearish": -1, "Neutral": 0}
     frame["ALIGNMENT_SCORE"] = (
         frame["M15_TREND"].map(trend_map).fillna(0)
-        + frame["EMA_TREND"].map(trend_map).fillna(0)
+        + frame["H1_TREND"].map(trend_map).fillna(0)
         + frame["H4_TREND"].map(trend_map).fillna(0)
     )
     frame["ALIGNMENT_LABEL"] = "Mixed / Low Alignment"
@@ -1652,12 +1676,13 @@ def build_ta_payload_from_row(row, params=None, regime_memory=None):
         },
         "multi_timeframe": {
             "m15_trend": row.get("M15_TREND", "Neutral"),
-            "h1_trend": row.get("EMA_TREND", "Neutral"),
+            "h1_trend": row.get("H1_TREND", row.get("EMA_TREND", "Neutral")),
             "h4_trend": row.get("H4_TREND", "Neutral"),
             "alignment_score": int(row.get("ALIGNMENT_SCORE", 0)),
             "alignment_label": row.get("ALIGNMENT_LABEL", "Mixed / Low Alignment"),
             "sources": {
-                "m15": "derived_proxy",
+                "m15": "derived_proxy_or_base",
+                "h1": "derived_resample",
                 "h4": "derived_resample",
             },
         },

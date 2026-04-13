@@ -1327,9 +1327,10 @@
           return updatedAt ? `${base} Last fresh update: ${updatedAt}` : base;
         }
 
+        const baseInterval = ta.base_interval ? ` · Base ${String(ta.base_interval).toUpperCase()}` : "";
         return updatedAt
-          ? `${ta.data_source} · Updated ${updatedAt}`
-          : ta.data_source || "Market data available";
+          ? `${ta.data_source}${baseInterval} · Updated ${updatedAt}`
+          : `${ta.data_source || "Market data available"}${baseInterval}`;
       }
 
       function updateSocketState(text, isGood) {

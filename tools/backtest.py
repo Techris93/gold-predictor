@@ -1031,7 +1031,7 @@ def summarize_outcome_log(df, states):
         )
     return {"records": records[:500]}
 
-def run_backtest(ticker="XAU/USD", period="2y", interval="1h"):
+def run_backtest(ticker="XAU/USD", period="2y", interval="15min"):
     print(f"Fetching {period} of {interval} data for {ticker}...")
     try:
         df = fetch_history(period=period, interval=interval, ticker=ticker)
@@ -1205,4 +1205,4 @@ def run_backtest(ticker="XAU/USD", period="2y", interval="1h"):
         print("No trades triggered.")
 
 if __name__ == "__main__":
-    run_backtest(period="730d")
+    run_backtest(period="730d", interval="15min")
