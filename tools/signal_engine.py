@@ -2,6 +2,7 @@ import pandas as pd
 import ta
 from pathlib import Path
 import json
+from datetime import datetime, timezone
 
 from tools.event_regime import annotate_event_regime_features, compute_event_regime_snapshot
 from tools.price_action import annotate_price_action, extract_price_action_feature_hits
@@ -96,10 +97,26 @@ DEFAULT_STRATEGY_PARAMS = {
     "rr_signal_tp_pips": 200,
     "rr_signal_target_move_pips": 200,
     "rr_signal_pip_size": 0.01,
-    "rr_signal_min_confidence": 80.0,
-    "rr_signal_min_tradeability_score": 68.0,
-    "rr_signal_min_move_probability": 0.64,
-    "rr_signal_min_expected_edge_pct": 0.12,
+    "rr_signal_min_confidence": 72.0,
+    "rr_signal_min_tradeability_score": 58.0,
+    "rr_signal_min_move_probability": 0.52,
+    "rr_signal_min_expected_edge_pct": 0.05,
+    "rr_signal_allow_b_grade": 1,
+    "rr_signal_b_min_move_probability": 0.64,
+    "rr_signal_b_min_session_quality": 0.78,
+    "rr_signal_b_require_active_state": 1,
+    "rr_signal_allow_soft_no_trade": 1,
+    "rr_signal_soft_no_trade_terms": [
+        "Expected value edge is below",
+        "Entry timing model is not yet confirming momentum quality",
+        "Tradeability is still below the execution floor",
+    ],
+    "rr_signal_max_hold_bars": 24,
+    "rr_signal_max_concurrent_positions": 2,
+    "rr_signal_reentry_cooldown_bars": 4,
+    "rr_signal_risk_fraction": 0.01,
+    "rr_signal_partial_take_profit_pips": 100,
+    "rr_signal_move_sl_to_be_after_partial": 1,
 }
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -373,9 +390,22 @@ def _build_rr_signal_state(
     min_tradeability_score = float(strategy_params.get("rr_signal_min_tradeability_score", 68.0) or 68.0)
     min_move_probability = float(strategy_params.get("rr_signal_min_move_probability", 0.64) or 0.64)
     min_expected_edge = float(strategy_params.get("rr_signal_min_expected_edge_pct", 0.12) or 0.12)
+    allow_b_grade = bool(int(strategy_params.get("rr_signal_allow_b_grade", 1) or 0))
+    b_min_move_probability = float(strategy_params.get("rr_signal_b_min_move_probability", 0.64) or 0.64)
+    b_min_session_quality = float(strategy_params.get("rr_signal_b_min_session_quality", 0.78) or 0.78)
+    b_require_active_state = bool(int(strategy_params.get("rr_signal_b_require_active_state", 1) or 0))
+    allow_soft_no_trade = bool(int(strategy_params.get("rr_signal_allow_soft_no_trade", 1) or 0))
+    soft_no_trade_terms = strategy_params.get("rr_signal_soft_no_trade_terms", [])
+    soft_no_trade_terms = soft_no_trade_terms if isinstance(soft_no_trade_terms, list) else []
 
     current_price = float(ta_data.get("current_price") or 0.0)
     atr_percent = float(((ta_data.get("volatility_regime") or {}).get("atr_percent")) or 0.0)
+    mtf = ta_data.get("multi_timeframe", {}) if isinstance(ta_data.get("multi_timeframe"), dict) else {}
+    m15_trend = str(mtf.get("m15_trend") or "Neutral")
+    h1_trend = str(mtf.get("h1_trend") or "Neutral")
+    h4_trend = str(mtf.get("h4_trend") or "Neutral")
+    support_resistance = ta_data.get("support_resistance", {}) if isinstance(ta_data.get("support_resistance"), dict) else {}
+    event_risk = ta_data.get("event_risk", {}) if isinstance(ta_data.get("event_risk"), dict) else {}
     expansion_30m = float(regime_state.get("expansion_probability_30m") or 0.0)
     expansion_60m = float(regime_state.get("expansion_probability_60m") or 0.0)
     big_move_risk = float(regime_state.get("big_move_risk") or 0.0)
@@ -389,6 +419,29 @@ def _build_rr_signal_state(
         direction = directional_bias
     elif breakout_bias in {"Bullish", "Bearish"}:
         direction = breakout_bias
+
+    mtf_votes = [m15_trend, h1_trend, h4_trend]
+    mtf_directional_matches = sum(1 for value in mtf_votes if value == direction and direction in {"Bullish", "Bearish"})
+    mtf_conflict_count = sum(1 for value in mtf_votes if value in {"Bullish", "Bearish"} and value != direction and direction in {"Bullish", "Bearish"})
+    mtf_quality = mtf_directional_matches / 3.0 if direction in {"Bullish", "Bearish"} else 0.0
+
+    bar_ts = ta_data.get("bar_timestamp_utc")
+    now_hour_utc = datetime.now(timezone.utc).hour
+    if bar_ts:
+        try:
+            parsed = datetime.fromisoformat(str(bar_ts).replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            now_hour_utc = parsed.astimezone(timezone.utc).hour
+        except Exception:
+            pass
+    session_quality = 0.55
+    if 7 <= now_hour_utc <= 16:
+        session_quality = 0.85  # London + overlap
+    elif 12 <= now_hour_utc <= 20:
+        session_quality = 0.78  # New York window
+    elif 0 <= now_hour_utc <= 5:
+        session_quality = 0.45
 
     trend_quality = max(0.0, min(1.0, (float(direction_score) - 5.0) / 5.0))
     confidence_quality = max(0.0, min(1.0, (float(confidence) - 60.0) / 35.0))
@@ -407,9 +460,17 @@ def _build_rr_signal_state(
         + stability_quality * 10.0
         + expansion_quality * 12.0
         + event_quality * 8.0
-        + alignment_quality * 8.0
+        + alignment_quality * 5.0
+        + (mtf_quality * 8.0)
+        + (session_quality * 3.0)
     )
     quant_score -= (fakeout_penalty * 12.0) + (exit_penalty * 8.0)
+    if mtf_conflict_count >= 2:
+        quant_score -= 10.0
+    elif mtf_conflict_count == 1:
+        quant_score -= 4.0
+    if event_risk.get("active"):
+        quant_score -= 6.0
     quant_score = max(0.0, min(100.0, quant_score))
 
     move_probability = (
@@ -417,10 +478,16 @@ def _build_rr_signal_state(
         + trend_quality * 0.19
         + expansion_quality * 0.24
         + tradeability_quality * 0.14
-        + alignment_quality * 0.10
+        + alignment_quality * 0.06
+        + (mtf_quality * 0.08)
+        + (session_quality * 0.03)
         + event_quality * 0.09
     )
     move_probability -= (fakeout_penalty * 0.18) + (exit_penalty * 0.10)
+    if mtf_conflict_count >= 2:
+        move_probability -= 0.12
+    elif mtf_conflict_count == 1:
+        move_probability -= 0.05
     move_probability = max(0.0, min(1.0, move_probability))
 
     atr_move_pips = 0.0
@@ -429,14 +496,19 @@ def _build_rr_signal_state(
     projected_move_pips = atr_move_pips * (0.75 + (expansion_60m / 100.0) + (trend_quality * 0.55))
     projected_move_pips = max(0.0, projected_move_pips)
 
+    tier = "watch"
     grade = "Watchlist"
     if quant_score >= 88 and move_probability >= 0.72:
+        tier = "a_plus"
         grade = "A+ (Quant)"
     elif quant_score >= 80 and move_probability >= 0.64:
+        tier = "a"
         grade = "A (High Accuracy)"
     elif quant_score >= 72 and move_probability >= 0.56:
+        tier = "b"
         grade = "B (Qualified)"
     else:
+        tier = "c"
         grade = "C (Low Confidence)"
 
     blockers = []
@@ -454,11 +526,47 @@ def _build_rr_signal_state(
         blockers.append(f"Expected edge below {round(min_expected_edge, 2)}")
     if action_state not in {"LONG_ACTIVE", "SHORT_ACTIVE", "SETUP_LONG", "SETUP_SHORT"}:
         blockers.append("Execution state not directional")
+    if mtf_directional_matches < 2:
+        blockers.append("Insufficient multi-timeframe directional agreement")
     if no_trade_reasons:
-        blockers.append(str(no_trade_reasons[0]))
+        reason = str(no_trade_reasons[0])
+        soft_match = any(term in reason for term in soft_no_trade_terms)
+        if not (allow_soft_no_trade and soft_match and tier in {"a_plus", "a"}):
+            blockers.append(reason)
 
-    send_signal = not blockers and grade in {"A+ (Quant)", "A (High Accuracy)"}
+    if event_risk.get("active") and tier in {"b", "c"}:
+        blockers.append("Event-risk window is active")
+    if tier == "b":
+        if mtf_directional_matches < 3:
+            blockers.append("B-grade requires full multi-timeframe alignment")
+        if move_probability < max(min_move_probability, b_min_move_probability):
+            blockers.append("B-grade move probability is too weak")
+        if session_quality < b_min_session_quality:
+            blockers.append("B-grade is disabled in low-liquidity session")
+        if b_require_active_state and action_state not in {"LONG_ACTIVE", "SHORT_ACTIVE"}:
+            blockers.append("B-grade requires active directional state")
+
+    allowed_grades = {"A+ (Quant)", "A (High Accuracy)"}
+    if allow_b_grade:
+        allowed_grades.add("B (Qualified)")
+    send_signal = not blockers and grade in allowed_grades
     status = "ready" if send_signal else ("arming" if grade.startswith("A") and direction in {"Bullish", "Bearish"} else "standby")
+
+    trigger = "breakout_continuation"
+    sr_reaction = str(support_resistance.get("reaction") or "None")
+    if "Rejection" in sr_reaction:
+        trigger = "pullback_rejection"
+    elif "Consolidating" in str(ta_data.get("price_action", {}).get("structure", "")):
+        trigger = "range_break_pending"
+    reentry_eligible = (
+        direction in {"Bullish", "Bearish"}
+        and tier in {"a_plus", "a", "b"}
+        and (
+            ("Support Rejection" in sr_reaction and direction == "Bullish")
+            or ("Resistance Rejection" in sr_reaction and direction == "Bearish")
+            or mtf_directional_matches >= 2
+        )
+    )
 
     sl_distance = sl_pips * pip_size
     tp_distance = tp_pips * pip_size
@@ -479,19 +587,27 @@ def _build_rr_signal_state(
     elif status == "ready":
         status_text = "High-accuracy RR 1:2 signal is ready for alerting."
 
+    partial_tp_pips = float(strategy_params.get("rr_signal_partial_take_profit_pips", sl_pips) or sl_pips)
+    move_sl_to_be = bool(int(strategy_params.get("rr_signal_move_sl_to_be_after_partial", 1) or 0))
+
     return {
         "enabled": send_signal,
         "status": status,
         "statusText": status_text,
+        "tier": tier,
         "grade": grade,
         "quantScore": round(quant_score, 2),
         "direction": direction,
+        "mtfAgreement": mtf_directional_matches,
+        "mtfConflict": mtf_conflict_count,
         "targetMovePips": round(target_move_pips, 1),
         "projectedMovePips": round(projected_move_pips, 1),
         "moveProbability": round(move_probability, 4),
         "rrRatio": round(tp_pips / max(sl_pips, 1.0), 2),
         "slPips": round(sl_pips, 1),
         "tpPips": round(tp_pips, 1),
+        "partialTakeProfitPips": round(partial_tp_pips, 1),
+        "moveStopToBreakevenAfterPartial": move_sl_to_be,
         "entryPrice": entry_price,
         "stopLossPrice": stop_loss,
         "takeProfitPrice": take_profit,
@@ -499,6 +615,8 @@ def _build_rr_signal_state(
         "expectedEdgePct": round(float(expected_edge_pct), 4),
         "warningLadder": warning_ladder,
         "regime": regime_label,
+        "entryTrigger": trigger,
+        "reentryEligible": reentry_eligible,
         "blockers": blockers[:4],
     }
 
@@ -1488,7 +1606,14 @@ def prepare_historical_features(df, params=None):
 
 def build_ta_payload_from_row(row, params=None, regime_memory=None):
     strategy_params = normalize_strategy_params(params)
+    bar_ts = None
+    try:
+        if getattr(row, "name", None) is not None:
+            bar_ts = pd.Timestamp(row.name).tz_localize("UTC").isoformat() if pd.Timestamp(row.name).tzinfo is None else pd.Timestamp(row.name).tz_convert("UTC").isoformat()
+    except Exception:
+        bar_ts = None
     return {
+        "bar_timestamp_utc": bar_ts,
         "current_price": round(float(row["Close"]), 2),
         "ema_trend": row.get("EMA_TREND", "Neutral"),
         "ema_20": round(float(row.get("EMA_20", 0.0)), 2),

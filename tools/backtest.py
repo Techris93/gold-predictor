@@ -120,6 +120,7 @@ def generate_signals(df, params=None):
                 "regime_state": prediction.get("RegimeState", {}),
                 "forecast_state": prediction.get("ForecastState", {}),
                 "execution_state": prediction.get("ExecutionState", {}),
+                "rr_signal": prediction.get("RR200Signal", {}),
             }
         )
 
@@ -312,6 +313,220 @@ def _trade_summary(trades):
         "average_loss": round(avg_loss, 2),
         "final_capital": round(capital, 2),
     }
+
+
+def _max_drawdown_from_equity(equity_curve):
+    if not equity_curve:
+        return 0.0
+    peak = float(equity_curve[0])
+    max_dd = 0.0
+    for value in equity_curve:
+        value = float(value)
+        if value > peak:
+            peak = value
+        if peak > 0:
+            dd = (peak - value) / peak
+            if dd > max_dd:
+                max_dd = dd
+    return round(max_dd * 100.0, 2)
+
+
+def _simulate_rr200_v2(df, states, params=None):
+    if df is None or df.empty or not states:
+        return {
+            "trades": [],
+            "summary": {
+                "trades": 0,
+                "wins": 0,
+                "losses": 0,
+                "accuracy": 0.0,
+                "roi": 0.0,
+                "max_drawdown_pct": 0.0,
+                "final_capital": 10000.0,
+            },
+        }
+
+    strategy_params = normalize_strategy_params(params or ACTIVE_BACKTEST_PARAMS)
+    sl_dist = float(strategy_params.get("rr_signal_sl_pips", 100.0)) * float(strategy_params.get("rr_signal_pip_size", 0.01))
+    tp_dist = float(strategy_params.get("rr_signal_tp_pips", 200.0)) * float(strategy_params.get("rr_signal_pip_size", 0.01))
+    max_hold_bars = max(2, int(strategy_params.get("rr_signal_max_hold_bars", 24) or 24))
+    max_positions = max(1, int(strategy_params.get("rr_signal_max_concurrent_positions", 2) or 2))
+    reentry_cooldown = max(1, int(strategy_params.get("rr_signal_reentry_cooldown_bars", 4) or 4))
+    base_risk_fraction = float(strategy_params.get("rr_signal_risk_fraction", 0.01) or 0.01)
+    partial_tp_dist = float(strategy_params.get("rr_signal_partial_take_profit_pips", 100.0)) * float(strategy_params.get("rr_signal_pip_size", 0.01))
+    move_sl_to_be = bool(int(strategy_params.get("rr_signal_move_sl_to_be_after_partial", 1) or 0))
+
+    capital = 10000.0
+    positions = []
+    closed_trades = []
+    last_entry_bar_by_direction = {"Bullish": -10_000, "Bearish": -10_000}
+    equity_curve = [capital]
+
+    def _price(i, col):
+        return float(df[col].iloc[i])
+
+    def _position_unrealized(position, close_price):
+        if position["direction"] == "Bullish":
+            return (close_price - position["entry"]) * position["qty"]
+        return (position["entry"] - close_price) * position["qty"]
+
+    # bar index i uses signal from i-1 to enter at current bar open (no lookahead).
+    for i in range(1, len(df)):
+        high = _price(i, "High")
+        low = _price(i, "Low")
+        close = _price(i, "Close")
+        open_price = _price(i, "Open")
+
+        active_positions = []
+        for pos in positions:
+            pos["bars"] += 1
+            direction = pos["direction"]
+            if not pos.get("partial_taken"):
+                if direction == "Bullish" and high >= (pos["entry"] + partial_tp_dist):
+                    partial_qty = pos["qty"] * 0.5
+                    partial_pnl = partial_tp_dist * partial_qty
+                    capital += partial_pnl
+                    pos["qty"] -= partial_qty
+                    pos["partial_taken"] = True
+                    if move_sl_to_be:
+                        pos["sl"] = max(pos["sl"], pos["entry"])
+                elif direction == "Bearish" and low <= (pos["entry"] - partial_tp_dist):
+                    partial_qty = pos["qty"] * 0.5
+                    partial_pnl = partial_tp_dist * partial_qty
+                    capital += partial_pnl
+                    pos["qty"] -= partial_qty
+                    pos["partial_taken"] = True
+                    if move_sl_to_be:
+                        pos["sl"] = min(pos["sl"], pos["entry"])
+
+            sl_hit = (low <= pos["sl"]) if direction == "Bullish" else (high >= pos["sl"])
+            tp_hit = (high >= pos["tp"]) if direction == "Bullish" else (low <= pos["tp"])
+            exit_price = None
+            exit_reason = None
+
+            if sl_hit and tp_hit:
+                exit_price = pos["sl"]
+                exit_reason = "sl_first"
+            elif sl_hit:
+                exit_price = pos["sl"]
+                exit_reason = "sl"
+            elif tp_hit:
+                exit_price = pos["tp"]
+                exit_reason = "tp"
+            elif pos["bars"] >= max_hold_bars:
+                exit_price = close
+                exit_reason = "timeout"
+
+            if exit_price is None:
+                active_positions.append(pos)
+                continue
+
+            pnl = (exit_price - pos["entry"]) * pos["qty"] if direction == "Bullish" else (pos["entry"] - exit_price) * pos["qty"]
+            capital += pnl
+            closed_trades.append(
+                {
+                    "entry_bar": pos["entry_bar"],
+                    "exit_bar": i,
+                    "direction": direction,
+                    "entry": pos["entry"],
+                    "exit": exit_price,
+                    "qty": pos["qty"],
+                    "pnl": pnl,
+                    "reason": exit_reason,
+                    "grade": pos.get("grade", ""),
+                }
+            )
+        positions = active_positions
+
+        state_idx = min(i - 1, len(states) - 1)
+        state = states[state_idx] if state_idx >= 0 else {}
+        rr = (state or {}).get("rr_signal") or {}
+        direction = str(rr.get("direction") or "Neutral")
+        enabled = bool(rr.get("enabled"))
+        reentry_eligible = bool(rr.get("reentryEligible"))
+
+        if enabled and direction in {"Bullish", "Bearish"} and len(positions) < max_positions:
+            same_dir_positions = [p for p in positions if p["direction"] == direction]
+            enough_gap = (i - int(last_entry_bar_by_direction.get(direction, -10_000))) >= reentry_cooldown
+            can_enter = False
+            if not same_dir_positions and enough_gap:
+                can_enter = True
+            elif same_dir_positions and reentry_eligible and enough_gap:
+                can_enter = True
+
+            if can_enter:
+                regime_state = (state or {}).get("regime_state") or {}
+                warning_ladder = str(regime_state.get("warning_ladder") or "")
+                event_regime = str(regime_state.get("event_regime") or "")
+                risk_fraction = base_risk_fraction
+                if warning_ladder in {"High Breakout Risk", "Directional Expansion Likely"}:
+                    risk_fraction *= 0.75
+                if event_regime in {"event_risk", "panic_reversal"}:
+                    risk_fraction *= 0.50
+
+                risk_amount = capital * risk_fraction
+                qty = risk_amount / max(sl_dist, 1e-8)
+                entry = open_price
+                if direction == "Bullish":
+                    sl = entry - sl_dist
+                    tp = entry + tp_dist
+                else:
+                    sl = entry + sl_dist
+                    tp = entry - tp_dist
+                positions.append(
+                    {
+                        "entry_bar": i,
+                        "direction": direction,
+                        "entry": entry,
+                        "sl": sl,
+                        "tp": tp,
+                        "qty": qty,
+                        "bars": 0,
+                        "grade": rr.get("grade"),
+                        "partial_taken": False,
+                    }
+                )
+                last_entry_bar_by_direction[direction] = i
+
+        mtm_equity = capital + sum(_position_unrealized(pos, close) for pos in positions)
+        equity_curve.append(mtm_equity)
+
+    if len(df) > 0:
+        final_close = float(df["Close"].iloc[-1])
+        for pos in positions:
+            direction = pos["direction"]
+            exit_price = final_close
+            pnl = (exit_price - pos["entry"]) * pos["qty"] if direction == "Bullish" else (pos["entry"] - exit_price) * pos["qty"]
+            capital += pnl
+            closed_trades.append(
+                {
+                    "entry_bar": pos["entry_bar"],
+                    "exit_bar": len(df) - 1,
+                    "direction": direction,
+                    "entry": pos["entry"],
+                    "exit": exit_price,
+                    "qty": pos["qty"],
+                    "pnl": pnl,
+                    "reason": "eod",
+                    "grade": pos.get("grade", ""),
+                }
+            )
+        equity_curve.append(capital)
+
+    wins = sum(1 for trade in closed_trades if float(trade.get("pnl", 0.0)) > 0)
+    losses = len(closed_trades) - wins
+    accuracy = (wins / len(closed_trades)) if closed_trades else 0.0
+    roi = ((capital - 10000.0) / 10000.0) * 100.0
+    summary = {
+        "trades": len(closed_trades),
+        "wins": wins,
+        "losses": losses,
+        "accuracy": round(accuracy * 100.0, 2),
+        "roi": round(roi, 2),
+        "max_drawdown_pct": _max_drawdown_from_equity(equity_curve),
+        "final_capital": round(capital, 2),
+    }
+    return {"trades": closed_trades, "summary": summary}
 
 
 def summarize_ablation_metrics(df, base_params):
@@ -840,6 +1055,8 @@ def run_backtest(ticker="XAU/USD", period="2y", interval="1h"):
         print(f"Average Loss:       {avg_loss:.2f}%")
         print(f"Final Capital:      ${capital:.2f} (from $10,000 start)")
         summary = _trade_summary(trades)
+        rr200_v2 = _simulate_rr200_v2(df, states, params=ACTIVE_BACKTEST_PARAMS)
+        rr200_summary = rr200_v2.get("summary", {})
         transition_metrics = summarize_transition_metrics(df, states)
         feature_hit_metrics = summarize_feature_hit_metrics(df, states)
         ablation_metrics = summarize_ablation_metrics(df, ACTIVE_BACKTEST_PARAMS)
@@ -863,6 +1080,13 @@ def run_backtest(ticker="XAU/USD", period="2y", interval="1h"):
         print(f"Avg Persistence:    {transition_metrics.get('avg_signal_persistence', 0.0):.2f} bars")
         print(f"Avg Favorable Exc.: {transition_metrics.get('avg_favorable_excursion', 0.0):.3f}%")
         print(f"Avg Adverse Exc.:   {transition_metrics.get('avg_adverse_excursion', 0.0):.3f}%")
+        print("RR200 v2 Strategy:")
+        print(
+            f"  trades={rr200_summary.get('trades', 0)} "
+            f"accuracy={rr200_summary.get('accuracy', 0.0):.2f}% "
+            f"roi={rr200_summary.get('roi', 0.0):.2f}% "
+            f"max_dd={rr200_summary.get('max_drawdown_pct', 0.0):.2f}%"
+        )
         print("Feature Hit Metrics:")
         for feature_name, metrics in feature_hit_metrics.items():
             print(
@@ -950,6 +1174,7 @@ def run_backtest(ticker="XAU/USD", period="2y", interval="1h"):
                     "large_move_labels": large_move_labels,
                     "decision_quality_metrics": decision_quality_metrics,
                     "quality_gate": quality_gate,
+                    "rr200_v2_summary": rr200_summary,
                 },
                 handle,
                 indent=2,
