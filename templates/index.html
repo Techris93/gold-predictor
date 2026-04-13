@@ -95,6 +95,7 @@
       .app-shell {
         max-width: 860px;
         margin: 0 auto;
+        padding-bottom: calc(20px + env(safe-area-inset-bottom, 0px));
       }
 
       .app-header {
@@ -493,15 +494,22 @@
       .refresh-btn {
         margin-top: 12px;
         width: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
         border: none;
         border-radius: 999px;
-        padding: 14px 16px;
+        min-height: 56px;
+        padding: 14px 18px;
         background: var(--gold-gradient);
         color: #1a1f29;
         font-size: 1.4rem;
         font-weight: 900;
+        line-height: 1.15;
         text-transform: uppercase;
         letter-spacing: 0.02em;
+        text-align: center;
+        white-space: normal;
         cursor: pointer;
       }
 
@@ -644,6 +652,8 @@
 
         .refresh-btn {
           font-size: 1.2rem;
+          min-height: 54px;
+          padding: 13px 16px;
         }
       }
     </style>
