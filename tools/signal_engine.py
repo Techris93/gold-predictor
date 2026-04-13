@@ -92,6 +92,14 @@ DEFAULT_STRATEGY_PARAMS = {
     "estimated_avg_win_pct": 0.55,
     "estimated_avg_loss_pct": 0.42,
     "transaction_cost_pct": 0.05,
+    "rr_signal_sl_pips": 100,
+    "rr_signal_tp_pips": 200,
+    "rr_signal_target_move_pips": 200,
+    "rr_signal_pip_size": 0.01,
+    "rr_signal_min_confidence": 80.0,
+    "rr_signal_min_tradeability_score": 68.0,
+    "rr_signal_min_move_probability": 0.64,
+    "rr_signal_min_expected_edge_pct": 0.12,
 }
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -334,6 +342,165 @@ def _expected_value_edge_pct(confidence, strategy_params, regime_bucket):
     p_win = max(0.0, min(1.0, confidence / 100.0))
     edge = (p_win * avg_win) - ((1.0 - p_win) * avg_loss) - tx_cost
     return round(edge, 4)
+
+
+def _build_rr_signal_state(
+    ta_data,
+    strategy_params,
+    verdict,
+    directional_bias,
+    regime_label,
+    alignment_label,
+    action_state,
+    confidence,
+    direction_score,
+    tradeability_score,
+    stability_score,
+    expected_edge_pct,
+    meta_scores,
+    regime_state,
+    no_trade_reasons,
+):
+    ta_data = ta_data if isinstance(ta_data, dict) else {}
+    regime_state = regime_state if isinstance(regime_state, dict) else {}
+    meta_scores = meta_scores if isinstance(meta_scores, dict) else {}
+
+    sl_pips = max(1.0, float(strategy_params.get("rr_signal_sl_pips", 100) or 100))
+    tp_pips = max(1.0, float(strategy_params.get("rr_signal_tp_pips", 200) or 200))
+    target_move_pips = max(1.0, float(strategy_params.get("rr_signal_target_move_pips", 200) or 200))
+    pip_size = max(0.0001, float(strategy_params.get("rr_signal_pip_size", 0.01) or 0.01))
+    min_confidence = float(strategy_params.get("rr_signal_min_confidence", 80.0) or 80.0)
+    min_tradeability_score = float(strategy_params.get("rr_signal_min_tradeability_score", 68.0) or 68.0)
+    min_move_probability = float(strategy_params.get("rr_signal_min_move_probability", 0.64) or 0.64)
+    min_expected_edge = float(strategy_params.get("rr_signal_min_expected_edge_pct", 0.12) or 0.12)
+
+    current_price = float(ta_data.get("current_price") or 0.0)
+    atr_percent = float(((ta_data.get("volatility_regime") or {}).get("atr_percent")) or 0.0)
+    expansion_30m = float(regime_state.get("expansion_probability_30m") or 0.0)
+    expansion_60m = float(regime_state.get("expansion_probability_60m") or 0.0)
+    big_move_risk = float(regime_state.get("big_move_risk") or 0.0)
+    breakout_bias = str(regime_state.get("breakout_bias") or "Neutral")
+    warning_ladder = str(regime_state.get("warning_ladder") or "Normal")
+
+    direction = "Neutral"
+    if verdict in {"Bullish", "Bearish"}:
+        direction = verdict
+    elif directional_bias in {"Bullish", "Bearish"}:
+        direction = directional_bias
+    elif breakout_bias in {"Bullish", "Bearish"}:
+        direction = breakout_bias
+
+    trend_quality = max(0.0, min(1.0, (float(direction_score) - 5.0) / 5.0))
+    confidence_quality = max(0.0, min(1.0, (float(confidence) - 60.0) / 35.0))
+    tradeability_quality = max(0.0, min(1.0, float(tradeability_score) / 100.0))
+    stability_quality = max(0.0, min(1.0, float(stability_score) / 100.0))
+    alignment_quality = 1.0 if str(alignment_label).startswith("Strong") else 0.45
+    expansion_quality = max(0.0, min(1.0, (expansion_60m * 0.7 + expansion_30m * 0.3) / 100.0))
+    event_quality = max(0.0, min(1.0, big_move_risk / 100.0))
+    fakeout_penalty = max(0.0, min(1.0, float(meta_scores.get("fakeout_probability") or 0.0)))
+    exit_penalty = max(0.0, min(1.0, float(meta_scores.get("exit_risk_probability") or 0.0)))
+
+    quant_score = (
+        trend_quality * 22.0
+        + confidence_quality * 22.0
+        + tradeability_quality * 18.0
+        + stability_quality * 10.0
+        + expansion_quality * 12.0
+        + event_quality * 8.0
+        + alignment_quality * 8.0
+    )
+    quant_score -= (fakeout_penalty * 12.0) + (exit_penalty * 8.0)
+    quant_score = max(0.0, min(100.0, quant_score))
+
+    move_probability = (
+        confidence_quality * 0.28
+        + trend_quality * 0.19
+        + expansion_quality * 0.24
+        + tradeability_quality * 0.14
+        + alignment_quality * 0.10
+        + event_quality * 0.09
+    )
+    move_probability -= (fakeout_penalty * 0.18) + (exit_penalty * 0.10)
+    move_probability = max(0.0, min(1.0, move_probability))
+
+    atr_move_pips = 0.0
+    if current_price > 0 and atr_percent > 0:
+        atr_move_pips = ((current_price * (atr_percent / 100.0)) / pip_size)
+    projected_move_pips = atr_move_pips * (0.75 + (expansion_60m / 100.0) + (trend_quality * 0.55))
+    projected_move_pips = max(0.0, projected_move_pips)
+
+    grade = "Watchlist"
+    if quant_score >= 88 and move_probability >= 0.72:
+        grade = "A+ (Quant)"
+    elif quant_score >= 80 and move_probability >= 0.64:
+        grade = "A (High Accuracy)"
+    elif quant_score >= 72 and move_probability >= 0.56:
+        grade = "B (Qualified)"
+    else:
+        grade = "C (Low Confidence)"
+
+    blockers = []
+    if direction not in {"Bullish", "Bearish"}:
+        blockers.append("No directional bias")
+    if float(confidence) < min_confidence:
+        blockers.append(f"Confidence below {int(min_confidence)}%")
+    if float(tradeability_score) < min_tradeability_score:
+        blockers.append(f"Tradeability below {round(min_tradeability_score, 1)}")
+    if move_probability < min_move_probability:
+        blockers.append(f"200-pip probability below {round(min_move_probability * 100)}%")
+    if projected_move_pips < target_move_pips:
+        blockers.append(f"Projected move below {int(target_move_pips)} pips")
+    if float(expected_edge_pct) < min_expected_edge:
+        blockers.append(f"Expected edge below {round(min_expected_edge, 2)}")
+    if action_state not in {"LONG_ACTIVE", "SHORT_ACTIVE", "SETUP_LONG", "SETUP_SHORT"}:
+        blockers.append("Execution state not directional")
+    if no_trade_reasons:
+        blockers.append(str(no_trade_reasons[0]))
+
+    send_signal = not blockers and grade in {"A+ (Quant)", "A (High Accuracy)"}
+    status = "ready" if send_signal else ("arming" if grade.startswith("A") and direction in {"Bullish", "Bearish"} else "standby")
+
+    sl_distance = sl_pips * pip_size
+    tp_distance = tp_pips * pip_size
+    entry_price = round(current_price, 2) if current_price > 0 else None
+    stop_loss = None
+    take_profit = None
+    if current_price > 0 and direction in {"Bullish", "Bearish"}:
+        if direction == "Bullish":
+            stop_loss = round(current_price - sl_distance, 2)
+            take_profit = round(current_price + tp_distance, 2)
+        else:
+            stop_loss = round(current_price + sl_distance, 2)
+            take_profit = round(current_price - tp_distance, 2)
+
+    status_text = "Stand by until higher-quality directional conditions form."
+    if status == "arming":
+        status_text = "Directional setup detected; waiting for full 200-pip probability confirmation."
+    elif status == "ready":
+        status_text = "High-accuracy RR 1:2 signal is ready for alerting."
+
+    return {
+        "enabled": send_signal,
+        "status": status,
+        "statusText": status_text,
+        "grade": grade,
+        "quantScore": round(quant_score, 2),
+        "direction": direction,
+        "targetMovePips": round(target_move_pips, 1),
+        "projectedMovePips": round(projected_move_pips, 1),
+        "moveProbability": round(move_probability, 4),
+        "rrRatio": round(tp_pips / max(sl_pips, 1.0), 2),
+        "slPips": round(sl_pips, 1),
+        "tpPips": round(tp_pips, 1),
+        "entryPrice": entry_price,
+        "stopLossPrice": stop_loss,
+        "takeProfitPrice": take_profit,
+        "pipSize": pip_size,
+        "expectedEdgePct": round(float(expected_edge_pct), 4),
+        "warningLadder": warning_ladder,
+        "regime": regime_label,
+        "blockers": blockers[:4],
+    }
 
 
 def _warning_rank(value):
@@ -1042,6 +1209,23 @@ def compute_prediction_from_ta(ta_data):
     execution_state["fakeoutProbability"] = meta_scores["fakeout_probability"]
     execution_state["exitRiskProbability"] = meta_scores["exit_risk_probability"]
     execution_state["expectedEdgePct"] = expected_edge_pct
+    rr_signal_state = _build_rr_signal_state(
+        ta_data=ta_data,
+        strategy_params=strategy_params,
+        verdict=verdict,
+        directional_bias=directional_bias,
+        regime_label=regime_label,
+        alignment_label=alignment_label,
+        action_state=action_state,
+        confidence=confidence,
+        direction_score=direction_score,
+        tradeability_score=tradeability_score,
+        stability_score=stability_score,
+        expected_edge_pct=expected_edge_pct,
+        meta_scores=meta_scores,
+        regime_state=regime_state,
+        no_trade_reasons=no_trade_reasons,
+    )
 
     trade_guidance = compute_trade_guidance(
         ta_data,
@@ -1183,6 +1367,7 @@ def compute_prediction_from_ta(ta_data):
             },
             "confidence_mode": confidence_mode,
             "confidence_bucket": confidence_bucket,
+            "rr_signal": rr_signal_state,
         },
         "TradeGuidance": trade_guidance,
         "RegimeState": {
@@ -1207,6 +1392,7 @@ def compute_prediction_from_ta(ta_data):
         },
         "ForecastState": forecast_state,
         "ExecutionState": execution_state,
+        "RR200Signal": rr_signal_state,
         "_regime_memory": next_regime_memory,
     }
 

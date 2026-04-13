@@ -99,6 +99,9 @@ CHANGE_SUMMARY_ORDER = [
     "warning_ladder",
     "event_regime",
     "breakout_bias",
+    "rr_signal_status",
+    "rr_signal_grade",
+    "rr_signal_direction",
     "market_structure",
     "candle_pattern",
     "verdict",
@@ -203,6 +206,9 @@ def _summarize_changes_for_push(changes):
         "warning_ladder": "Big Move Risk",
         "event_regime": "Event Regime",
         "breakout_bias": "Breakout Bias",
+        "rr_signal_status": "RR200 Signal",
+        "rr_signal_grade": "Quant Grade",
+        "rr_signal_direction": "RR Direction",
         "market_structure": "Market Structure",
         "candle_pattern": "Candle Pattern",
         "verdict": "Verdict",
@@ -232,12 +238,17 @@ def _notification_title_for_changes(changes):
     has_warning = "warning_ladder" in changed_keys
     has_event_regime = "event_regime" in changed_keys
     has_breakout_bias = "breakout_bias" in changed_keys
+    has_rr_status = "rr_signal_status" in changed_keys
+    has_rr_grade = "rr_signal_grade" in changed_keys
+    has_rr_direction = "rr_signal_direction" in changed_keys
     has_verdict = "verdict" in changed_keys
     has_confidence = "confidence_bucket" in changed_keys
     has_permission = "execution_permission" in changed_keys
     has_entry_readiness = "entry_readiness" in changed_keys
     has_exit_urgency = "exit_urgency" in changed_keys
 
+    if has_rr_status or has_rr_grade or has_rr_direction:
+        return "XAUUSD RR200 Signal Changed"
     if has_playbook and has_warning and not has_structure and not has_pattern and not has_permission:
         return "XAUUSD Trade Setup Changed"
     if has_playbook and (has_breakout_bias or has_entry_readiness or has_exit_urgency) and not has_structure and not has_pattern and not has_permission:
@@ -260,13 +271,13 @@ def _notification_title_for_changes(changes):
         return "XAUUSD Trade Setup Changed"
     if has_permission and not has_structure and not has_pattern:
         return "XAUUSD Execution Permission Changed"
-    if (has_playbook or has_verdict or has_confidence or has_warning or has_event_regime or has_breakout_bias or has_entry_readiness or has_exit_urgency) and not has_structure and not has_pattern and not has_permission:
+    if (has_playbook or has_verdict or has_confidence or has_warning or has_event_regime or has_breakout_bias or has_entry_readiness or has_exit_urgency or has_rr_status or has_rr_grade or has_rr_direction) and not has_structure and not has_pattern and not has_permission:
         return "XAUUSD State Changed"
     if has_structure and has_pattern and not has_permission:
         return "XAUUSD Price Action Changed"
     if has_permission and (has_structure or has_pattern or has_verdict or has_confidence or has_warning or has_event_regime or has_playbook or has_breakout_bias or has_entry_readiness or has_exit_urgency):
         return "XAUUSD Structure / Execution Changed"
-    if has_playbook or has_verdict or has_confidence or has_warning or has_event_regime or has_breakout_bias or has_entry_readiness or has_exit_urgency:
+    if has_playbook or has_verdict or has_confidence or has_warning or has_event_regime or has_breakout_bias or has_entry_readiness or has_exit_urgency or has_rr_status or has_rr_grade or has_rr_direction:
         return "XAUUSD State Changed"
     return "XAUUSD Execution Permission Changed"
 
@@ -295,6 +306,9 @@ def _humanize_alert_value(key, value):
         "trade_playbook_stage",
         "event_regime",
         "breakout_bias",
+        "rr_signal_status",
+        "rr_signal_grade",
+        "rr_signal_direction",
         "entry_readiness",
         "exit_urgency",
         "execution_permission",
@@ -528,6 +542,9 @@ def _is_material_change(changes):
         "warning_ladder",
         "event_regime",
         "breakout_bias",
+        "rr_signal_status",
+        "rr_signal_grade",
+        "rr_signal_direction",
         "entry_readiness",
         "exit_urgency",
         "trend",
@@ -1392,6 +1409,7 @@ def _extract_indicator_snapshot(payload):
     pa = ta_data.get("price_action", {}) if isinstance(ta_data, dict) else {}
     regime_state = payload.get("RegimeState", {}) if isinstance(payload, dict) else {}
     trade_playbook = payload.get("TradePlaybook", {}) if isinstance(payload, dict) else {}
+    rr_signal = payload.get("RR200Signal", {}) if isinstance(payload, dict) else {}
     return {
         "trade_playbook_stage": (trade_playbook.get("stage") if isinstance(trade_playbook, dict) else None),
         "warning_ladder": (
@@ -1416,6 +1434,9 @@ def _extract_indicator_snapshot(payload):
         "execution_permission": ((payload.get("ExecutionPermission") or {}).get("text")),
         "entry_readiness": (trade_playbook.get("entryReadiness") if isinstance(trade_playbook, dict) else None),
         "exit_urgency": (trade_playbook.get("exitUrgency") if isinstance(trade_playbook, dict) else None),
+        "rr_signal_status": (rr_signal.get("status") if isinstance(rr_signal, dict) else None),
+        "rr_signal_grade": (rr_signal.get("grade") if isinstance(rr_signal, dict) else None),
+        "rr_signal_direction": (rr_signal.get("direction") if isinstance(rr_signal, dict) else None),
     }
 
 
@@ -1617,6 +1638,7 @@ def _build_prediction_response():
         "RegimeState": prediction.get("RegimeState", {}),
         "ForecastState": forecast_state,
         "ExecutionState": execution_state,
+        "RR200Signal": prediction.get("RR200Signal", {}),
         "DecisionStatus": decision_status,
         "ExecutionPermission": execution_permission,
         "TradePlaybook": trade_playbook,
@@ -1664,6 +1686,9 @@ def _indicator_monitor_loop():
                                 "last_confidence_bucket": "",
                                 "last_entry_readiness": "",
                                 "last_exit_urgency": "",
+                                "last_rr_signal_status": "",
+                                "last_rr_signal_grade": "",
+                                "last_rr_signal_direction": "",
                                 "last_alert_ts": 0,
                                 "last_playbook_alert_ts": 0,
                                 "last_context_alert_ts": 0,
@@ -1686,6 +1711,10 @@ def _indicator_monitor_loop():
                         warning_ladder = str(trade_playbook_payload.get("warningLadder") or (payload.get("RegimeState") or {}).get("warning_ladder") or "")
                         event_regime = str(trade_playbook_payload.get("eventRegime") or (payload.get("RegimeState") or {}).get("event_regime") or "")
                         breakout_bias = str(trade_playbook_payload.get("breakoutBias") or (payload.get("RegimeState") or {}).get("breakout_bias") or "")
+                        rr_signal_payload = payload.get("RR200Signal") or {}
+                        rr_signal_status = str(rr_signal_payload.get("status") or "")
+                        rr_signal_grade = str(rr_signal_payload.get("grade") or "")
+                        rr_signal_direction = str(rr_signal_payload.get("direction") or "")
                         verdict = str(payload.get("verdict") or "")
                         confidence_bucket = _confidence_bucket(payload.get("confidence"))
                         decision_confirmed = bool(decision_payload.get("confirmed"))
@@ -1694,6 +1723,9 @@ def _indicator_monitor_loop():
                         previous_event_regime = str(alert_state.get("last_event_regime", ""))
                         previous_breakout_bias = str(alert_state.get("last_breakout_bias", ""))
                         previous_confidence_bucket = str(alert_state.get("last_confidence_bucket", ""))
+                        previous_rr_signal_status = str(alert_state.get("last_rr_signal_status", ""))
+                        previous_rr_signal_grade = str(alert_state.get("last_rr_signal_grade", ""))
+                        previous_rr_signal_direction = str(alert_state.get("last_rr_signal_direction", ""))
                         playbook_changed = (
                             "trade_playbook_stage" in notification_changes
                             and bool(trade_playbook_stage)
@@ -1753,6 +1785,24 @@ def _indicator_monitor_loop():
                             and confidence_bucket in {"High", "Very High", "Low"}
                         )
                         execution_permission_changed = "execution_permission" in notification_changes and bool(execution_permission)
+                        rr_signal_status_changed = (
+                            "rr_signal_status" in notification_changes
+                            and bool(rr_signal_status)
+                            and rr_signal_status != previous_rr_signal_status
+                            and rr_signal_status in {"arming", "ready"}
+                        )
+                        rr_signal_grade_changed = (
+                            "rr_signal_grade" in notification_changes
+                            and bool(rr_signal_grade)
+                            and rr_signal_grade != previous_rr_signal_grade
+                            and rr_signal_grade in {"A+ (Quant)", "A (High Accuracy)", "B (Qualified)"}
+                        )
+                        rr_signal_direction_changed = (
+                            "rr_signal_direction" in notification_changes
+                            and bool(rr_signal_direction)
+                            and rr_signal_direction != previous_rr_signal_direction
+                            and rr_signal_direction in {"Bullish", "Bearish"}
+                        )
                         entry_readiness_changed = (
                             "entry_readiness" in notification_changes
                             and playbook_changed
@@ -1767,6 +1817,9 @@ def _indicator_monitor_loop():
                             or warning_changed
                             or event_regime_changed
                             or breakout_bias_changed
+                            or rr_signal_status_changed
+                            or rr_signal_grade_changed
+                            or rr_signal_direction_changed
                             or entry_readiness_changed
                             or exit_urgency_changed
                             or
@@ -1780,6 +1833,8 @@ def _indicator_monitor_loop():
                         if market_structure_changed or candle_pattern_changed:
                             signal_class = "price_action"
                         elif execution_permission_changed and decision_confirmed:
+                            signal_class = "execution"
+                        elif rr_signal_status_changed or rr_signal_grade_changed or rr_signal_direction_changed:
                             signal_class = "execution"
                         elif playbook_changed:
                             signal_class = "playbook"
@@ -1818,6 +1873,9 @@ def _indicator_monitor_loop():
                             last_confidence_bucket = str(alert_state.get("last_confidence_bucket", ""))
                             last_entry_readiness = str(alert_state.get("last_entry_readiness", ""))
                             last_exit_urgency = str(alert_state.get("last_exit_urgency", ""))
+                            last_rr_signal_status = str(alert_state.get("last_rr_signal_status", ""))
+                            last_rr_signal_grade = str(alert_state.get("last_rr_signal_grade", ""))
+                            last_rr_signal_direction = str(alert_state.get("last_rr_signal_direction", ""))
                             last_alert_ts = int(alert_state.get("last_alert_ts", 0) or 0)
                             last_playbook_alert_ts = int(alert_state.get("last_playbook_alert_ts", 0) or 0)
                             last_context_alert_ts = int(alert_state.get("last_context_alert_ts", 0) or 0)
@@ -1836,6 +1894,9 @@ def _indicator_monitor_loop():
                             duplicate_confidence = confidence_changed and confidence_bucket == last_confidence_bucket
                             duplicate_entry_readiness = entry_readiness_changed and entry_readiness == last_entry_readiness
                             duplicate_exit_urgency = exit_urgency_changed and exit_urgency == last_exit_urgency
+                            duplicate_rr_signal_status = rr_signal_status_changed and rr_signal_status == last_rr_signal_status
+                            duplicate_rr_signal_grade = rr_signal_grade_changed and rr_signal_grade == last_rr_signal_grade
+                            duplicate_rr_signal_direction = rr_signal_direction_changed and rr_signal_direction == last_rr_signal_direction
                             if (
                                 duplicate_playbook
                                 or duplicate_warning
@@ -1848,6 +1909,9 @@ def _indicator_monitor_loop():
                                 or duplicate_confidence
                                 or duplicate_entry_readiness
                                 or duplicate_exit_urgency
+                                or duplicate_rr_signal_status
+                                or duplicate_rr_signal_grade
+                                or duplicate_rr_signal_direction
                             ) and (now_ts - last_alert_ts) < ALERT_COOLDOWN_SECONDS:
                                 cooldown_suppressed = True
                                 should_alert = False
@@ -1944,6 +2008,9 @@ def _indicator_monitor_loop():
                                 "last_confidence_bucket": confidence_bucket,
                                 "last_entry_readiness": entry_readiness,
                                 "last_exit_urgency": exit_urgency,
+                                "last_rr_signal_status": rr_signal_status,
+                                "last_rr_signal_grade": rr_signal_grade,
+                                "last_rr_signal_direction": rr_signal_direction,
                                 "last_alert_ts": now_ts,
                                 "last_playbook_alert_ts": (
                                     now_ts if signal_class == "playbook" else int(alert_state.get("last_playbook_alert_ts", 0) or 0)
