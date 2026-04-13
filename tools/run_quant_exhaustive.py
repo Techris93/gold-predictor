@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 
-BASE = Path("/Users/chrixchange/.openclaw/workspace/gold-predictor")
+BASE = Path(__file__).resolve().parent.parent
 if str(BASE) not in sys.path:
     sys.path.insert(0, str(BASE))
 
@@ -172,6 +172,7 @@ def parse_args():
 
 def main():
     args = parse_args()
+    OUT_FILE.parent.mkdir(parents=True, exist_ok=True)
     df = pd.read_csv(DATA_FILE, index_col=0, parse_dates=True)
     current = json.loads(CONFIG_FILE.read_text())
     search = build_search_space()

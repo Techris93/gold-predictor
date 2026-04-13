@@ -26,6 +26,11 @@ fi
 PYTHON_EXEC="${PYTHON_EXEC:-$DEFAULT_PYTHON}"
 SCRIPT_PATH="$SCRIPT_DIR/swarm_optimize.py"
 
+if [[ ! -f "$SCRIPT_PATH" ]]; then
+  echo "Missing optimizer script: $SCRIPT_PATH"
+  exit 1
+fi
+
 cd "$SCRIPT_DIR"
 if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   git pull --ff-only origin main >/tmp/gold_swarm_weekly_git_pull.log 2>&1 || true
@@ -35,6 +40,9 @@ if [[ ! -x "$PYTHON_EXEC" ]]; then
   echo "Python executable not found: $PYTHON_EXEC"
   exit 1
 fi
+
+echo "Using PYTHON_EXEC: $PYTHON_EXEC"
+"$PYTHON_EXEC" -V || true
 
 "$PYTHON_EXEC" -u "$SCRIPT_PATH" --serial --period 365d --interval 1h --ticker XAU/USD
 

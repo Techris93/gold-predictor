@@ -14,13 +14,20 @@ echo "================================================="
 echo "Gold (XAUUSD) Prediction Run: $(date)"
 echo "================================================="
 
-# IMPORTANT: Ensure your python path here is correct.
-# If you are using anaconda, you might need to use the explicit path:
-# e.g., /Users/chrixchange/anaconda3/bin/python
-PYTHON_EXEC="python"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SCRIPT_PATH="$SCRIPT_DIR/predict_gold.py"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+DEFAULT_PYTHON="$PROJECT_ROOT/.venv/bin/python"
+if [[ ! -x "$DEFAULT_PYTHON" && -x "$PROJECT_ROOT/.venv313/bin/python" ]]; then
+	DEFAULT_PYTHON="$PROJECT_ROOT/.venv313/bin/python"
+fi
+PYTHON_EXEC="${PYTHON_EXEC:-$DEFAULT_PYTHON}"
 
-$PYTHON_EXEC $SCRIPT_PATH
+if [[ ! -x "$PYTHON_EXEC" ]]; then
+	echo "Python executable not found: $PYTHON_EXEC"
+	exit 1
+fi
+
+cd "$PROJECT_ROOT" || exit 1
+"$PYTHON_EXEC" -m tools.predict_gold
 
 echo ""

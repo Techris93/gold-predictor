@@ -2083,6 +2083,66 @@ def get_autoresearch_latest():
             return top_five
         return []
 
+    def _score_from(report, key):
+        report = report or {}
+        value = report.get(key)
+        if isinstance(value, (int, float)):
+            return value
+
+        best = report.get("best") or {}
+        if isinstance(best, dict):
+            value = best.get(key)
+            if isinstance(value, (int, float)):
+                return value
+
+        top_results = _top_results_from(report)
+        if top_results and isinstance(top_results[0], dict):
+            value = top_results[0].get(key)
+            if isinstance(value, (int, float)):
+                return value
+
+        return None
+
+    def _metric_from(report, key):
+        report = report or {}
+
+        def _value_from_summary(container):
+            if not isinstance(container, dict):
+                return None
+            summary = container.get("summary") or {}
+            value = summary.get(key) if isinstance(summary, dict) else None
+            return value if isinstance(value, (int, float)) else None
+
+        value = report.get(key)
+        if isinstance(value, (int, float)):
+            return value
+
+        value = _value_from_summary(report)
+        if value is not None:
+            return value
+
+        best = report.get("best") or {}
+        if isinstance(best, dict):
+            value = best.get(key)
+            if isinstance(value, (int, float)):
+                return value
+
+            value = _value_from_summary(best)
+            if value is not None:
+                return value
+
+        top_results = _top_results_from(report)
+        if top_results and isinstance(top_results[0], dict):
+            value = top_results[0].get(key)
+            if isinstance(value, (int, float)):
+                return value
+
+            value = _value_from_summary(top_results[0])
+            if value is not None:
+                return value
+
+        return None
+
     if promoted_report_path.exists() or swarm_report_path.exists():
         try:
             promoted_report = _read_report(promoted_report_path) if promoted_report_path.exists() else None
@@ -2094,11 +2154,12 @@ def get_autoresearch_latest():
         display_report = promoted_report or latest_report or {}
         best = _best_params_from(display_report)
         latest_best = _best_params_from(latest_report)
-        latest_summary = _summary_from(latest_report)
         display_summary = _summary_from(display_report)
         top_results = _top_results_from(latest_report) or _top_results_from(display_report)
         top_result = top_results[0] if isinstance(top_results, list) and top_results else {}
-        roi = best.get("roi") or display_summary.get("roi")
+        roi = _metric_from(display_report, "roi")
+        median_score = _metric_from(display_report, "median_score")
+        pass_rate = _metric_from(display_report, "pass_rate")
         latest_generated_at = (latest_report or {}).get("generated_at")
         latest_run_promote = bool((latest_report or {}).get("promote"))
         has_active_promoted_strategy = bool(promoted_report and _best_params_from(promoted_report))
@@ -2122,20 +2183,20 @@ def get_autoresearch_latest():
             "latest_best_params": latest_best,
             "roi": roi,
             "winning_ema": f"{best.get('ema_short', '-')}/{best.get('ema_long', '-')}",
-            "median_score": roi,
-            "pass_rate": display_summary.get("pass_rate"),
+            "median_score": median_score,
+            "pass_rate": pass_rate,
             "summary": {
                 "roi": roi,
                 "top_ranked_candidates": len(top_results),
                 "winning_ema": f"{best.get('ema_short', '-')}/{best.get('ema_long', '-')}",
                 "winning_rsi": f"{best.get('rsi_overbought', '-')}/{best.get('rsi_oversold', '-')}",
                 "winning_cmf": best.get("cmf_window"),
-                "top_candidate_roi": top_result.get("roi") if isinstance(top_result, dict) else None,
+                "top_candidate_roi": _metric_from(top_result, "roi") if isinstance(top_result, dict) else None,
                 "trades": display_summary.get("trades"),
                 "max_drawdown": display_summary.get("max_drawdown"),
                 "profit_factor": display_summary.get("profit_factor"),
                 "expectancy": display_summary.get("expectancy"),
-                "latest_run_roi": latest_summary.get("roi"),
+                "latest_run_roi": _metric_from(latest_report, "roi"),
                 "latest_run_promote": latest_run_promote,
                 "has_active_promoted_strategy": has_active_promoted_strategy,
             },

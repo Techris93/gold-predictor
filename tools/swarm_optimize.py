@@ -236,8 +236,10 @@ def _notify_user(message):
         os.environ.get("OPENCLAW_BIN")
         or shutil.which("openclaw")
         or os.path.expanduser("~/.npm-global/bin/openclaw")
-        or "/Users/chrixchange/.npm-global/bin/openclaw"
     )
+    if not openclaw_bin or not os.path.exists(openclaw_bin):
+        print("⚠️ Skipping notifications: openclaw CLI not found")
+        return
     for channel, target in NOTIFY_CHANNELS:
         if not target:
             continue
