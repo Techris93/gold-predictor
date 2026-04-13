@@ -1,3 +1,17 @@
+.brv/
+data/swarm/cache/
+tools/reports/alert_state.json
+tools/reports/backtest_feature_analysis.json
+tools/reports/decision_state.json
+tools/reports/live_signal_outcomes.json
+tools/reports/live_signal_summary.json
+tools/reports/playbook_state.json
+tools/reports/prediction_state.json
+tools/reports/quant_guided_tuning.json
+tools/reports/quant_tuning_results.json
+tools/reports/regime_memory_state.json
+tools/reports/signal_outcome_summary.json
+tools/reports/tail_event_backtest.json
 __pycache__/
 *.pyc
 .venv/
