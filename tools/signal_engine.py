@@ -97,13 +97,13 @@ DEFAULT_STRATEGY_PARAMS = {
     "rr_signal_tp_pips": 200,
     "rr_signal_target_move_pips": 200,
     "rr_signal_pip_size": 0.01,
-    "rr_signal_min_confidence": 72.0,
-    "rr_signal_min_tradeability_score": 58.0,
-    "rr_signal_min_move_probability": 0.52,
+    "rr_signal_min_confidence": 70.0,
+    "rr_signal_min_tradeability_score": 56.0,
+    "rr_signal_min_move_probability": 0.56,
     "rr_signal_min_expected_edge_pct": 0.05,
     "rr_signal_allow_b_grade": 1,
-    "rr_signal_b_min_move_probability": 0.64,
-    "rr_signal_b_min_session_quality": 0.78,
+    "rr_signal_b_min_move_probability": 0.60,
+    "rr_signal_b_min_session_quality": 0.72,
     "rr_signal_b_require_active_state": 1,
     "rr_signal_allow_soft_no_trade": 1,
     "rr_signal_soft_no_trade_terms": [
@@ -117,6 +117,9 @@ DEFAULT_STRATEGY_PARAMS = {
     "rr_signal_risk_fraction": 0.01,
     "rr_signal_partial_take_profit_pips": 100,
     "rr_signal_move_sl_to_be_after_partial": 1,
+    "rr_signal_trade_hours_utc": [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
+    "rr_signal_require_m15_trigger": 1,
+    "rr_signal_max_signals_per_day": 5,
 }
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -397,6 +400,10 @@ def _build_rr_signal_state(
     allow_soft_no_trade = bool(int(strategy_params.get("rr_signal_allow_soft_no_trade", 1) or 0))
     soft_no_trade_terms = strategy_params.get("rr_signal_soft_no_trade_terms", [])
     soft_no_trade_terms = soft_no_trade_terms if isinstance(soft_no_trade_terms, list) else []
+    allowed_trade_hours = strategy_params.get("rr_signal_trade_hours_utc", [])
+    allowed_trade_hours = [int(h) for h in allowed_trade_hours if isinstance(h, (int, float, str)) and str(h).strip().lstrip("-").isdigit()]
+    allowed_trade_hours = sorted(set(h for h in allowed_trade_hours if 0 <= h <= 23))
+    require_m15_trigger = bool(int(strategy_params.get("rr_signal_require_m15_trigger", 1) or 0))
 
     current_price = float(ta_data.get("current_price") or 0.0)
     atr_percent = float(((ta_data.get("volatility_regime") or {}).get("atr_percent")) or 0.0)
@@ -406,6 +413,9 @@ def _build_rr_signal_state(
     h4_trend = str(mtf.get("h4_trend") or "Neutral")
     support_resistance = ta_data.get("support_resistance", {}) if isinstance(ta_data.get("support_resistance"), dict) else {}
     event_risk = ta_data.get("event_risk", {}) if isinstance(ta_data.get("event_risk"), dict) else {}
+    price_action = ta_data.get("price_action", {}) if isinstance(ta_data.get("price_action"), dict) else {}
+    pa_structure = str(price_action.get("structure") or "")
+    pa_pattern = str(price_action.get("latest_candle_pattern") or "")
     expansion_30m = float(regime_state.get("expansion_probability_30m") or 0.0)
     expansion_60m = float(regime_state.get("expansion_probability_60m") or 0.0)
     big_move_risk = float(regime_state.get("big_move_risk") or 0.0)
@@ -435,6 +445,7 @@ def _build_rr_signal_state(
             now_hour_utc = parsed.astimezone(timezone.utc).hour
         except Exception:
             pass
+    session_allowed = (not allowed_trade_hours) or (now_hour_utc in allowed_trade_hours)
     session_quality = 0.55
     if 7 <= now_hour_utc <= 16:
         session_quality = 0.85  # London + overlap
@@ -498,13 +509,13 @@ def _build_rr_signal_state(
 
     tier = "watch"
     grade = "Watchlist"
-    if quant_score >= 88 and move_probability >= 0.72:
+    if quant_score >= 84 and move_probability >= 0.68:
         tier = "a_plus"
         grade = "A+ (Quant)"
-    elif quant_score >= 80 and move_probability >= 0.64:
+    elif quant_score >= 74 and move_probability >= 0.56:
         tier = "a"
         grade = "A (High Accuracy)"
-    elif quant_score >= 72 and move_probability >= 0.56:
+    elif quant_score >= 66 and move_probability >= 0.48:
         tier = "b"
         grade = "B (Qualified)"
     else:
@@ -536,6 +547,17 @@ def _build_rr_signal_state(
 
     if event_risk.get("active") and tier in {"b", "c"}:
         blockers.append("Event-risk window is active")
+    if not session_allowed:
+        blockers.append("Outside preferred London/NY session window")
+    m15_trigger_ok = (
+        not require_m15_trigger
+        or (
+            (direction == "Bullish" and m15_trend == "Bullish" and ("Bullish" in pa_structure or "Bullish" in pa_pattern))
+            or (direction == "Bearish" and m15_trend == "Bearish" and ("Bearish" in pa_structure or "Bearish" in pa_pattern))
+        )
+    )
+    if not m15_trigger_ok:
+        blockers.append("M15 trigger confirmation is missing")
     if tier == "b":
         if mtf_directional_matches < 3:
             blockers.append("B-grade requires full multi-timeframe alignment")
@@ -617,6 +639,9 @@ def _build_rr_signal_state(
         "regime": regime_label,
         "entryTrigger": trigger,
         "reentryEligible": reentry_eligible,
+        "sessionAllowed": session_allowed,
+        "allowedTradeHoursUtc": allowed_trade_hours,
+        "m15TriggerConfirmed": m15_trigger_ok,
         "blockers": blockers[:4],
     }
 

@@ -5,6 +5,7 @@ import os
 import re
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 import requests
 from tools import predict_gold
@@ -70,6 +71,8 @@ PLAYBOOK_FLIP_MIN_HOLD_SECONDS = _read_int_env("PLAYBOOK_FLIP_MIN_HOLD_SECONDS",
 BOUNDARY_WOBBLE_COOLDOWN_SECONDS = _read_int_env("BOUNDARY_WOBBLE_COOLDOWN_SECONDS", 1200, 0)
 ENTER_STAGE_PROTECT_SECONDS = _read_int_env("ENTER_STAGE_PROTECT_SECONDS", 900, 0)
 NOTIFY_EXIT_READS = _read_bool_env("NOTIFY_EXIT_READS", True)
+RR200_MAX_SIGNALS_PER_DAY = _read_int_env("RR200_MAX_SIGNALS_PER_DAY", 5, 1)
+RR200_MIN_SIGNAL_SPACING_SECONDS = _read_int_env("RR200_MIN_SIGNAL_SPACING_SECONDS", 2700, 0)
 PUSH_EXCLUDED_FIELDS = {
     "rsi_14",
     "ema_20",
@@ -87,6 +90,7 @@ PLAYBOOK_STATE_FILE = BASE_DIR / "tools" / "reports" / "playbook_state.json"
 REGIME_MEMORY_FILE = BASE_DIR / "tools" / "reports" / "regime_memory_state.json"
 LIVE_SIGNAL_OUTCOMES_FILE = BASE_DIR / "tools" / "reports" / "live_signal_outcomes.json"
 LIVE_SIGNAL_SUMMARY_FILE = BASE_DIR / "tools" / "reports" / "live_signal_summary.json"
+RR200_SIGNAL_COUNTER_FILE = BASE_DIR / "tools" / "reports" / "rr200_signal_counter.json"
 VAPID_PUBLIC_KEY = os.getenv("VAPID_PUBLIC_KEY", "")
 VAPID_PRIVATE_KEY = os.getenv("VAPID_PRIVATE_KEY", "")
 VAPID_CLAIMS_SUBJECT = os.getenv("VAPID_CLAIMS_SUBJECT", "mailto:alerts@example.com")
@@ -1530,6 +1534,144 @@ def _update_live_signal_outcomes(current_price, now_ts):
     _save_json_file(LIVE_SIGNAL_SUMMARY_FILE, summary)
 
 
+def _utc_day(ts):
+    return datetime.fromtimestamp(int(ts), tz=timezone.utc).strftime("%Y-%m-%d")
+
+
+def _default_rr200_counter(now_ts):
+    return {
+        "current_day": _utc_day(now_ts),
+        "today": {
+            "total": 0,
+            "tiers": {
+                "A+ (Quant)": 0,
+                "A (High Accuracy)": 0,
+                "B (Qualified)": 0,
+            },
+        },
+        "history": [],
+        "expected_daily": {
+            "total": 0.0,
+            "tiers": {
+                "A+ (Quant)": 0.0,
+                "A (High Accuracy)": 0.0,
+                "B (Qualified)": 0.0,
+            },
+            "rolling_days": 0,
+        },
+        "target_daily": {"min": 2, "max": 5},
+        "last_delivery_ts": 0,
+    }
+
+
+def _recompute_rr200_expected(counter):
+    history = counter.get("history") if isinstance(counter, dict) else []
+    if not isinstance(history, list):
+        history = []
+    rolling = history[-14:]
+    if not rolling:
+        counter["expected_daily"] = _default_rr200_counter(int(time.time())).get("expected_daily", {})
+        return counter
+
+    total_sum = 0.0
+    tier_sum = {"A+ (Quant)": 0.0, "A (High Accuracy)": 0.0, "B (Qualified)": 0.0}
+    for item in rolling:
+        if not isinstance(item, dict):
+            continue
+        total_sum += float(item.get("total", 0) or 0)
+        tiers = item.get("tiers") if isinstance(item.get("tiers"), dict) else {}
+        for key in tier_sum:
+            tier_sum[key] += float(tiers.get(key, 0) or 0)
+    days = max(1, len(rolling))
+    counter["expected_daily"] = {
+        "total": round(total_sum / days, 2),
+        "tiers": {key: round(value / days, 2) for key, value in tier_sum.items()},
+        "rolling_days": days,
+    }
+    return counter
+
+
+def _load_rr200_counter(now_ts):
+    counter = _load_json_file(RR200_SIGNAL_COUNTER_FILE, _default_rr200_counter(now_ts))
+    if not isinstance(counter, dict):
+        counter = _default_rr200_counter(now_ts)
+
+    current_day = _utc_day(now_ts)
+    stored_day = str(counter.get("current_day") or "")
+    if stored_day != current_day:
+        today = counter.get("today") if isinstance(counter.get("today"), dict) else {}
+        if today and int(today.get("total", 0) or 0) > 0 and stored_day:
+            history = counter.get("history") if isinstance(counter.get("history"), list) else []
+            history.append(
+                {
+                    "day": stored_day,
+                    "total": int(today.get("total", 0) or 0),
+                    "tiers": dict(today.get("tiers") or {}),
+                }
+            )
+            counter["history"] = history[-60:]
+        counter["current_day"] = current_day
+        counter["today"] = _default_rr200_counter(now_ts)["today"]
+    return _recompute_rr200_expected(counter)
+
+
+def _rr200_should_deliver(counter, now_ts):
+    today = counter.get("today") if isinstance(counter, dict) else {}
+    today_total = int((today or {}).get("total", 0) or 0)
+    last_delivery_ts = int(counter.get("last_delivery_ts", 0) or 0)
+    if today_total >= RR200_MAX_SIGNALS_PER_DAY:
+        return False
+    if RR200_MIN_SIGNAL_SPACING_SECONDS > 0 and (now_ts - last_delivery_ts) < RR200_MIN_SIGNAL_SPACING_SECONDS:
+        return False
+    return True
+
+
+def _rr200_delivery_allowed_for_payload(payload, now_ts):
+    rr = payload.get("RR200Signal") if isinstance(payload, dict) else {}
+    if not isinstance(rr, dict):
+        return False
+    grade = str(rr.get("grade") or "")
+    if grade not in {"A+ (Quant)", "A (High Accuracy)", "B (Qualified)"}:
+        return False
+    counter = _load_rr200_counter(now_ts)
+    if not _rr200_should_deliver(counter, now_ts):
+        return False
+    today = counter.get("today") if isinstance(counter.get("today"), dict) else {}
+    today_total = int(today.get("total", 0) or 0)
+    if grade in {"A+ (Quant)", "A (High Accuracy)"}:
+        return True
+    return today_total < 2
+
+
+def _record_rr200_delivery(payload, now_ts):
+    rr = payload.get("RR200Signal") if isinstance(payload, dict) else {}
+    if not isinstance(rr, dict):
+        return
+    if str(rr.get("status") or "") != "ready":
+        return
+    grade = str(rr.get("grade") or "")
+    if grade not in {"A+ (Quant)", "A (High Accuracy)", "B (Qualified)"}:
+        return
+
+    counter = _load_rr200_counter(now_ts)
+    if not _rr200_should_deliver(counter, now_ts):
+        return
+    today = counter.get("today") if isinstance(counter.get("today"), dict) else {}
+    tiers = today.get("tiers") if isinstance(today.get("tiers"), dict) else {}
+    tiers[grade] = int(tiers.get(grade, 0) or 0) + 1
+    today["tiers"] = tiers
+    today["total"] = int(today.get("total", 0) or 0) + 1
+    counter["today"] = today
+    counter["last_delivery_ts"] = int(now_ts)
+    counter = _recompute_rr200_expected(counter)
+    _save_json_file(RR200_SIGNAL_COUNTER_FILE, counter)
+
+
+def _rr200_delivery_allowed(now_ts):
+    counter = _load_rr200_counter(now_ts)
+    return _rr200_should_deliver(counter, now_ts)
+
+
 def _build_prediction_response():
     """Central prediction builder used by both HTTP and websocket monitor."""
     ta_data = predict_gold.get_technical_analysis()
@@ -1639,6 +1781,7 @@ def _build_prediction_response():
         "ForecastState": forecast_state,
         "ExecutionState": execution_state,
         "RR200Signal": prediction.get("RR200Signal", {}),
+        "RR200LiveCounter": _load_rr200_counter(int(time.time())),
         "DecisionStatus": decision_status,
         "ExecutionPermission": execution_permission,
         "TradePlaybook": trade_playbook,
@@ -1830,6 +1973,11 @@ def _indicator_monitor_loop():
                             or (execution_permission_changed and decision_confirmed)
                         )
                         signal_class = ""
+                        rr_ready_event = bool(
+                            rr_signal_status_changed
+                            and rr_signal_status == "ready"
+                            and rr_signal_grade in {"A+ (Quant)", "A (High Accuracy)", "B (Qualified)"}
+                        )
                         if market_structure_changed or candle_pattern_changed:
                             signal_class = "price_action"
                         elif execution_permission_changed and decision_confirmed:
@@ -1861,6 +2009,9 @@ def _indicator_monitor_loop():
                             should_alert = False
                         if should_alert and permission_status == "exit_recommended":
                             should_alert = NOTIFY_EXIT_READS
+                        if should_alert and rr_ready_event and not _rr200_delivery_allowed_for_payload(payload, now_ts):
+                            should_alert = False
+                            cooldown_suppressed = True
                         if should_alert:
                             last_trade_playbook_stage = str(alert_state.get("last_trade_playbook_stage", ""))
                             last_execution_permission = str(alert_state.get("last_execution_permission", ""))
@@ -1994,6 +2145,8 @@ def _indicator_monitor_loop():
                             decision_status=payload.get("DecisionStatus"),
                             execution_permission=payload.get("ExecutionPermission"),
                         )
+                        if rr_ready_event:
+                            _record_rr200_delivery(payload, now_ts)
                         _save_json_file(
                             ALERT_STATE_FILE,
                             {

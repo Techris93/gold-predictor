@@ -355,11 +355,16 @@ def _simulate_rr200_v2(df, states, params=None):
     base_risk_fraction = float(strategy_params.get("rr_signal_risk_fraction", 0.01) or 0.01)
     partial_tp_dist = float(strategy_params.get("rr_signal_partial_take_profit_pips", 100.0)) * float(strategy_params.get("rr_signal_pip_size", 0.01))
     move_sl_to_be = bool(int(strategy_params.get("rr_signal_move_sl_to_be_after_partial", 1) or 0))
+    max_signals_per_day = max(1, int(strategy_params.get("rr_signal_max_signals_per_day", 5) or 5))
+    allowed_trade_hours = strategy_params.get("rr_signal_trade_hours_utc", [])
+    allowed_trade_hours = [int(h) for h in allowed_trade_hours if isinstance(h, (int, float, str)) and str(h).strip().lstrip("-").isdigit()]
+    allowed_trade_hours = sorted(set(h for h in allowed_trade_hours if 0 <= h <= 23))
 
     capital = 10000.0
     positions = []
     closed_trades = []
     last_entry_bar_by_direction = {"Bullish": -10_000, "Bearish": -10_000}
+    entries_by_day = {}
     equity_curve = [capital]
 
     def _price(i, col):
@@ -444,8 +449,13 @@ def _simulate_rr200_v2(df, states, params=None):
         direction = str(rr.get("direction") or "Neutral")
         enabled = bool(rr.get("enabled"))
         reentry_eligible = bool(rr.get("reentryEligible"))
+        ts = pd.Timestamp(df.index[i])
+        day_key = str(ts.date())
+        hour = int(ts.hour)
+        within_hours = (not allowed_trade_hours) or (hour in allowed_trade_hours)
+        day_entries = int(entries_by_day.get(day_key, 0))
 
-        if enabled and direction in {"Bullish", "Bearish"} and len(positions) < max_positions:
+        if enabled and direction in {"Bullish", "Bearish"} and len(positions) < max_positions and within_hours and day_entries < max_signals_per_day:
             same_dir_positions = [p for p in positions if p["direction"] == direction]
             enough_gap = (i - int(last_entry_bar_by_direction.get(direction, -10_000))) >= reentry_cooldown
             can_enter = False
@@ -487,6 +497,7 @@ def _simulate_rr200_v2(df, states, params=None):
                     }
                 )
                 last_entry_bar_by_direction[direction] = i
+                entries_by_day[day_key] = day_entries + 1
 
         mtm_equity = capital + sum(_position_unrealized(pos, close) for pos in positions)
         equity_curve.append(mtm_equity)
@@ -517,6 +528,8 @@ def _simulate_rr200_v2(df, states, params=None):
     losses = len(closed_trades) - wins
     accuracy = (wins / len(closed_trades)) if closed_trades else 0.0
     roi = ((capital - 10000.0) / 10000.0) * 100.0
+    traded_days = len({str(pd.Timestamp(df.index[int(trade.get("entry_bar", 0))]).date()) for trade in closed_trades}) if closed_trades else 0
+    avg_trades_per_day = (len(closed_trades) / traded_days) if traded_days > 0 else 0.0
     summary = {
         "trades": len(closed_trades),
         "wins": wins,
@@ -525,6 +538,8 @@ def _simulate_rr200_v2(df, states, params=None):
         "roi": round(roi, 2),
         "max_drawdown_pct": _max_drawdown_from_equity(equity_curve),
         "final_capital": round(capital, 2),
+        "traded_days": traded_days,
+        "avg_trades_per_day": round(avg_trades_per_day, 2),
     }
     return {"trades": closed_trades, "summary": summary}
 

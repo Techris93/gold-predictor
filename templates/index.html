@@ -832,6 +832,14 @@
               <span class="metric-label">Summary</span>
               <span class="metric-value compact" id="rr-summary">---</span>
             </div>
+            <div class="metric-row">
+              <span class="metric-label">Today (A+/A/B)</span>
+              <span class="metric-value compact" id="rr-live-today">---</span>
+            </div>
+            <div class="metric-row">
+              <span class="metric-label">Expected / Day</span>
+              <span class="metric-value compact" id="rr-live-expected">---</span>
+            </div>
           </section>
 
           <section class="section-card span-2">
@@ -2104,6 +2112,33 @@
           rrSummaryEl.innerText =
             rrSignal.statusText ||
             (rrBlockers.length ? rrBlockers[0] : "No RR200 signal yet.");
+        }
+        const rrLive =
+          data.RR200LiveCounter && typeof data.RR200LiveCounter === "object"
+            ? data.RR200LiveCounter
+            : {};
+        const rrToday = rrLive.today && typeof rrLive.today === "object" ? rrLive.today : {};
+        const rrTodayTiers =
+          rrToday.tiers && typeof rrToday.tiers === "object" ? rrToday.tiers : {};
+        const rrExpected =
+          rrLive.expected_daily && typeof rrLive.expected_daily === "object"
+            ? rrLive.expected_daily
+            : {};
+        const rrTarget =
+          rrLive.target_daily && typeof rrLive.target_daily === "object"
+            ? rrLive.target_daily
+            : { min: 2, max: 5 };
+        const rrExpectedTiers =
+          rrExpected.tiers && typeof rrExpected.tiers === "object"
+            ? rrExpected.tiers
+            : {};
+        const rrLiveTodayEl = document.getElementById("rr-live-today");
+        const rrLiveExpectedEl = document.getElementById("rr-live-expected");
+        if (rrLiveTodayEl) {
+          rrLiveTodayEl.innerText = `${Number(rrToday.total || 0).toFixed(0)} (${Number(rrTodayTiers["A+ (Quant)"] || 0).toFixed(0)} / ${Number(rrTodayTiers["A (High Accuracy)"] || 0).toFixed(0)} / ${Number(rrTodayTiers["B (Qualified)"] || 0).toFixed(0)})`;
+        }
+        if (rrLiveExpectedEl) {
+          rrLiveExpectedEl.innerText = `${Number(rrExpected.total || 0).toFixed(2)} target ${Number(rrTarget.min || 2).toFixed(0)}-${Number(rrTarget.max || 5).toFixed(0)} (${Number(rrExpectedTiers["A+ (Quant)"] || 0).toFixed(2)} / ${Number(rrExpectedTiers["A (High Accuracy)"] || 0).toFixed(2)} / ${Number(rrExpectedTiers["B (Qualified)"] || 0).toFixed(2)})`;
         }
 
         const tradeGuidance =
