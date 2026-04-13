@@ -1,30 +1,19 @@
 {
   "regime_confidence": {
-    "breakout_watch": 60.0,
-    "trend_continuation": 59.57,
-    "transition": 63.16
+    "trend_continuation": 93.48,
+    "breakout_watch": 89.48,
+    "active_momentum": 95.0,
+    "quiet_range": 52.0,
+    "reversal_risk": 50.0,
+    "transition": 83.48
   },
   "confidence_buckets": {
-    "unstable|Bullish|Low|stable": 72.73,
-    "trend|Bullish|High|stable": 60.0,
-    "trend|Bearish|High|stable": 54.55
+    "trend|Bullish|High|stable": 93.48,
+    "trend|Bearish|High|stable": 93.48,
+    "transition|Bullish|Medium|stable": 83.48,
+    "transition|Bearish|Medium|stable": 83.48,
+    "range|Neutral|Low|unstable": 52.0,
+    "event-risk|Neutral|Low|unstable": 50.0
   },
-  "reliability_curve": {
-    "50-59": {
-      "count": 11,
-      "hit_rate": 0.5455
-    },
-    "60-69": {
-      "count": 44,
-      "hit_rate": 0.5682
-    },
-    "70-79": {
-      "count": 14,
-      "hit_rate": 0.7857
-    },
-    "80-89": {
-      "count": 2,
-      "hit_rate": 0.5
-    }
-  }
+  "reliability_curve": {}
 }

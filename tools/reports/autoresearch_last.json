@@ -1,169 +1,78 @@
 {
-  "generated_at": "2026-03-17T19:18:08.660797+00:00",
+  "generated_at": "2026-04-10T11:40:25.903323+00:00",
   "top_5": [
     {
       "params": {
-        "ema_short": 20,
-        "ema_long": 50,
+        "ema_short": 9,
+        "ema_long": 26,
         "rsi_overbought": 65,
         "rsi_oversold": 20,
         "cmf_window": 14
       },
-      "median_score": 12.464184283771345,
-      "mean_score": 50.437373397286684,
-      "folds": 100,
-      "pass_rate": 0.6,
+      "median_score": -17.907822386612704,
+      "mean_score": -17.907822386612704,
+      "folds": 2,
+      "pass_rate": 0.0,
       "summary": {
-        "trades": 3.0,
-        "roi": 1.1760399744502048,
-        "cagr": 50.64214556597484,
-        "max_drawdown": 0.8642696591010587,
-        "win_rate": 50.0,
-        "profit_factor": 1.7768350418858567,
-        "expectancy": 0.3094228222161115,
-        "sharpe": 0.1236490318724541
-      }
-    },
-    {
-      "params": {
-        "ema_short": 20,
-        "ema_long": 50,
-        "rsi_overbought": 65,
-        "rsi_oversold": 25,
-        "cmf_window": 14
-      },
-      "median_score": 12.464184283771345,
-      "mean_score": 50.437373397286684,
-      "folds": 100,
-      "pass_rate": 0.6,
-      "summary": {
-        "trades": 3.0,
-        "roi": 1.1760399744502048,
-        "cagr": 50.64214556597484,
-        "max_drawdown": 0.8642696591010587,
-        "win_rate": 50.0,
-        "profit_factor": 1.7768350418858567,
-        "expectancy": 0.3094228222161115,
-        "sharpe": 0.1236490318724541
-      }
-    },
-    {
-      "params": {
-        "ema_short": 20,
-        "ema_long": 50,
-        "rsi_overbought": 65,
-        "rsi_oversold": 30,
-        "cmf_window": 14
-      },
-      "median_score": 12.464184283771345,
-      "mean_score": 50.437373397286684,
-      "folds": 100,
-      "pass_rate": 0.6,
-      "summary": {
-        "trades": 3.0,
-        "roi": 1.1760399744502048,
-        "cagr": 50.64214556597484,
-        "max_drawdown": 0.8642696591010587,
-        "win_rate": 50.0,
-        "profit_factor": 1.7768350418858567,
-        "expectancy": 0.3094228222161115,
-        "sharpe": 0.1236490318724541
-      }
-    },
-    {
-      "params": {
-        "ema_short": 20,
-        "ema_long": 50,
-        "rsi_overbought": 70,
-        "rsi_oversold": 20,
-        "cmf_window": 14
-      },
-      "median_score": 12.464184283771345,
-      "mean_score": 50.437373397286684,
-      "folds": 100,
-      "pass_rate": 0.6,
-      "summary": {
-        "trades": 3.0,
-        "roi": 1.1760399744502048,
-        "cagr": 50.64214556597484,
-        "max_drawdown": 0.8642696591010587,
-        "win_rate": 50.0,
-        "profit_factor": 1.7768350418858567,
-        "expectancy": 0.3094228222161115,
-        "sharpe": 0.1236490318724541
-      }
-    },
-    {
-      "params": {
-        "ema_short": 20,
-        "ema_long": 50,
-        "rsi_overbought": 70,
-        "rsi_oversold": 25,
-        "cmf_window": 14
-      },
-      "median_score": 12.464184283771345,
-      "mean_score": 50.437373397286684,
-      "folds": 100,
-      "pass_rate": 0.6,
-      "summary": {
-        "trades": 3.0,
-        "roi": 1.1760399744502048,
-        "cagr": 50.64214556597484,
-        "max_drawdown": 0.8642696591010587,
-        "win_rate": 50.0,
-        "profit_factor": 1.7768350418858567,
-        "expectancy": 0.3094228222161115,
-        "sharpe": 0.1236490318724541
+        "trades": 10.5,
+        "roi": -5.594241409844159,
+        "cagr": -47.20700769726071,
+        "max_drawdown": 11.874807583212922,
+        "win_rate": 52.77777777777778,
+        "profit_factor": 0.6419824494477523,
+        "expectancy": -0.4707857904145117,
+        "sharpe": -0.6085459880568249
       }
     }
   ],
   "baseline": {
     "params": {
       "ema_short": 20,
-      "ema_long": 50,
+      "ema_long": 100,
       "rsi_overbought": 70,
-      "rsi_oversold": 25,
+      "rsi_oversold": 20,
       "cmf_window": 14
     },
-    "median_score": 12.464184283771345,
-    "mean_score": 50.437373397286684,
-    "folds": 100,
-    "pass_rate": 0.6,
+    "median_score": -23.16182772825418,
+    "mean_score": -23.16182772825418,
+    "folds": 2,
+    "pass_rate": 0.0,
     "summary": {
-      "trades": 3.0,
-      "roi": 1.1760399744502048,
-      "cagr": 50.64214556597484,
-      "max_drawdown": 0.8642696591010587,
-      "win_rate": 50.0,
-      "profit_factor": 1.7768350418858567,
-      "expectancy": 0.3094228222161115,
-      "sharpe": 0.1236490318724541
+      "trades": 7.5,
+      "roi": -7.541206026310594,
+      "cagr": -59.92520367193135,
+      "max_drawdown": 9.464202993777793,
+      "win_rate": 41.07142857142857,
+      "profit_factor": 0.4008102167236747,
+      "expectancy": -0.9819445200942374,
+      "sharpe": -0.8557299514733665
     }
   },
   "best": {
     "params": {
-      "ema_short": 20,
-      "ema_long": 50,
+      "ema_short": 9,
+      "ema_long": 26,
       "rsi_overbought": 65,
       "rsi_oversold": 20,
       "cmf_window": 14
     },
-    "median_score": 12.464184283771345,
-    "mean_score": 50.437373397286684,
-    "folds": 100,
-    "pass_rate": 0.6,
+    "median_score": -17.907822386612704,
+    "mean_score": -17.907822386612704,
+    "folds": 2,
+    "pass_rate": 0.0,
     "summary": {
-      "trades": 3.0,
-      "roi": 1.1760399744502048,
-      "cagr": 50.64214556597484,
-      "max_drawdown": 0.8642696591010587,
-      "win_rate": 50.0,
-      "profit_factor": 1.7768350418858567,
-      "expectancy": 0.3094228222161115,
-      "sharpe": 0.1236490318724541
+      "trades": 10.5,
+      "roi": -5.594241409844159,
+      "cagr": -47.20700769726071,
+      "max_drawdown": 11.874807583212922,
+      "win_rate": 52.77777777777778,
+      "profit_factor": 0.6419824494477523,
+      "expectancy": -0.4707857904145117,
+      "sharpe": -0.6085459880568249
     }
   },
-  "promote": true,
-  "promotion_mode": "manual",
-  "promotion_reason": "Manual promote: Manual approval for this run"
+  "promote": false,
+  "promotion_mode": "auto",
+  "promotion_reason": "Hold: score delta 5.254, pass_rate 0.00, pf 0.64.",
+  "evaluation_mode": "monthly_walkforward"
 }
