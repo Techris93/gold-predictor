@@ -1,12 +1,6 @@
 {
   "windows": [
     {
-      "name": "CPI",
-      "start": "2026-04-10T12:00:00Z",
-      "end": "2026-04-10T13:45:00Z",
-      "reason": "Consumer Price Index release date from the St. Louis Fed FRED release calendar for April 10, 2026; FRED notes dates are published by the source."
-    },
-    {
       "name": "PPI",
       "start": "2026-04-14T12:00:00Z",
       "end": "2026-04-14T13:45:00Z",
