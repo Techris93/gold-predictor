@@ -347,13 +347,13 @@ def _simulate_rr200_v2(df, states, params=None):
         }
 
     strategy_params = normalize_strategy_params(params or ACTIVE_BACKTEST_PARAMS)
-    sl_dist = float(strategy_params.get("rr_signal_sl_pips", 100.0)) * float(strategy_params.get("rr_signal_pip_size", 0.01))
-    tp_dist = float(strategy_params.get("rr_signal_tp_pips", 200.0)) * float(strategy_params.get("rr_signal_pip_size", 0.01))
+    sl_dist = float(strategy_params.get("rr_signal_sl_pips", 100.0)) * float(strategy_params.get("rr_signal_pip_size", 0.1))
+    tp_dist = float(strategy_params.get("rr_signal_tp_pips", 200.0)) * float(strategy_params.get("rr_signal_pip_size", 0.1))
     max_hold_bars = max(2, int(strategy_params.get("rr_signal_max_hold_bars", 24) or 24))
     max_positions = max(1, int(strategy_params.get("rr_signal_max_concurrent_positions", 2) or 2))
     reentry_cooldown = max(1, int(strategy_params.get("rr_signal_reentry_cooldown_bars", 4) or 4))
     base_risk_fraction = float(strategy_params.get("rr_signal_risk_fraction", 0.01) or 0.01)
-    partial_tp_dist = float(strategy_params.get("rr_signal_partial_take_profit_pips", 100.0)) * float(strategy_params.get("rr_signal_pip_size", 0.01))
+    partial_tp_dist = float(strategy_params.get("rr_signal_partial_take_profit_pips", 100.0)) * float(strategy_params.get("rr_signal_pip_size", 0.1))
     move_sl_to_be = bool(int(strategy_params.get("rr_signal_move_sl_to_be_after_partial", 1) or 0))
     max_signals_per_day = max(1, int(strategy_params.get("rr_signal_max_signals_per_day", 5) or 5))
     allowed_trade_hours = strategy_params.get("rr_signal_trade_hours_utc", [])

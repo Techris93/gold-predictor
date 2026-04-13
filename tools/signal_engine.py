@@ -96,7 +96,7 @@ DEFAULT_STRATEGY_PARAMS = {
     "rr_signal_sl_pips": 100,
     "rr_signal_tp_pips": 200,
     "rr_signal_target_move_pips": 200,
-    "rr_signal_pip_size": 0.01,
+    "rr_signal_pip_size": 0.1,
     "rr_signal_min_confidence": 70.0,
     "rr_signal_min_tradeability_score": 56.0,
     "rr_signal_min_move_probability": 0.56,
@@ -388,7 +388,7 @@ def _build_rr_signal_state(
     sl_pips = max(1.0, float(strategy_params.get("rr_signal_sl_pips", 100) or 100))
     tp_pips = max(1.0, float(strategy_params.get("rr_signal_tp_pips", 200) or 200))
     target_move_pips = max(1.0, float(strategy_params.get("rr_signal_target_move_pips", 200) or 200))
-    pip_size = max(0.0001, float(strategy_params.get("rr_signal_pip_size", 0.01) or 0.01))
+    pip_size = max(0.0001, float(strategy_params.get("rr_signal_pip_size", 0.1) or 0.1))
     min_confidence = float(strategy_params.get("rr_signal_min_confidence", 80.0) or 80.0)
     min_tradeability_score = float(strategy_params.get("rr_signal_min_tradeability_score", 68.0) or 68.0)
     min_move_probability = float(strategy_params.get("rr_signal_min_move_probability", 0.64) or 0.64)
