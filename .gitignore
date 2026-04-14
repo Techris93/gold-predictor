@@ -12,6 +12,9 @@ tools/reports/quant_tuning_results.json
 tools/reports/regime_memory_state.json
 tools/reports/signal_outcome_summary.json
 tools/reports/tail_event_backtest.json
+tools/reports/autoresearch_jobs/
+tools/reports/llm_kb/
+tools/llm_kb_gold.sh
 __pycache__/
 *.pyc
 .venv/

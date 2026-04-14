@@ -20,12 +20,14 @@ import itertools
 import json
 import math
 import os
-import sys
 import subprocess
+import sys
+from collections import OrderedDict
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
@@ -37,6 +39,15 @@ if str(BASE_DIR) not in sys.path:
 load_dotenv(BASE_DIR / ".env")
 
 from tools.yahoo_market_data import fetch_history as fetch_yf_history
+from tools.autoresearch_job import (
+    AutoResearchJobPaths,
+    append_jsonl,
+    atomic_write_json,
+    candidate_key,
+    load_json,
+    load_jsonl,
+    utc_now_iso,
+)
 from tools.twelvedata_market_data import fetch_history as fetch_td_history
 from tools.backtest import ACTIVE_BACKTEST_PARAMS
 from tools.signal_engine import (
@@ -54,6 +65,11 @@ ACTIVE_BACKTEST_PARAMS_SOURCE = BASE_DIR / "config" / "backtest_params.json"
 ACTIVE_RESEARCH_SNAPSHOT_FILE = BASE_DIR / "tools" / "reports" / "autoresearch_active.json"
 TRACKED_STRATEGY_KEYS = ("ema_short", "ema_long", "rsi_overbought", "rsi_oversold", "cmf_window")
 FALLBACK_HISTORY_FILE = BASE_DIR / "data" / "cache" / "market_history" / "XAU_USD_365d_1h.csv"
+DEFAULT_FEATURE_CACHE_SIZE = max(12, min(96, int(os.getenv("AUTORESEARCH_FEATURE_CACHE_SIZE", "48") or "48")))
+
+_WORKER_BASE_DF: pd.DataFrame | None = None
+_FEATURE_FRAME_CACHE: OrderedDict[tuple[object, ...], pd.DataFrame] = OrderedDict()
+_FEATURE_FRAME_CACHE_LIMIT = DEFAULT_FEATURE_CACHE_SIZE
 
 
 @dataclass(frozen=True)
@@ -72,6 +88,39 @@ class StrategyParams:
             "rsi_oversold": self.rsi_oversold,
             "cmf_window": self.cmf_window,
         }
+
+
+def _default_worker_count() -> int:
+    cpu_total = os.cpu_count() or 1
+    return max(1, min(8, cpu_total - 1 if cpu_total > 1 else 1))
+
+
+def _reset_feature_cache(limit: int | None = None) -> None:
+    global _FEATURE_FRAME_CACHE, _FEATURE_FRAME_CACHE_LIMIT
+    _FEATURE_FRAME_CACHE = OrderedDict()
+    if isinstance(limit, int) and limit > 0:
+        _FEATURE_FRAME_CACHE_LIMIT = limit
+
+
+def _get_feature_cache(cache_key: tuple[object, ...]) -> pd.DataFrame | None:
+    cached = _FEATURE_FRAME_CACHE.get(cache_key)
+    if cached is None:
+        return None
+    _FEATURE_FRAME_CACHE.move_to_end(cache_key)
+    return cached
+
+
+def _set_feature_cache(cache_key: tuple[object, ...], frame: pd.DataFrame) -> None:
+    _FEATURE_FRAME_CACHE[cache_key] = frame
+    _FEATURE_FRAME_CACHE.move_to_end(cache_key)
+    while len(_FEATURE_FRAME_CACHE) > _FEATURE_FRAME_CACHE_LIMIT:
+        _FEATURE_FRAME_CACHE.popitem(last=False)
+
+
+def _init_evaluation_worker(base_df: pd.DataFrame, feature_cache_size: int) -> None:
+    global _WORKER_BASE_DF
+    _WORKER_BASE_DF = base_df
+    _reset_feature_cache(feature_cache_size)
 
 
 def _read_json_dict(path: Path) -> Dict[str, object]:
@@ -180,8 +229,20 @@ def _to_strategy_dict(p: StrategyParams) -> Dict[str, int]:
     return normalize_strategy_params(merged)
 
 
-def compute_indicators(df: pd.DataFrame, p: StrategyParams) -> pd.DataFrame:
-    return prepare_historical_features(df, normalize_strategy_params(_to_strategy_dict(p)))
+def compute_indicators(
+    df: pd.DataFrame,
+    p: StrategyParams,
+    cache_key: tuple[object, ...] | None = None,
+) -> pd.DataFrame:
+    if cache_key is not None:
+        cached = _get_feature_cache(cache_key)
+        if cached is not None:
+            return cached
+
+    enriched = prepare_historical_features(df, normalize_strategy_params(_to_strategy_dict(p)))
+    if cache_key is not None:
+        _set_feature_cache(cache_key, enriched)
+    return enriched
 
 
 def interval_to_minutes(interval: str) -> int:
@@ -211,8 +272,8 @@ def interval_to_minutes(interval: str) -> int:
     return 60
 
 
-def generate_signals(df: pd.DataFrame, p: StrategyParams) -> pd.Series:
-    enriched = compute_indicators(df, p)
+def generate_signals(df: pd.DataFrame, p: StrategyParams, precomputed: bool = False) -> pd.Series:
+    enriched = df if precomputed else compute_indicators(df, p)
     signals = pd.Series("Neutral", index=enriched.index, dtype="object")
     strategy_params = _to_strategy_dict(p)
     regime_memory: Dict[str, object] = {}
@@ -375,47 +436,33 @@ def walkforward_ranges(n: int, train_bars: int, test_bars: int, step_bars: int) 
     return ranges
 
 
-def evaluate_params(
-    base_df: pd.DataFrame,
-    p: StrategyParams,
-    train_bars: int,
-    test_bars: int,
-    step_bars: int,
-    fee_bps: float,
-    slippage_bps: float,
-    interval_minutes: int,
-) -> Dict[str, object]:
-    spans = walkforward_ranges(len(base_df), train_bars, test_bars, step_bars)
+def select_walkforward_ranges(
+    spans: List[Tuple[int, int, int, int]],
+    max_folds: int | None = None,
+) -> List[Tuple[int, int, int, int]]:
     if not spans:
-        raise RuntimeError("Not enough data for walk-forward evaluation.")
+        return []
+    if not isinstance(max_folds, int) or max_folds <= 0 or len(spans) <= max_folds:
+        return spans
 
-    fold_scores: List[float] = []
-    fold_metrics: List[Dict[str, float]] = []
+    indices = np.linspace(0, len(spans) - 1, num=max_folds, dtype=int)
+    selected_indices: List[int] = []
+    seen = set()
+    for idx in indices.tolist():
+        if idx not in seen:
+            selected_indices.append(idx)
+            seen.add(idx)
+    if (len(spans) - 1) not in seen:
+        selected_indices.append(len(spans) - 1)
+    return [spans[idx] for idx in sorted(selected_indices)]
 
-    for train_start, train_end, test_start, test_end in spans:
-        warmup_start = max(train_start, train_end - max(60, p.ema_long + 5))
-        fold_df = base_df.iloc[warmup_start:test_end].copy()
 
-        with_ind = compute_indicators(fold_df, p)
-        if with_ind.empty:
-            continue
-
-        signals = generate_signals(with_ind, p)
-
-        test_index = with_ind.index[(with_ind.index >= base_df.index[test_start]) & (with_ind.index <= base_df.index[test_end - 1])]
-        if len(test_index) < 5:
-            continue
-
-        local = with_ind.loc[test_index]
-        local_signals = signals.loc[test_index]
-
-        trades = simulate_trades(local, local_signals, fee_bps=fee_bps, slippage_bps=slippage_bps)
-        metrics = compute_metrics(trades, bars_in_test=len(local), bar_minutes=interval_minutes)
-        score = composite_score(metrics)
-
-        fold_metrics.append(metrics)
-        fold_scores.append(score)
-
+def summarize_fold_results(
+    p: StrategyParams,
+    fold_scores: List[float],
+    fold_metrics: List[Dict[str, float]],
+    planned_folds: int,
+) -> Dict[str, object]:
     if not fold_scores:
         return {
             "params": p.as_dict(),
@@ -425,16 +472,21 @@ def evaluate_params(
             "weighted_median_score": -999.0,
             "ranking_score": -999.0,
             "folds": 0,
+            "completed_folds": 0,
+            "planned_folds": int(planned_folds),
+            "pass_count": 0,
             "pass_rate": 0.0,
             "recency_weighted_pass_rate": 0.0,
             "summary": {},
+            "pruned": False,
+            "prune_reason": "",
         }
 
     folds = len(fold_metrics)
     recency_weights = np.linspace(0.75, 1.35, folds)
     fold_score_array = np.array(fold_scores, dtype=float)
     weighted_median_score = weighted_median(fold_score_array, recency_weights)
-    recent_median_score = float(np.median(fold_score_array[-min(3, len(fold_score_array)):]))
+    recent_median_score = float(np.median(fold_score_array[-min(3, len(fold_score_array)) :]))
     ranking_score = float(
         (0.50 * weighted_median_score)
         + (0.30 * float(np.median(fold_score_array)))
@@ -447,15 +499,21 @@ def evaluate_params(
 
     pass_count = 0
     pass_flags: List[float] = []
-    for m in fold_metrics:
-        passed = m["profit_factor"] >= 1.15 and m["max_drawdown"] <= 20 and m["expectancy"] > 0
+    for metrics in fold_metrics:
+        passed = (
+            metrics["profit_factor"] >= 1.15
+            and metrics["max_drawdown"] <= 20
+            and metrics["expectancy"] > 0
+        )
         if passed:
             pass_count += 1
         pass_flags.append(1.0 if passed else 0.0)
 
     pass_rate = pass_count / folds
     weighted_score = float(np.average(fold_score_array, weights=recency_weights))
-    recency_weighted_pass_rate = float(np.average(np.array(pass_flags, dtype=float), weights=recency_weights)) if pass_flags else 0.0
+    recency_weighted_pass_rate = (
+        float(np.average(np.array(pass_flags, dtype=float), weights=recency_weights)) if pass_flags else 0.0
+    )
 
     summary = {
         "trades": weighted("trades"),
@@ -480,10 +538,126 @@ def evaluate_params(
         "weighted_median_score": weighted_median_score,
         "ranking_score": ranking_score,
         "folds": folds,
+        "completed_folds": folds,
+        "planned_folds": int(planned_folds),
+        "pass_count": int(pass_count),
         "pass_rate": float(pass_rate),
         "recency_weighted_pass_rate": recency_weighted_pass_rate,
         "summary": summary,
+        "pruned": False,
+        "prune_reason": "",
     }
+
+
+def maybe_prune_candidate(
+    partial_result: Dict[str, object],
+    baseline_reference: Dict[str, object] | None,
+    prune_config: Dict[str, float] | None,
+) -> str:
+    if not isinstance(prune_config, dict) or not prune_config:
+        return ""
+
+    completed_folds = int(partial_result.get("completed_folds", partial_result.get("folds", 0)) or 0)
+    planned_folds = int(partial_result.get("planned_folds", completed_folds) or completed_folds)
+    min_folds = int(prune_config.get("min_folds", 0) or 0)
+    if completed_folds < min_folds:
+        return ""
+
+    summary = partial_result.get("summary") if isinstance(partial_result.get("summary"), dict) else {}
+    baseline_score = float((baseline_reference or {}).get("ranking_score", -999.0) or -999.0)
+    baseline_margin = float(prune_config.get("baseline_margin", 0.75) or 0.75)
+    min_profit_factor = float(prune_config.get("min_profit_factor", 0.0) or 0.0)
+    min_expectancy = float(prune_config.get("min_expectancy", 0.0) or 0.0)
+    min_roi = float(prune_config.get("min_roi", -999.0) or -999.0)
+    required_pass_rate = float(prune_config.get("required_pass_rate", 0.0) or 0.0)
+
+    current_ranking = float(partial_result.get("ranking_score", -999.0) or -999.0)
+    current_profit_factor = float(summary.get("profit_factor", 0.0) or 0.0)
+    current_expectancy = float(summary.get("expectancy", 0.0) or 0.0)
+    current_roi = float(summary.get("roi", 0.0) or 0.0)
+
+    if current_profit_factor < min_profit_factor and current_expectancy <= min_expectancy:
+        return f"Pruned after {completed_folds} folds: profit factor {current_profit_factor:.2f} and expectancy {current_expectancy:.3f} stayed too weak."
+
+    if baseline_score > -900 and current_ranking < (baseline_score - baseline_margin):
+        return f"Pruned after {completed_folds} folds: ranking score {current_ranking:.3f} fell materially below baseline {baseline_score:.3f}."
+
+    remaining_folds = max(0, planned_folds - completed_folds)
+    pass_count = int(partial_result.get("pass_count", 0) or 0)
+    max_possible_pass_rate = (pass_count + remaining_folds) / max(1, planned_folds)
+    if required_pass_rate > 0 and max_possible_pass_rate < required_pass_rate:
+        return f"Pruned after {completed_folds} folds: maximum reachable pass rate {max_possible_pass_rate:.2f} cannot clear the stage floor {required_pass_rate:.2f}."
+
+    if completed_folds >= (min_folds + 1) and current_roi < min_roi and current_profit_factor < min_profit_factor:
+        return f"Pruned after {completed_folds} folds: ROI {current_roi:.3f} and profit factor {current_profit_factor:.2f} are not recovering."
+
+    return ""
+
+
+def evaluate_params(
+    base_df: pd.DataFrame,
+    p: StrategyParams,
+    train_bars: int,
+    test_bars: int,
+    step_bars: int,
+    fee_bps: float,
+    slippage_bps: float,
+    interval_minutes: int,
+    max_folds: int | None = None,
+    baseline_reference: Dict[str, object] | None = None,
+    prune_config: Dict[str, float] | None = None,
+    stage_name: str = "",
+) -> Dict[str, object]:
+    spans = walkforward_ranges(len(base_df), train_bars, test_bars, step_bars)
+    if not spans:
+        raise RuntimeError("Not enough data for walk-forward evaluation.")
+    selected_spans = select_walkforward_ranges(spans, max_folds=max_folds)
+
+    fold_scores: List[float] = []
+    fold_metrics: List[Dict[str, float]] = []
+
+    for train_start, train_end, test_start, test_end in selected_spans:
+        warmup_start = max(train_start, train_end - max(60, p.ema_long + 5))
+        fold_df = base_df.iloc[warmup_start:test_end].copy()
+        feature_cache_key = (
+            int(warmup_start),
+            int(test_end),
+            int(p.ema_short),
+            int(p.ema_long),
+            int(p.cmf_window),
+        )
+
+        with_ind = compute_indicators(fold_df, p, cache_key=feature_cache_key)
+        if with_ind.empty:
+            continue
+
+        signals = generate_signals(with_ind, p, precomputed=True)
+
+        test_index = with_ind.index[(with_ind.index >= base_df.index[test_start]) & (with_ind.index <= base_df.index[test_end - 1])]
+        if len(test_index) < 5:
+            continue
+
+        local = with_ind.loc[test_index]
+        local_signals = signals.loc[test_index]
+
+        trades = simulate_trades(local, local_signals, fee_bps=fee_bps, slippage_bps=slippage_bps)
+        metrics = compute_metrics(trades, bars_in_test=len(local), bar_minutes=interval_minutes)
+        score = composite_score(metrics)
+
+        fold_metrics.append(metrics)
+        fold_scores.append(score)
+
+        partial_result = summarize_fold_results(p, fold_scores, fold_metrics, planned_folds=len(selected_spans))
+        prune_reason = maybe_prune_candidate(partial_result, baseline_reference, prune_config)
+        if prune_reason:
+            partial_result["stage"] = stage_name
+            partial_result["pruned"] = True
+            partial_result["prune_reason"] = prune_reason
+            return partial_result
+
+    final_result = summarize_fold_results(p, fold_scores, fold_metrics, planned_folds=len(selected_spans))
+    final_result["stage"] = stage_name
+    return final_result
 
 
 def parse_int_values(raw: str) -> List[int]:
@@ -531,16 +705,562 @@ def param_grid(
     return grid
 
 
-def make_report(results: List[Dict[str, object]], baseline: Dict[str, object]) -> Dict[str, object]:
-    ranked = sorted(
-        results,
+def rank_results(results: List[Dict[str, object]]) -> List[Dict[str, object]]:
+    return sorted(
+        list(results or []),
         key=lambda r: (
-            r.get("ranking_score", r.get("weighted_median_score", r["median_score"])),
-            r.get("recency_weighted_pass_rate", r["pass_rate"]),
-            r["median_score"],
+            r.get("ranking_score", r.get("weighted_median_score", r.get("median_score", -999.0))),
+            r.get("recency_weighted_pass_rate", r.get("pass_rate", 0.0)),
+            r.get("median_score", -999.0),
         ),
         reverse=True,
     )
+
+
+def result_brief(result: Dict[str, object]) -> Dict[str, object]:
+    summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+    return {
+        "candidate_key": result.get("candidate_key"),
+        "params": result.get("params", {}),
+        "ranking_score": result.get("ranking_score"),
+        "weighted_median_score": result.get("weighted_median_score"),
+        "pass_rate": result.get("pass_rate"),
+        "recency_weighted_pass_rate": result.get("recency_weighted_pass_rate"),
+        "profit_factor": summary.get("profit_factor"),
+        "roi": summary.get("roi"),
+        "max_drawdown": summary.get("max_drawdown"),
+        "folds": result.get("folds"),
+        "planned_folds": result.get("planned_folds"),
+        "pruned": bool(result.get("pruned")),
+        "prune_reason": result.get("prune_reason", ""),
+        "error": result.get("error", ""),
+    }
+
+
+def params_from_dict(params: Dict[str, object]) -> StrategyParams:
+    return StrategyParams(
+        int(params.get("ema_short", 20)),
+        int(params.get("ema_long", 50)),
+        int(params.get("rsi_overbought", 70)),
+        int(params.get("rsi_oversold", 20)),
+        int(params.get("cmf_window", 14)),
+    )
+
+
+def sort_candidates(candidates: List[StrategyParams]) -> List[StrategyParams]:
+    unique: Dict[Tuple[int, int, int, int, int], StrategyParams] = {}
+    for candidate in candidates:
+        unique[(candidate.ema_short, candidate.ema_long, candidate.rsi_overbought, candidate.rsi_oversold, candidate.cmf_window)] = candidate
+    return sorted(
+        unique.values(),
+        key=lambda p: (p.ema_short, p.ema_long, p.cmf_window, p.rsi_overbought, p.rsi_oversold),
+    )
+
+
+def trim_candidate_list(candidates: List[StrategyParams], limit: int | None = None) -> List[StrategyParams]:
+    ordered = sort_candidates(candidates)
+    if isinstance(limit, int) and limit > 0:
+        return ordered[:limit]
+    return ordered
+
+
+def _expand_parameter_values(
+    base_values: List[int],
+    deltas: List[int],
+    minimum: int,
+    maximum: int,
+    limit: int,
+) -> List[int]:
+    if not base_values:
+        return []
+    expanded = set()
+    for value in base_values:
+        for delta in deltas:
+            candidate = value + delta
+            if minimum <= candidate <= maximum:
+                expanded.add(candidate)
+    center = int(round(float(np.median(np.array(base_values, dtype=float)))))
+    ordered = sorted(expanded, key=lambda item: (abs(item - center), item))
+    return sorted(ordered[:limit])
+
+
+def _candidate_distance(candidate: StrategyParams, seeds: List[StrategyParams]) -> float:
+    if not seeds:
+        return 0.0
+    distances = []
+    for seed in seeds:
+        distance = (
+            abs(candidate.ema_short - seed.ema_short) * 1.2
+            + abs(candidate.ema_long - seed.ema_long) * 0.35
+            + abs(candidate.rsi_overbought - seed.rsi_overbought) * 0.55
+            + abs(candidate.rsi_oversold - seed.rsi_oversold) * 0.55
+            + abs(candidate.cmf_window - seed.cmf_window) * 0.65
+        )
+        distances.append(distance)
+    return min(distances)
+
+
+def order_candidates_by_seed_proximity(
+    candidates: List[StrategyParams],
+    seeds: List[StrategyParams],
+) -> List[StrategyParams]:
+    return sorted(
+        sort_candidates(candidates),
+        key=lambda candidate: (
+            _candidate_distance(candidate, seeds),
+            candidate.ema_short,
+            candidate.ema_long,
+            candidate.cmf_window,
+            candidate.rsi_overbought,
+            candidate.rsi_oversold,
+        ),
+    )
+
+
+def derive_refined_candidates(
+    coarse_results: List[Dict[str, object]],
+    seed_count: int,
+    max_candidates: int,
+) -> List[StrategyParams]:
+    ranked = [result for result in rank_results(coarse_results) if int(result.get("folds", 0) or 0) > 0]
+    seeds = [params_from_dict(result.get("params") or {}) for result in ranked[:seed_count]]
+    if not seeds:
+        return []
+
+    ema_short_values = _expand_parameter_values([seed.ema_short for seed in seeds], [-2, -1, 0, 1, 2], 5, 30, 6)
+    ema_long_values = _expand_parameter_values([seed.ema_long for seed in seeds], [-8, -4, 0, 4, 8], 16, 140, 7)
+    rsi_overbought_values = _expand_parameter_values([seed.rsi_overbought for seed in seeds], [-4, -2, 0, 2, 4], 58, 85, 5)
+    rsi_oversold_values = _expand_parameter_values([seed.rsi_oversold for seed in seeds], [-4, -2, 0, 2, 4], 10, 35, 5)
+    cmf_window_values = _expand_parameter_values([seed.cmf_window for seed in seeds], [-4, -2, 0, 2, 4], 8, 28, 4)
+
+    refined = param_grid(
+        ema_short_values=ema_short_values,
+        ema_long_values=ema_long_values,
+        rsi_overbought_values=rsi_overbought_values,
+        rsi_oversold_values=rsi_oversold_values,
+        cmf_window_values=cmf_window_values,
+    )
+    ordered = order_candidates_by_seed_proximity(refined, seeds)
+    if max_candidates > 0:
+        ordered = ordered[:max_candidates]
+    return ordered
+
+
+def derive_confirm_candidates(
+    refine_results: List[Dict[str, object]],
+    coarse_results: List[Dict[str, object]],
+    top_k: int,
+) -> List[StrategyParams]:
+    combined: List[StrategyParams] = []
+    seen = set()
+    for source in [refine_results, coarse_results]:
+        for result in rank_results(source):
+            if int(result.get("folds", 0) or 0) <= 0:
+                continue
+            candidate = params_from_dict(result.get("params") or {})
+            key = (candidate.ema_short, candidate.ema_long, candidate.rsi_overbought, candidate.rsi_oversold, candidate.cmf_window)
+            if key in seen:
+                continue
+            seen.add(key)
+            combined.append(candidate)
+            if len(combined) >= top_k:
+                return combined
+    return combined
+
+
+def build_stage_definition(
+    name: str,
+    description: str,
+    candidates: List[StrategyParams],
+    train_bars: int,
+    test_bars: int,
+    step_bars: int,
+    max_folds: int | None,
+    prune_config: Dict[str, float] | None,
+    candidate_limit: int | None = None,
+) -> Dict[str, object]:
+    candidate_list = trim_candidate_list(candidates, candidate_limit)
+    return {
+        "name": name,
+        "description": description,
+        "candidates": [candidate.as_dict() for candidate in candidate_list],
+        "train_bars": int(train_bars),
+        "test_bars": int(test_bars),
+        "step_bars": int(step_bars),
+        "max_folds": int(max_folds) if isinstance(max_folds, int) and max_folds > 0 else None,
+        "prune_config": dict(prune_config or {}),
+        "baseline": None,
+    }
+
+
+def build_initial_stage_plan(
+    args: argparse.Namespace,
+    coarse_candidates: List[StrategyParams],
+) -> Dict[str, object]:
+    candidate_cap = args.max_runs if args.max_runs > 0 else None
+    if args.search_mode == "flat":
+        return {
+            "stage_order": ["flat"],
+            "stages": {
+                "flat": build_stage_definition(
+                    name="flat",
+                    description="Single-stage flat parameter search.",
+                    candidates=coarse_candidates,
+                    train_bars=args.train_bars,
+                    test_bars=args.test_bars,
+                    step_bars=args.step_bars,
+                    max_folds=None,
+                    prune_config={
+                        "min_folds": 3,
+                        "baseline_margin": 0.8,
+                        "min_profit_factor": 1.0,
+                        "min_expectancy": 0.0,
+                        "required_pass_rate": 0.45,
+                        "min_roi": -0.25,
+                    },
+                    candidate_limit=candidate_cap,
+                )
+            },
+        }
+
+    return {
+        "stage_order": ["coarse", "refine", "confirm"],
+        "stages": {
+            "coarse": build_stage_definition(
+                name="coarse",
+                description="Fast coarse screening across the seed grid.",
+                candidates=coarse_candidates,
+                train_bars=args.train_bars,
+                test_bars=args.test_bars,
+                step_bars=args.step_bars,
+                max_folds=args.coarse_max_folds,
+                prune_config={
+                    "min_folds": 2,
+                    "baseline_margin": 1.0,
+                    "min_profit_factor": 0.95,
+                    "min_expectancy": 0.0,
+                    "required_pass_rate": 0.35,
+                    "min_roi": -0.5,
+                },
+                candidate_limit=candidate_cap,
+            ),
+            "refine": None,
+            "confirm": None,
+        },
+    }
+
+
+def ensure_stage_definition(
+    plan: Dict[str, object],
+    stage_name: str,
+    args: argparse.Namespace,
+    stage_results: Dict[str, List[Dict[str, object]]],
+) -> Dict[str, object] | None:
+    stages = plan.setdefault("stages", {})
+    existing = stages.get(stage_name)
+    if isinstance(existing, dict):
+        return existing
+
+    candidate_cap = args.max_runs if args.max_runs > 0 else None
+    if stage_name == "refine":
+        refined_candidates = derive_refined_candidates(
+            coarse_results=stage_results.get("coarse", []),
+            seed_count=args.refine_seed_count,
+            max_candidates=min(args.refine_max_candidates, candidate_cap) if candidate_cap else args.refine_max_candidates,
+        )
+        if not refined_candidates:
+            return None
+        stages[stage_name] = build_stage_definition(
+            name="refine",
+            description="Focused neighborhood search around the best coarse candidates.",
+            candidates=refined_candidates,
+            train_bars=args.train_bars,
+            test_bars=args.test_bars,
+            step_bars=args.step_bars,
+            max_folds=args.refine_max_folds,
+            prune_config={
+                "min_folds": 3,
+                "baseline_margin": 0.7,
+                "min_profit_factor": 1.02,
+                "min_expectancy": 0.0,
+                "required_pass_rate": 0.5,
+                "min_roi": -0.2,
+            },
+            candidate_limit=None,
+        )
+        return stages[stage_name]
+
+    if stage_name == "confirm":
+        confirm_candidates = derive_confirm_candidates(
+            refine_results=stage_results.get("refine", []),
+            coarse_results=stage_results.get("coarse", []),
+            top_k=min(args.confirm_top_k, candidate_cap) if candidate_cap else args.confirm_top_k,
+        )
+        if not confirm_candidates:
+            return None
+        stages[stage_name] = build_stage_definition(
+            name="confirm",
+            description="Full confirmation pass on the strongest refined candidates.",
+            candidates=confirm_candidates,
+            train_bars=args.train_bars,
+            test_bars=args.test_bars,
+            step_bars=args.step_bars,
+            max_folds=None,
+            prune_config={},
+            candidate_limit=None,
+        )
+        return stages[stage_name]
+
+    return None
+
+
+def _build_failed_result(
+    params: StrategyParams,
+    stage_name: str,
+    planned_folds: int,
+    error_message: str,
+) -> Dict[str, object]:
+    failed = summarize_fold_results(params, [], [], planned_folds=planned_folds)
+    failed["stage"] = stage_name
+    failed["error"] = error_message
+    failed["pruned"] = True
+    failed["prune_reason"] = error_message
+    return failed
+
+
+def evaluate_baseline_for_stage(
+    base_df: pd.DataFrame,
+    stage_definition: Dict[str, object],
+    fee_bps: float,
+    slippage_bps: float,
+    interval_minutes: int,
+) -> Dict[str, object]:
+    baseline_params = StrategyParams(
+        int(ACTIVE_RESEARCH_TEMPLATE.get("ema_short", 20)),
+        int(ACTIVE_RESEARCH_TEMPLATE.get("ema_long", 100)),
+        int(ACTIVE_RESEARCH_TEMPLATE.get("rsi_overbought", 70)),
+        int(ACTIVE_RESEARCH_TEMPLATE.get("rsi_oversold", 20)),
+        int(ACTIVE_RESEARCH_TEMPLATE.get("cmf_window", 14)),
+    )
+    return evaluate_params(
+        base_df,
+        baseline_params,
+        train_bars=int(stage_definition.get("train_bars", 1000)),
+        test_bars=int(stage_definition.get("test_bars", 250)),
+        step_bars=int(stage_definition.get("step_bars", 125)),
+        fee_bps=fee_bps,
+        slippage_bps=slippage_bps,
+        interval_minutes=interval_minutes,
+        max_folds=stage_definition.get("max_folds"),
+        stage_name=str(stage_definition.get("name") or "baseline"),
+    )
+
+
+def write_job_artifacts(
+    job_paths: AutoResearchJobPaths,
+    job_state: Dict[str, object],
+) -> None:
+    atomic_write_json(job_paths.state_file, job_state)
+    leaderboard_payload = {
+        "job_name": job_state.get("job_name"),
+        "updated_at": job_state.get("updated_at"),
+        "status": job_state.get("status"),
+        "current_stage": job_state.get("current_stage"),
+        "stages": {
+            stage_name: (stage_state.get("top_candidates") if isinstance(stage_state, dict) else [])
+            for stage_name, stage_state in (job_state.get("stages") or {}).items()
+        },
+    }
+    atomic_write_json(job_paths.leaderboard_file, leaderboard_payload)
+    current_stage = str(job_state.get("current_stage") or "")
+    current_stage_state = ((job_state.get("stages") or {}).get(current_stage) if current_stage else {}) or {}
+    heartbeat_payload = {
+        "job_name": job_state.get("job_name"),
+        "updated_at": job_state.get("updated_at"),
+        "status": job_state.get("status"),
+        "current_stage": current_stage,
+        "current_stage_completed": current_stage_state.get("completed_count", 0),
+        "current_stage_candidates": current_stage_state.get("candidate_count", 0),
+        "job_dir": str(job_paths.job_dir),
+    }
+    atomic_write_json(job_paths.heartbeat_file, heartbeat_payload)
+
+
+def refresh_stage_state(
+    job_state: Dict[str, object],
+    stage_name: str,
+    stage_definition: Dict[str, object],
+    results: List[Dict[str, object]],
+    baseline: Dict[str, object],
+    status: str,
+) -> None:
+    stages = job_state.setdefault("stages", {})
+    stage_state = stages.setdefault(stage_name, {})
+    ranked = rank_results(results)
+    existing_started_at = str(stage_state.get("started_at") or utc_now_iso())
+    stage_state.update(
+        {
+            "name": stage_name,
+            "description": stage_definition.get("description", ""),
+            "status": status,
+            "candidate_count": len(stage_definition.get("candidates") or []),
+            "completed_count": len(results),
+            "pending_count": max(0, len(stage_definition.get("candidates") or []) - len(results)),
+            "pruned_count": sum(1 for result in results if bool(result.get("pruned"))),
+            "started_at": existing_started_at,
+            "completed_at": utc_now_iso() if status == "completed" else stage_state.get("completed_at"),
+            "baseline": result_brief(baseline),
+            "top_candidates": [result_brief(result) for result in ranked[:5]],
+        }
+    )
+    job_state["current_stage"] = stage_name
+    job_state["updated_at"] = utc_now_iso()
+
+
+def evaluate_candidate_task(task: Dict[str, Any]) -> Dict[str, object]:
+    if _WORKER_BASE_DF is None:
+        raise RuntimeError("Autoresearch evaluation worker was not initialized.")
+    params = params_from_dict(task.get("params") or {})
+    return evaluate_params(
+        _WORKER_BASE_DF,
+        params,
+        train_bars=int(task.get("train_bars", 1000)),
+        test_bars=int(task.get("test_bars", 250)),
+        step_bars=int(task.get("step_bars", 125)),
+        fee_bps=float(task.get("fee_bps", 3.0)),
+        slippage_bps=float(task.get("slippage_bps", 2.0)),
+        interval_minutes=int(task.get("interval_minutes", 60)),
+        max_folds=task.get("max_folds"),
+        baseline_reference=task.get("baseline_reference") if isinstance(task.get("baseline_reference"), dict) else None,
+        prune_config=task.get("prune_config") if isinstance(task.get("prune_config"), dict) else None,
+        stage_name=str(task.get("stage_name") or ""),
+    )
+
+
+def run_stage(
+    job_paths: AutoResearchJobPaths,
+    job_state: Dict[str, object],
+    plan: Dict[str, object],
+    stage_name: str,
+    stage_definition: Dict[str, object],
+    base_df: pd.DataFrame,
+    fee_bps: float,
+    slippage_bps: float,
+    interval_minutes: int,
+    workers: int,
+    feature_cache_size: int,
+) -> tuple[List[Dict[str, object]], Dict[str, object]]:
+    results_file = job_paths.stage_results_file(stage_name)
+    existing_results = load_jsonl(results_file)
+    completed_keys = {
+        str(result.get("candidate_key") or candidate_key(stage_name, result.get("params") or {}))
+        for result in existing_results
+        if isinstance(result, dict)
+    }
+
+    baseline = stage_definition.get("baseline") if isinstance(stage_definition.get("baseline"), dict) else None
+    if not isinstance(baseline, dict) or not baseline:
+        baseline = evaluate_baseline_for_stage(
+            base_df=base_df,
+            stage_definition=stage_definition,
+            fee_bps=fee_bps,
+            slippage_bps=slippage_bps,
+            interval_minutes=interval_minutes,
+        )
+        stage_definition["baseline"] = baseline
+        atomic_write_json(job_paths.plan_file, plan)
+
+    refresh_stage_state(job_state, stage_name, stage_definition, existing_results, baseline, status="running")
+    job_state["status"] = f"running_{stage_name}"
+    write_job_artifacts(job_paths, job_state)
+
+    pending_candidates = [
+        params_from_dict(candidate_params)
+        for candidate_params in (stage_definition.get("candidates") or [])
+        if candidate_key(stage_name, candidate_params) not in completed_keys
+    ]
+    pending_candidates = sort_candidates(pending_candidates)
+    if not pending_candidates:
+        refresh_stage_state(job_state, stage_name, stage_definition, existing_results, baseline, status="completed")
+        job_state["status"] = "running"
+        write_job_artifacts(job_paths, job_state)
+        return existing_results, baseline
+
+    print(f"[autoresearch] stage={stage_name} pending {len(pending_candidates)}/{len(stage_definition.get('candidates') or [])}")
+    task_payloads = [
+        {
+            "stage_name": stage_name,
+            "params": candidate.as_dict(),
+            "train_bars": int(stage_definition.get("train_bars", 1000)),
+            "test_bars": int(stage_definition.get("test_bars", 250)),
+            "step_bars": int(stage_definition.get("step_bars", 125)),
+            "fee_bps": fee_bps,
+            "slippage_bps": slippage_bps,
+            "interval_minutes": interval_minutes,
+            "max_folds": stage_definition.get("max_folds"),
+            "baseline_reference": baseline,
+            "prune_config": stage_definition.get("prune_config") if isinstance(stage_definition.get("prune_config"), dict) else {},
+        }
+        for candidate in pending_candidates
+    ]
+
+    def handle_result(task_payload: Dict[str, Any], result: Dict[str, object]) -> None:
+        result["candidate_key"] = candidate_key(stage_name, result.get("params") or task_payload.get("params") or {})
+        result["stage"] = stage_name
+        result["evaluated_at"] = utc_now_iso()
+        append_jsonl(results_file, result)
+        existing_results.append(result)
+        refresh_stage_state(job_state, stage_name, stage_definition, existing_results, baseline, status="running")
+        job_state["status"] = f"running_{stage_name}"
+        write_job_artifacts(job_paths, job_state)
+
+    if workers > 1 and len(task_payloads) > 1:
+        with ProcessPoolExecutor(
+            max_workers=workers,
+            initializer=_init_evaluation_worker,
+            initargs=(base_df, feature_cache_size),
+        ) as executor:
+            futures = {executor.submit(evaluate_candidate_task, payload): payload for payload in task_payloads}
+            for idx, future in enumerate(as_completed(futures), start=1):
+                payload = futures[future]
+                params = params_from_dict(payload.get("params") or {})
+                try:
+                    result = future.result()
+                except Exception as exc:
+                    result = _build_failed_result(
+                        params=params,
+                        stage_name=stage_name,
+                        planned_folds=int(stage_definition.get("max_folds") or 0),
+                        error_message=f"Candidate evaluation failed: {exc}",
+                    )
+                handle_result(payload, result)
+                if idx % 5 == 0 or idx == len(task_payloads):
+                    print(f"[autoresearch] stage={stage_name} completed {len(existing_results)}/{len(stage_definition.get('candidates') or [])}")
+    else:
+        _init_evaluation_worker(base_df, feature_cache_size)
+        for idx, payload in enumerate(task_payloads, start=1):
+            params = params_from_dict(payload.get("params") or {})
+            try:
+                result = evaluate_candidate_task(payload)
+            except Exception as exc:
+                result = _build_failed_result(
+                    params=params,
+                    stage_name=stage_name,
+                    planned_folds=int(stage_definition.get("max_folds") or 0),
+                    error_message=f"Candidate evaluation failed: {exc}",
+                )
+            handle_result(payload, result)
+            if idx % 5 == 0 or idx == len(task_payloads):
+                print(f"[autoresearch] stage={stage_name} completed {len(existing_results)}/{len(stage_definition.get('candidates') or [])}")
+
+    refresh_stage_state(job_state, stage_name, stage_definition, existing_results, baseline, status="completed")
+    job_state["status"] = "running"
+    write_job_artifacts(job_paths, job_state)
+    return existing_results, baseline
+
+
+def make_report(results: List[Dict[str, object]], baseline: Dict[str, object]) -> Dict[str, object]:
+    ranked = rank_results(results)
     best = ranked[0] if ranked else None
 
     promote = False
@@ -736,6 +1456,10 @@ def main() -> None:
     parser.add_argument("--ticker", default="XAU/USD")
     parser.add_argument("--period", default="730d")
     parser.add_argument("--interval", default="1h")
+    parser.add_argument("--search-mode", choices=["staged", "flat"], default="staged")
+    parser.add_argument("--job-name", default="", help="Optional job name used for checkpoint/resume files.")
+    parser.add_argument("--resume", action="store_true", help="Resume an existing autoresearch job by --job-name.")
+    parser.add_argument("--workers", type=int, default=_default_worker_count(), help="Number of candidate evaluation workers.")
     parser.add_argument("--train-bars", type=int, default=1000)
     parser.add_argument("--test-bars", type=int, default=250)
     parser.add_argument("--step-bars", type=int, default=125)
@@ -743,6 +1467,12 @@ def main() -> None:
     parser.add_argument("--fee-bps", type=float, default=3.0)
     parser.add_argument("--slippage-bps", type=float, default=2.0)
     parser.add_argument("--max-runs", type=int, default=0, help="Limit number of parameter sets for quick runs.")
+    parser.add_argument("--coarse-max-folds", type=int, default=6, help="Maximum walk-forward folds evaluated during the coarse stage.")
+    parser.add_argument("--refine-max-folds", type=int, default=10, help="Maximum walk-forward folds evaluated during the refine stage.")
+    parser.add_argument("--refine-seed-count", type=int, default=6, help="How many coarse winners seed the refine neighborhood.")
+    parser.add_argument("--refine-max-candidates", type=int, default=240, help="Maximum number of refined candidates to evaluate.")
+    parser.add_argument("--confirm-top-k", type=int, default=12, help="How many refined winners are fully confirmed in the final stage.")
+    parser.add_argument("--feature-cache-size", type=int, default=DEFAULT_FEATURE_CACHE_SIZE, help="Per-process feature-frame cache size.")
     parser.add_argument("--ema-short-values", default="", help="Comma-separated EMA short values for the search grid.")
     parser.add_argument("--ema-long-values", default="", help="Comma-separated EMA long values for the search grid.")
     parser.add_argument("--rsi-overbought-values", default="", help="Comma-separated RSI overbought values for the search grid.")
@@ -758,6 +1488,9 @@ def main() -> None:
     parser.add_argument("--push", action="store_true", help="Push feature branch after successful promotion commit.")
     parser.add_argument("--branch-prefix", default="autoresearch", help="Prefix for auto-created research branches.")
     args = parser.parse_args()
+
+    if args.resume and not args.job_name:
+        parser.error("--resume requires --job-name so the existing checkpoint can be found.")
 
     if args.monthly:
         args.train_bars = 24 * 180
@@ -793,59 +1526,124 @@ def main() -> None:
     rsi_oversold_values = parse_int_values(args.rsi_oversold_values) or [20, 25, 30]
     cmf_window_values = parse_int_values(args.cmf_window_values) or [14, 20]
 
-    candidates = param_grid(
+    coarse_candidates = param_grid(
         ema_short_values=ema_short_values,
         ema_long_values=ema_long_values,
         rsi_overbought_values=rsi_overbought_values,
         rsi_oversold_values=rsi_oversold_values,
         cmf_window_values=cmf_window_values,
     )
-    if args.max_runs > 0:
-        candidates = candidates[: args.max_runs]
-    print(f"[autoresearch] testing {len(candidates)} parameter sets")
+    if not coarse_candidates:
+        raise RuntimeError("No valid parameter candidates were generated for the search space.")
 
-    baseline_params = StrategyParams(
-        int(ACTIVE_RESEARCH_TEMPLATE.get("ema_short", 20)),
-        int(ACTIVE_RESEARCH_TEMPLATE.get("ema_long", 100)),
-        int(ACTIVE_RESEARCH_TEMPLATE.get("rsi_overbought", 70)),
-        int(ACTIVE_RESEARCH_TEMPLATE.get("rsi_oversold", 20)),
-        int(ACTIVE_RESEARCH_TEMPLATE.get("cmf_window", 14)),
-    )
-    baseline = evaluate_params(
-        base_df,
-        baseline_params,
-        train_bars=args.train_bars,
-        test_bars=args.test_bars,
-        step_bars=args.step_bars,
-        fee_bps=args.fee_bps,
-        slippage_bps=args.slippage_bps,
-        interval_minutes=interval_minutes,
-    )
+    timestamp_suffix = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    job_name = args.job_name or f"autoresearch_{args.search_mode}_{args.interval}_{timestamp_suffix}"
+    job_paths = AutoResearchJobPaths(BASE_DIR, job_name)
+    job_paths.ensure()
 
-    results = []
-    for idx, params in enumerate(candidates, start=1):
-        out = evaluate_params(
-            base_df,
-            params,
-            train_bars=args.train_bars,
-            test_bars=args.test_bars,
-            step_bars=args.step_bars,
+    plan = load_json(job_paths.plan_file, {}) if args.resume else {}
+    if not isinstance(plan, dict) or not plan:
+        plan = build_initial_stage_plan(args, coarse_candidates)
+        atomic_write_json(job_paths.plan_file, plan)
+
+    stage_order = list(plan.get("stage_order") or (["flat"] if args.search_mode == "flat" else ["coarse", "refine", "confirm"]))
+    job_state = load_json(job_paths.state_file, {}) if args.resume else {}
+    if not isinstance(job_state, dict) or not job_state:
+        job_state = {
+            "job_name": job_name,
+            "created_at": utc_now_iso(),
+            "updated_at": utc_now_iso(),
+            "completed_at": None,
+            "status": "queued",
+            "search_mode": args.search_mode,
+            "job_dir": str(job_paths.job_dir),
+            "stage_order": stage_order,
+            "current_stage": "",
+            "workers": int(max(1, args.workers)),
+            "data_source": data_source,
+            "data_symbol": data_symbol,
+            "data_warning": data_warning,
+            "args": vars(args),
+            "stages": {},
+        }
+    else:
+        job_state["updated_at"] = utc_now_iso()
+        job_state["search_mode"] = str(job_state.get("search_mode") or args.search_mode)
+        job_state["job_dir"] = str(job_paths.job_dir)
+        job_state["stage_order"] = stage_order
+        job_state["data_source"] = data_source
+        job_state["data_symbol"] = data_symbol
+        job_state["data_warning"] = data_warning
+        job_state["workers"] = int(max(1, args.workers))
+        job_state["args"] = vars(args)
+
+    print(f"[autoresearch] job name: {job_name}")
+    print(f"[autoresearch] job dir: {job_paths.job_dir}")
+
+    job_state["status"] = "running"
+    write_job_artifacts(job_paths, job_state)
+
+    stage_results: Dict[str, List[Dict[str, object]]] = {}
+    stage_baselines: Dict[str, Dict[str, object]] = {}
+    for stage_name in stage_order:
+        stage_definition = ensure_stage_definition(plan, stage_name, args, stage_results)
+        if stage_definition is None or not isinstance(stage_definition, dict):
+            continue
+        if not stage_definition.get("candidates"):
+            continue
+        atomic_write_json(job_paths.plan_file, plan)
+        results, baseline = run_stage(
+            job_paths=job_paths,
+            job_state=job_state,
+            plan=plan,
+            stage_name=stage_name,
+            stage_definition=stage_definition,
+            base_df=base_df,
+            fee_bps=args.fee_bps,
+            slippage_bps=args.slippage_bps,
+            interval_minutes=interval_minutes,
+            workers=max(1, int(args.workers)),
+            feature_cache_size=max(1, int(args.feature_cache_size)),
+        )
+        stage_results[stage_name] = results
+        stage_baselines[stage_name] = baseline
+
+    final_stage_name = "flat"
+    if args.search_mode == "staged":
+        if stage_results.get("confirm"):
+            final_stage_name = "confirm"
+        elif stage_results.get("refine"):
+            final_stage_name = "refine"
+        elif stage_results.get("coarse"):
+            final_stage_name = "coarse"
+
+    final_results = stage_results.get(final_stage_name, [])
+    final_baseline = stage_baselines.get(final_stage_name)
+    if not isinstance(final_baseline, dict):
+        final_definition = ensure_stage_definition(plan, final_stage_name, args, stage_results)
+        if not isinstance(final_definition, dict):
+            raise RuntimeError(f"Missing final stage definition for {final_stage_name}.")
+        final_baseline = evaluate_baseline_for_stage(
+            base_df=base_df,
+            stage_definition=final_definition,
             fee_bps=args.fee_bps,
             slippage_bps=args.slippage_bps,
             interval_minutes=interval_minutes,
         )
-        results.append(out)
 
-        if idx % 10 == 0 or idx == len(candidates):
-            print(f"[autoresearch] completed {idx}/{len(candidates)}")
-
-    report = make_report(results, baseline)
+    report = make_report(final_results, final_baseline)
     report["evaluation_mode"] = "monthly_walkforward" if args.monthly else "default_walkforward"
     report["parameter_surface_file"] = str(ACTIVE_RESEARCH_TEMPLATE_SOURCE)
     report["cost_assumptions"] = {
         "fee_bps": args.fee_bps,
         "slippage_bps": args.slippage_bps,
     }
+    report["search_mode"] = args.search_mode
+    report["job_name"] = job_name
+    report["job_dir"] = str(job_paths.job_dir)
+    report["job_state_file"] = str(job_paths.state_file)
+    report["leaderboard_file"] = str(job_paths.leaderboard_file)
+    report["final_stage"] = final_stage_name
     report["market_data_source"] = data_source
     report["market_data_symbol"] = data_symbol
     if data_warning:
@@ -856,7 +1654,12 @@ def main() -> None:
         "rsi_overbought": rsi_overbought_values,
         "rsi_oversold": rsi_oversold_values,
         "cmf_window": cmf_window_values,
-        "candidate_count": len(candidates),
+        "candidate_count": len(coarse_candidates),
+    }
+    report["stage_summaries"] = {
+        stage_name: dict(stage_state)
+        for stage_name, stage_state in (job_state.get("stages") or {}).items()
+        if isinstance(stage_state, dict)
     }
 
     reports_dir = Path(__file__).resolve().parent / "reports"
@@ -881,6 +1684,14 @@ def main() -> None:
     latest_file = reports_dir / "autoresearch_last.json"
     latest_file.write_text(json.dumps(report, indent=2), encoding="utf-8")
     write_active_strategy_snapshot(report, latest_file)
+    atomic_write_json(job_paths.final_report_file, report)
+
+    job_state["status"] = "completed"
+    job_state["completed_at"] = utc_now_iso()
+    job_state["current_stage"] = final_stage_name
+    job_state["final_report_file"] = str(job_paths.final_report_file)
+    job_state["final_best"] = result_brief(report.get("best") or {}) if isinstance(report.get("best"), dict) else {}
+    write_job_artifacts(job_paths, job_state)
 
     top = report["best"]
     print("\n[autoresearch] ===== SUMMARY =====")
@@ -895,12 +1706,18 @@ def main() -> None:
     print("Best recency-weighted metrics:", top["summary"])
     print("Promotion decision:", report["promote"], "|", report["promotion_reason"])
     print("Report file:", str(latest_file))
+    print("Job state file:", str(job_paths.state_file))
+    print("Leaderboard file:", str(job_paths.leaderboard_file))
     print("Active strategy snapshot file:", str(ACTIVE_RESEARCH_SNAPSHOT_FILE))
     print("Candidate regime overrides file:", str(candidate_regime_file))
     if live_regime_applied:
         print("Regime overrides file:", str(regime_params_file))
     elif report.get("promote"):
         print("Live regime overrides not applied; rerun with --apply-promoted-regime to update config/regime_params.json")
+    print(
+        "Resume command:",
+        f"python tools/autoresearch_loop.py --resume --job-name {job_name} --interval {args.interval} --period {args.period}",
+    )
 
     maybe_commit_research_artifacts(
         report=report,
