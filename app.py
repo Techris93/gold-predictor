@@ -2253,6 +2253,7 @@ def unsubscribe_push():
 def get_autoresearch_latest():
     base_dir = Path(__file__).resolve().parent
     report_path = base_dir / "tools" / "reports" / "autoresearch_last.json"
+    job_reports_path = base_dir / "tools" / "reports" / "autoresearch_jobs"
     active_snapshot_path = base_dir / "tools" / "reports" / "autoresearch_active.json"
     strategy_params_path = base_dir / "config" / "strategy_params.json"
     backtest_params_path = base_dir / "config" / "backtest_params.json"
@@ -2292,16 +2293,75 @@ def get_autoresearch_latest():
             return top_five
         return []
 
-    if not report_path.exists():
+    def _parse_report_timestamp(value):
+        if value in (None, ""):
+            return None
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    def _report_timestamp(report, path):
+        parsed = _parse_report_timestamp((report or {}).get("generated_at"))
+        if parsed is not None:
+            return parsed
+        try:
+            return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+        except Exception:
+            return datetime.min.replace(tzinfo=timezone.utc)
+
+    def _latest_staged_job_report(jobs_root):
+        if not jobs_root.exists():
+            return {}, None
+
+        latest_report = {}
+        latest_path = None
+        latest_timestamp = datetime.min.replace(tzinfo=timezone.utc)
+
+        for job_dir in jobs_root.iterdir():
+            if not job_dir.is_dir() or job_dir.name.startswith("smoke_"):
+                continue
+
+            final_report_path = job_dir / "final_report.json"
+            if not final_report_path.exists():
+                continue
+
+            job_report = _read_dict(final_report_path)
+            if not job_report:
+                continue
+            if str(job_report.get("search_mode") or "").lower() != "staged":
+                continue
+
+            job_name = str(job_report.get("job_name") or job_dir.name)
+            if job_name.startswith("smoke_"):
+                continue
+
+            job_timestamp = _report_timestamp(job_report, final_report_path)
+            if job_timestamp > latest_timestamp:
+                latest_timestamp = job_timestamp
+                latest_report = job_report
+                latest_path = final_report_path
+
+        return latest_report, latest_path
+
+    report = _read_dict(report_path)
+    selected_report_path = report_path if report else None
+    staged_report, staged_report_path = _latest_staged_job_report(job_reports_path)
+    if staged_report:
+        report_timestamp = _report_timestamp(report, report_path) if report else datetime.min.replace(tzinfo=timezone.utc)
+        staged_timestamp = _report_timestamp(staged_report, staged_report_path)
+        if not report or staged_timestamp >= report_timestamp:
+            report = staged_report
+            selected_report_path = staged_report_path
+
+    if not report:
         return jsonify({
             "status": "error",
             "message": "Autoresearch report not found. Run tools/autoresearch_loop.py first."
         }), 404
-
-    try:
-        report = json.loads(report_path.read_text(encoding="utf-8"))
-    except Exception as e:
-        return jsonify({"status": "error", "message": f"Failed to read autoresearch report: {e}"}), 500
 
     active_snapshot = _read_dict(active_snapshot_path)
     active_strategy = active_snapshot.get("active_strategy") if isinstance(active_snapshot.get("active_strategy"), dict) else {}
@@ -2319,7 +2379,6 @@ def get_autoresearch_latest():
             "winning_cmf": active_params.get("cmf_window"),
         }
     recommendation = active_snapshot.get("recommendation") if isinstance(active_snapshot.get("recommendation"), dict) else {}
-    active_matches_best_candidate = bool(recommendation.get("matches_active_strategy"))
     active_strategy_status = "Snapshot available" if active_snapshot else "Loaded from live config"
     active_strategy_reason = (
         f"Current live strategy comes from {strategy_params_path.name} and {backtest_params_path.name}."
@@ -2332,9 +2391,14 @@ def get_autoresearch_latest():
     roi = summary.get("roi") if isinstance(summary, dict) else None
     promoted = bool(report.get("promote", False))
     recommendation_status = "Promotion recommended" if promoted else "Hold current config"
+    tracked_keys = ("ema_short", "ema_long", "rsi_overbought", "rsi_oversold", "cmf_window")
+    active_matches_best_candidate = bool(recommendation.get("matches_active_strategy"))
+    if best_params:
+        active_matches_best_candidate = all(active_params.get(key) == best_params.get(key) for key in tracked_keys)
 
     return jsonify({
         "status": "success",
+        "report_file": str(selected_report_path) if selected_report_path else str(report_path),
         "generated_at": report.get("generated_at"),
         "latest_generated_at": report.get("generated_at"),
         "promote": promoted,
