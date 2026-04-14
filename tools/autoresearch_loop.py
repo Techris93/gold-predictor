@@ -51,6 +51,7 @@ ACTIVE_STRATEGY_PARAMS_SOURCE = BASE_DIR / "config" / "strategy_params.json"
 ACTIVE_BACKTEST_PARAMS_SOURCE = BASE_DIR / "config" / "backtest_params.json"
 ACTIVE_RESEARCH_SNAPSHOT_FILE = BASE_DIR / "tools" / "reports" / "autoresearch_active.json"
 TRACKED_STRATEGY_KEYS = ("ema_short", "ema_long", "rsi_overbought", "rsi_oversold", "cmf_window")
+FALLBACK_HISTORY_FILE = BASE_DIR / "data" / "cache" / "market_history" / "XAU_USD_365d_1h.csv"
 
 
 @dataclass(frozen=True)
@@ -132,9 +133,8 @@ def fetch_history(ticker: str, period: str, interval: str) -> pd.DataFrame:
     try:
         return fetch_td_history(period=period, interval=interval, ticker=ticker)
     except Exception:
-        fallback = BASE_DIR / "data" / "swarm" / "cache" / "XAU_USD_365d_1h.csv"
-        if fallback.exists():
-            return pd.read_csv(fallback, index_col=0, parse_dates=True).sort_index()
+        if FALLBACK_HISTORY_FILE.exists():
+            return pd.read_csv(FALLBACK_HISTORY_FILE, index_col=0, parse_dates=True).sort_index()
         raise
 
 

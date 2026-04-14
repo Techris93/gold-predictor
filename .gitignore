@@ -1,5 +1,5 @@
 .brv/
-data/swarm/cache/
+data/cache/market_history/
 tools/reports/alert_state.json
 tools/reports/backtest_feature_analysis.json
 tools/reports/decision_state.json

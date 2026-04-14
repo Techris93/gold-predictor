@@ -22,7 +22,7 @@ from tools.backtest import (
 )
 from tools.signal_engine import normalize_strategy_params
 
-DATA_FILE = BASE / "data" / "swarm" / "cache" / "XAU_USD_365d_1h.csv"
+DATA_FILE = BASE / "data" / "cache" / "market_history" / "XAU_USD_365d_1h.csv"
 OUT_FILE = BASE / "tools" / "reports" / "tail_event_backtest.json"
 
 
