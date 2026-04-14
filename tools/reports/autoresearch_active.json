@@ -1,23 +1,23 @@
 {
-  "generated_at": "2026-04-14T12:25:39.491286+00:00",
-  "report_generated_at": "2026-04-14T12:25:39.491286+00:00",
+  "generated_at": "2026-04-14T16:32:04.665454+00:00",
+  "report_generated_at": "2026-04-14T16:32:04.665454+00:00",
   "report_file": "/Users/chrixchange/.openclaw/workspace/gold-predictor/tools/reports/autoresearch_last.json",
   "active_strategy": {
     "source": "config_snapshot",
     "strategy_params_file": "/Users/chrixchange/.openclaw/workspace/gold-predictor/config/strategy_params.json",
     "backtest_params_file": "/Users/chrixchange/.openclaw/workspace/gold-predictor/config/backtest_params.json",
     "strategy_params": {
-      "ema_short": 10,
-      "ema_long": 58,
+      "ema_short": 8,
+      "ema_long": 16,
       "rsi_window": 14,
-      "rsi_overbought": 68,
+      "rsi_overbought": 62,
       "rsi_oversold": 18,
       "adx_window": 14,
       "adx_trending_threshold": 22,
       "adx_weak_trend_threshold": 18,
       "atr_window": 14,
       "atr_trending_percent_threshold": 0.25,
-      "cmf_window": 12,
+      "cmf_window": 14,
       "cmf_strong_buy_threshold": 0.1,
       "cmf_strong_sell_threshold": -0.1,
       "alignment_weight": 1.2,
@@ -29,24 +29,20 @@
       "direction_probability_floor": 0.58,
       "transition_setup_tradeability_floor": 56.0,
       "transition_setup_entry_prob_floor": 0.6,
-      "mtf_intervals": [
-        "15min",
-        "1h",
-        "4h"
-      ]
+      "mtf_intervals": ["15min", "1h", "4h"]
     },
     "backtest_params": {
-      "ema_short": 10,
-      "ema_long": 58,
+      "ema_short": 8,
+      "ema_long": 16,
       "rsi_window": 14,
-      "rsi_overbought": 68,
+      "rsi_overbought": 62,
       "rsi_oversold": 18,
       "adx_window": 14,
       "adx_trending_threshold": 22,
       "adx_weak_trend_threshold": 18,
       "atr_window": 14,
       "atr_trending_percent_threshold": 0.25,
-      "cmf_window": 12,
+      "cmf_window": 14,
       "cmf_strong_buy_threshold": 0.1,
       "cmf_strong_sell_threshold": -0.1,
       "alignment_weight": 1.2,
@@ -58,43 +54,39 @@
       "direction_probability_floor": 0.58,
       "transition_setup_tradeability_floor": 56.0,
       "transition_setup_entry_prob_floor": 0.6,
-      "mtf_intervals": [
-        "15min",
-        "1h",
-        "4h"
-      ]
+      "mtf_intervals": ["15min", "1h", "4h"]
     },
     "tracked_params": {
-      "ema_short": 10,
-      "ema_long": 58,
-      "rsi_overbought": 68,
+      "ema_short": 8,
+      "ema_long": 16,
+      "rsi_overbought": 62,
       "rsi_oversold": 18,
-      "cmf_window": 12
+      "cmf_window": 14
     },
     "summary": {
-      "winning_ema": "10/58",
-      "winning_rsi": "68/18",
-      "winning_cmf": 12
+      "winning_ema": "8/16",
+      "winning_rsi": "62/18",
+      "winning_cmf": 14
     }
   },
   "recommendation": {
     "promote": true,
     "promotion_mode": "auto",
-    "promotion_reason": "Promote: improved robust score by 1.614 with weighted pass_rate 0.67.",
+    "promotion_reason": "Promote: improved robust score by 3.284 with weighted pass_rate 0.69.",
     "best_params": {
-      "ema_short": 9,
-      "ema_long": 26,
-      "rsi_overbought": 65,
-      "rsi_oversold": 20,
+      "ema_short": 8,
+      "ema_long": 16,
+      "rsi_overbought": 62,
+      "rsi_oversold": 18,
       "cmf_window": 14
     },
     "tracked_best_params": {
-      "ema_short": 9,
-      "ema_long": 26,
-      "rsi_overbought": 65,
-      "rsi_oversold": 20,
+      "ema_short": 8,
+      "ema_long": 16,
+      "rsi_overbought": 62,
+      "rsi_oversold": 18,
       "cmf_window": 14
     },
-    "matches_active_strategy": false
+    "matches_active_strategy": true
   }
 }
