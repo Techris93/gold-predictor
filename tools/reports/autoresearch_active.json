@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-04-14T00:53:42Z",
-  "report_generated_at": "2026-04-13T23:51:18.108893+00:00",
+  "generated_at": "2026-04-14T12:25:39.491286+00:00",
+  "report_generated_at": "2026-04-14T12:25:39.491286+00:00",
   "report_file": "/Users/chrixchange/.openclaw/workspace/gold-predictor/tools/reports/autoresearch_last.json",
   "active_strategy": {
     "source": "config_snapshot",
@@ -29,7 +29,11 @@
       "direction_probability_floor": 0.58,
       "transition_setup_tradeability_floor": 56.0,
       "transition_setup_entry_prob_floor": 0.6,
-      "mtf_intervals": ["15min", "1h", "4h"]
+      "mtf_intervals": [
+        "15min",
+        "1h",
+        "4h"
+      ]
     },
     "backtest_params": {
       "ema_short": 10,
@@ -54,7 +58,11 @@
       "direction_probability_floor": 0.58,
       "transition_setup_tradeability_floor": 56.0,
       "transition_setup_entry_prob_floor": 0.6,
-      "mtf_intervals": ["15min", "1h", "4h"]
+      "mtf_intervals": [
+        "15min",
+        "1h",
+        "4h"
+      ]
     },
     "tracked_params": {
       "ema_short": 10,
@@ -70,23 +78,23 @@
     }
   },
   "recommendation": {
-    "promote": false,
+    "promote": true,
     "promotion_mode": "auto",
-    "promotion_reason": "Hold: robust delta 0.795, weighted pass_rate 0.20, weighted_median -3.38, pf 0.90.",
+    "promotion_reason": "Promote: improved robust score by 1.614 with weighted pass_rate 0.67.",
     "best_params": {
-      "ema_short": 10,
-      "ema_long": 58,
-      "rsi_overbought": 68,
-      "rsi_oversold": 18,
-      "cmf_window": 12
+      "ema_short": 9,
+      "ema_long": 26,
+      "rsi_overbought": 65,
+      "rsi_oversold": 20,
+      "cmf_window": 14
     },
     "tracked_best_params": {
-      "ema_short": 10,
-      "ema_long": 58,
-      "rsi_overbought": 68,
-      "rsi_oversold": 18,
-      "cmf_window": 12
+      "ema_short": 9,
+      "ema_long": 26,
+      "rsi_overbought": 65,
+      "rsi_oversold": 20,
+      "cmf_window": 14
     },
-    "matches_active_strategy": true
+    "matches_active_strategy": false
   }
 }

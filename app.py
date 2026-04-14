@@ -339,13 +339,20 @@ def _build_signal_notification(changes, rr_signal, market_structure):
         if "market_structure" in changed_keys
         else ("XAUUSD Adaptive RR Signal" if "rr_signal_status" in changed_keys else "XAUUSD Direction / Grade Changed")
     )
-    body = "\n".join(
-        [
-            f"Direction / Grade: {_format_rr_direction_grade(rr_signal)}",
-            f"Target Bucket Probability: {_format_rr_target_bucket_probability(rr_signal)}",
-            f"Market Structure: {_format_market_structure_change(changes, market_structure)}",
-        ]
-    )
+    body_lines = []
+    if "market_structure" in changed_keys:
+        body_lines.append(f"Market Structure: {_format_market_structure_change(changes, market_structure)}")
+
+    rr_direction_grade = _format_rr_direction_grade(rr_signal)
+    rr_target_probability = _format_rr_target_bucket_probability(rr_signal)
+    if rr_direction_grade != "Neutral · N/A" or rr_target_probability != "N/A · N/A":
+        body_lines.append(f"Direction / Grade: {rr_direction_grade}")
+        body_lines.append(f"Target Bucket Probability: {rr_target_probability}")
+
+    if not body_lines:
+        body_lines.append(f"Market Structure: {_format_market_structure_change(changes, market_structure)}")
+
+    body = "\n".join(body_lines)
     return {"title": title, "body": body}
 
 
@@ -1934,7 +1941,7 @@ def _indicator_monitor_loop():
                             breakout_bias_changed = False
                         market_structure_changed = (
                             "market_structure" in notification_changes
-                            and rr_signal_actionable
+                            and bool(market_structure)
                         )
                         verdict_changed = "verdict" in notification_changes and bool(verdict)
                         confidence_changed = (

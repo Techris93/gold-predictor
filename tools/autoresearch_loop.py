@@ -2,7 +2,8 @@
 """
 autoresearch_loop.py
 
-Autonomous strategy research loop for XAU/USD via Twelve Data.
+Autonomous strategy research loop for XAU/USD with Yahoo Finance as the
+primary source for 1h and higher intervals.
 This script performs parameter search with walk-forward evaluation and
 risk-aware scoring, then emits a promotion recommendation.
 
@@ -35,6 +36,7 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 load_dotenv(BASE_DIR / ".env")
 
+from tools.yahoo_market_data import fetch_history as fetch_yf_history
 from tools.twelvedata_market_data import fetch_history as fetch_td_history
 from tools.backtest import ACTIVE_BACKTEST_PARAMS
 from tools.signal_engine import (
@@ -129,13 +131,39 @@ def write_active_strategy_snapshot(report: Dict[str, object], latest_file: Path)
     ACTIVE_RESEARCH_SNAPSHOT_FILE.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
 
 
+def _load_cached_history_fallback(ticker: str, interval: str, warnings: List[str]) -> pd.DataFrame | None:
+    if interval_to_minutes(interval) != 60 or not FALLBACK_HISTORY_FILE.exists():
+        return None
+
+    cached = pd.read_csv(FALLBACK_HISTORY_FILE, index_col=0, parse_dates=True).sort_index()
+    cached.attrs["data_source"] = "Local 1h cache fallback"
+    cached.attrs["data_symbol"] = ticker
+    if warnings:
+        cached.attrs["data_warning"] = " | ".join(warnings)
+    return cached
+
+
 def fetch_history(ticker: str, period: str, interval: str) -> pd.DataFrame:
+    fetch_errors = []
     try:
-        return fetch_td_history(period=period, interval=interval, ticker=ticker)
-    except Exception:
-        if FALLBACK_HISTORY_FILE.exists():
-            return pd.read_csv(FALLBACK_HISTORY_FILE, index_col=0, parse_dates=True).sort_index()
-        raise
+        return fetch_yf_history(period=period, interval=interval, ticker=ticker)
+    except Exception as exc:
+        fetch_errors.append(f"Yahoo Finance: {exc}")
+    try:
+        td_frame = fetch_td_history(period=period, interval=interval, ticker=ticker)
+        td_frame.attrs["data_source"] = "Twelve Data fallback"
+        td_frame.attrs["data_symbol"] = ticker
+        if fetch_errors:
+            td_frame.attrs["data_warning"] = " | ".join(fetch_errors)
+        return td_frame
+    except Exception as exc:
+        fetch_errors.append(f"Twelve Data: {exc}")
+
+    cached = _load_cached_history_fallback(ticker, interval, fetch_errors)
+    if cached is not None:
+        return cached
+
+    raise RuntimeError("Failed to fetch autoresearch history. " + " | ".join(fetch_errors))
 
 
 def _to_strategy_dict(p: StrategyParams) -> Dict[str, int]:
@@ -738,8 +766,14 @@ def main() -> None:
 
     print("[autoresearch] fetching data...")
     base_df = fetch_history(args.ticker, args.period, args.interval)
+    data_source = str(base_df.attrs.get("data_source") or "Unknown")
+    data_symbol = str(base_df.attrs.get("data_symbol") or args.ticker)
+    data_warning = str(base_df.attrs.get("data_warning") or "").strip()
     interval_minutes = interval_to_minutes(args.interval)
     print(f"[autoresearch] candles loaded: {len(base_df)}")
+    print(f"[autoresearch] data source: {data_source} ({data_symbol})")
+    if data_warning:
+        print(f"[autoresearch] data warning: {data_warning}")
     if args.monthly and (args.train_bars + args.test_bars) > len(base_df):
         train_bars = max(500, int(len(base_df) * 0.70))
         test_bars = max(120, int(len(base_df) * 0.15))
@@ -812,6 +846,10 @@ def main() -> None:
         "fee_bps": args.fee_bps,
         "slippage_bps": args.slippage_bps,
     }
+    report["market_data_source"] = data_source
+    report["market_data_symbol"] = data_symbol
+    if data_warning:
+        report["market_data_warning"] = data_warning
     report["search_space"] = {
         "ema_short": ema_short_values,
         "ema_long": ema_long_values,
