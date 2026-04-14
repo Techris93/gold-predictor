@@ -134,6 +134,15 @@ DEFAULT_STRATEGY_PARAMS = {
     "rr_signal_trade_hours_utc": [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
     "rr_signal_require_m15_trigger": 1,
     "rr_signal_max_signals_per_day": 5,
+    "rr_signal_h1_neutral_override_enabled": 1,
+    "rr_signal_h1_neutral_min_expansion_60m": 66.0,
+    "rr_signal_h1_neutral_min_big_move_risk": 62.0,
+    "rr_signal_h1_neutral_min_direction_probability": 0.62,
+    "rr_signal_h1_neutral_min_tradeability": 56.0,
+    "rr_signal_h1_neutral_min_confidence": 66.0,
+    "rr_signal_h1_neutral_min_move_probability": 0.40,
+    "rr_signal_h1_neutral_require_h4_non_opposition": 1,
+    "rr_signal_h1_neutral_allow_ready": 0,
 }
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -926,6 +935,15 @@ def _build_rr_signal_state(
     allowed_trade_hours = [int(h) for h in allowed_trade_hours if isinstance(h, (int, float, str)) and str(h).strip().lstrip("-").isdigit()]
     allowed_trade_hours = sorted(set(h for h in allowed_trade_hours if 0 <= h <= 23))
     require_m15_trigger = bool(int(strategy_params.get("rr_signal_require_m15_trigger", 1) or 0))
+    h1_neutral_override_enabled = bool(int(strategy_params.get("rr_signal_h1_neutral_override_enabled", 1) or 0))
+    h1_neutral_min_expansion_60m = float(strategy_params.get("rr_signal_h1_neutral_min_expansion_60m", 66.0) or 66.0)
+    h1_neutral_min_big_move_risk = float(strategy_params.get("rr_signal_h1_neutral_min_big_move_risk", 62.0) or 62.0)
+    h1_neutral_min_direction_probability = float(strategy_params.get("rr_signal_h1_neutral_min_direction_probability", 0.62) or 0.62)
+    h1_neutral_min_tradeability = float(strategy_params.get("rr_signal_h1_neutral_min_tradeability", 56.0) or 56.0)
+    h1_neutral_min_confidence = float(strategy_params.get("rr_signal_h1_neutral_min_confidence", 66.0) or 66.0)
+    h1_neutral_min_move_probability = float(strategy_params.get("rr_signal_h1_neutral_min_move_probability", 0.40) or 0.40)
+    h1_neutral_require_h4_non_opposition = bool(int(strategy_params.get("rr_signal_h1_neutral_require_h4_non_opposition", 1) or 0))
+    h1_neutral_allow_ready = bool(int(strategy_params.get("rr_signal_h1_neutral_allow_ready", 0) or 0))
 
     current_price = float(ta_data.get("current_price") or 0.0)
     atr_percent = float(((ta_data.get("volatility_regime") or {}).get("atr_percent")) or 0.0)
@@ -963,6 +981,8 @@ def _build_rr_signal_state(
     mtf_quality = mtf_directional_matches / 3.0 if direction in {"Bullish", "Bearish"} else 0.0
     h1_filter_pass = direction in {"Bullish", "Bearish"} and h1_trend == direction
     h4_filter_pass = direction in {"Bullish", "Bearish"} and h4_trend in {direction, "Neutral"}
+    h1_neutral = direction in {"Bullish", "Bearish"} and h1_trend == "Neutral"
+    h4_opposes_candidate = direction in {"Bullish", "Bearish"} and h4_trend in {"Bullish", "Bearish"} and h4_trend != direction
 
     session_context = _build_session_context(ta_data)
     now_hour_utc = int(session_context.get("hour") or datetime.now(timezone.utc).hour)
@@ -984,6 +1004,10 @@ def _build_rr_signal_state(
         float(bucket_probabilities.get("1.0_atr") or 0.0),
         float(bucket_probabilities.get("1.5_atr") or 0.0),
         float(bucket_probabilities.get("2.0_atr") or 0.0),
+    )
+    directional_probability = max(
+        float(direction_probabilities.get("up_60m") or 0.5) if direction == "Bullish" else 0.0,
+        float(direction_probabilities.get("down_60m") or 0.5) if direction == "Bearish" else 0.0,
     )
     fakeout_penalty = max(0.0, min(1.0, float(meta_scores.get("fakeout_probability") or 0.0)))
     exit_penalty = max(0.0, min(1.0, float(meta_scores.get("exit_risk_probability") or 0.0)))
@@ -1038,6 +1062,20 @@ def _build_rr_signal_state(
     if bucket_move_probability > 0:
         move_probability = max(move_probability, bucket_move_probability)
 
+    momentum_override_qualified = (
+        h1_neutral_override_enabled
+        and h1_neutral
+        and direction in {"Bullish", "Bearish"}
+        and m15_trend == direction
+        and float(confidence) >= h1_neutral_min_confidence
+        and float(tradeability_score) >= h1_neutral_min_tradeability
+        and move_probability >= h1_neutral_min_move_probability
+        and directional_probability >= h1_neutral_min_direction_probability
+        and expansion_60m >= h1_neutral_min_expansion_60m
+        and big_move_risk >= h1_neutral_min_big_move_risk
+        and (not h1_neutral_require_h4_non_opposition or not h4_opposes_candidate)
+    )
+
     tier = "watch"
     grade = "Watchlist"
     if quant_score >= 84 and move_probability >= 0.68:
@@ -1066,11 +1104,11 @@ def _build_rr_signal_state(
         blockers.append(f"Projected move below {round(selected_target_atr, 1)} ATR / {int(target_move_pips)} pips")
     if float(expected_edge_pct) < min_expected_edge:
         blockers.append(f"Expected edge below {round(min_expected_edge, 2)}")
-    if action_state not in {"LONG_ACTIVE", "SHORT_ACTIVE", "SETUP_LONG", "SETUP_SHORT"}:
+    if action_state not in {"LONG_ACTIVE", "SHORT_ACTIVE", "SETUP_LONG", "SETUP_SHORT"} and not momentum_override_qualified:
         blockers.append("Execution state not directional")
-    if mtf_directional_matches < 2:
+    if mtf_directional_matches < 2 and not momentum_override_qualified:
         blockers.append("Insufficient multi-timeframe directional agreement")
-    if direction in {"Bullish", "Bearish"} and not h1_filter_pass:
+    if direction in {"Bullish", "Bearish"} and not h1_filter_pass and not momentum_override_qualified:
         blockers.append("H1 directional filter is not aligned")
     if direction in {"Bullish", "Bearish"} and h4_trend in {"Bullish", "Bearish"} and not h4_filter_pass:
         blockers.append("H4 trend opposes H1 direction")
@@ -1108,8 +1146,8 @@ def _build_rr_signal_state(
     allowed_grades = {"A+ (Quant)", "A (High Accuracy)"}
     if allow_b_grade:
         allowed_grades.add("B (Qualified)")
-    send_signal = not blockers and grade in allowed_grades
-    status = "ready" if send_signal else ("arming" if grade.startswith("A") and direction in {"Bullish", "Bearish"} else "standby")
+    send_signal = not blockers and grade in allowed_grades and (h1_neutral_allow_ready or not h1_neutral)
+    status = "ready" if send_signal else ("arming" if (grade.startswith("A") or momentum_override_qualified) and direction in {"Bullish", "Bearish"} else "standby")
     display_direction = direction if status in {"arming", "ready"} else "Neutral"
 
     trigger = "breakout_continuation"
@@ -1143,7 +1181,10 @@ def _build_rr_signal_state(
 
     status_text = "Stand by. Current RR direction is not actionable yet."
     if status == "arming":
-        status_text = "Directional setup detected; waiting for full target-bucket confirmation."
+        if momentum_override_qualified and h1_neutral:
+            status_text = "15M momentum acceleration detected while H1 is neutral; waiting for H1 trend confirmation."
+        else:
+            status_text = "Directional setup detected; waiting for full target-bucket confirmation."
     elif status == "ready":
         status_text = "High-accuracy RR 1:2 signal is ready for alerting."
 
@@ -1164,10 +1205,12 @@ def _build_rr_signal_state(
         "mtfAgreement": mtf_directional_matches,
         "mtfConflict": mtf_conflict_count,
         "h1DirectionalFilterPass": h1_filter_pass,
+        "h1Neutral": h1_neutral,
         "h1Trend": h1_trend,
         "h4DirectionalFilterPass": h4_filter_pass,
         "h4Trend": h4_trend,
         "m15Trend": m15_trend,
+        "momentumOverrideQualified": momentum_override_qualified,
         "targetMovePips": round(target_move_pips, 1),
         "targetMoveAtr": round(selected_target_atr, 2),
         "targetBucket": selected_bucket_key,
