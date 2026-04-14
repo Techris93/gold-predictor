@@ -143,6 +143,8 @@ DEFAULT_STRATEGY_PARAMS = {
     "rr_signal_b_min_move_probability": 0.60,
     "rr_signal_b_min_session_quality": 0.72,
     "rr_signal_b_require_active_state": 1,
+    "rr_signal_b_min_mtf_matches": 3,
+    "rr_signal_strong_stack_target_atr_cap": 1.20,
     "rr_signal_allow_soft_no_trade": 1,
     "rr_signal_soft_no_trade_terms": [
         "Expected value edge is below",
@@ -955,6 +957,10 @@ def _build_rr_signal_state(
     b_min_move_probability = float(strategy_params.get("rr_signal_b_min_move_probability", 0.64) or 0.64)
     b_min_session_quality = float(strategy_params.get("rr_signal_b_min_session_quality", 0.78) or 0.78)
     b_require_active_state = bool(int(strategy_params.get("rr_signal_b_require_active_state", 1) or 0))
+    b_min_mtf_matches = int(round(float(strategy_params.get("rr_signal_b_min_mtf_matches", 3) or 3)))
+    b_min_mtf_matches = max(2, min(3, b_min_mtf_matches))
+    strong_stack_target_atr_cap = float(strategy_params.get("rr_signal_strong_stack_target_atr_cap", 1.20) or 1.20)
+    strong_stack_target_atr_cap = max(0.9, min(2.0, strong_stack_target_atr_cap))
     allow_soft_no_trade = bool(int(strategy_params.get("rr_signal_allow_soft_no_trade", 1) or 0))
     soft_no_trade_terms = strategy_params.get("rr_signal_soft_no_trade_terms", [])
     soft_no_trade_terms = soft_no_trade_terms if isinstance(soft_no_trade_terms, list) else []
@@ -1115,7 +1121,7 @@ def _build_rr_signal_state(
         # Allow earlier arming when direction quality is strong and stack agreement is clean.
         effective_min_confidence = min(min_confidence, 60.0)
         effective_min_expected_edge = min(min_expected_edge, 0.008)
-        effective_target_atr = min(selected_target_atr, 1.2)
+        effective_target_atr = min(selected_target_atr, strong_stack_target_atr_cap)
 
     tier = "watch"
     grade = "Watchlist"
@@ -1175,8 +1181,11 @@ def _build_rr_signal_state(
     if not m15_trigger_ok:
         blockers.append("M15 trigger confirmation is missing")
     if tier == "b":
-        if mtf_directional_matches < 3:
-            blockers.append("B-grade requires full multi-timeframe alignment")
+        if mtf_directional_matches < b_min_mtf_matches:
+            if b_min_mtf_matches >= 3:
+                blockers.append("B-grade requires full multi-timeframe alignment")
+            else:
+                blockers.append("B-grade requires at least two aligned timeframes")
         if move_probability < max(min_move_probability, b_min_move_probability):
             blockers.append("B-grade move probability is too weak")
         if session_quality < b_min_session_quality:

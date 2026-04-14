@@ -21,5 +21,12 @@
   "direction_probability_floor": 0.58,
   "transition_setup_tradeability_floor": 56.0,
   "transition_setup_entry_prob_floor": 0.6,
+  "rr_signal_min_confidence": 64.0,
+  "rr_signal_min_move_probability": 0.53,
+  "rr_signal_b_min_move_probability": 0.56,
+  "rr_signal_b_min_session_quality": 0.65,
+  "rr_signal_b_require_active_state": 0,
+  "rr_signal_b_min_mtf_matches": 2,
+  "rr_signal_strong_stack_target_atr_cap": 1.1,
   "mtf_intervals": ["15min", "1h", "4h"]
 }
