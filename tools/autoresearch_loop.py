@@ -47,6 +47,10 @@ from tools.signal_engine import (
 
 ACTIVE_RESEARCH_TEMPLATE_SOURCE = BASE_DIR / "config" / "backtest_params.json"
 ACTIVE_RESEARCH_TEMPLATE = normalize_strategy_params(ACTIVE_BACKTEST_PARAMS)
+ACTIVE_STRATEGY_PARAMS_SOURCE = BASE_DIR / "config" / "strategy_params.json"
+ACTIVE_BACKTEST_PARAMS_SOURCE = BASE_DIR / "config" / "backtest_params.json"
+ACTIVE_RESEARCH_SNAPSHOT_FILE = BASE_DIR / "tools" / "reports" / "autoresearch_active.json"
+TRACKED_STRATEGY_KEYS = ("ema_short", "ema_long", "rsi_overbought", "rsi_oversold", "cmf_window")
 
 
 @dataclass(frozen=True)
@@ -65,6 +69,63 @@ class StrategyParams:
             "rsi_oversold": self.rsi_oversold,
             "cmf_window": self.cmf_window,
         }
+
+
+def _read_json_dict(path: Path) -> Dict[str, object]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _tracked_param_subset(params: Dict[str, object]) -> Dict[str, object]:
+    params = params if isinstance(params, dict) else {}
+    return {key: params.get(key) for key in TRACKED_STRATEGY_KEYS if key in params}
+
+
+def _param_summary(params: Dict[str, object]) -> Dict[str, object]:
+    params = params if isinstance(params, dict) else {}
+    return {
+        "winning_ema": f"{params.get('ema_short', '-')}/{params.get('ema_long', '-')}",
+        "winning_rsi": f"{params.get('rsi_overbought', '-')}/{params.get('rsi_oversold', '-')}",
+        "winning_cmf": params.get("cmf_window"),
+    }
+
+
+def write_active_strategy_snapshot(report: Dict[str, object], latest_file: Path) -> None:
+    strategy_params = _read_json_dict(ACTIVE_STRATEGY_PARAMS_SOURCE)
+    backtest_params = _read_json_dict(ACTIVE_BACKTEST_PARAMS_SOURCE)
+    best = report.get("best") or {}
+    best_params = best.get("params") if isinstance(best, dict) else {}
+    tracked_active = _tracked_param_subset(strategy_params)
+    tracked_best = _tracked_param_subset(best_params if isinstance(best_params, dict) else {})
+
+    snapshot = {
+        "generated_at": report.get("generated_at"),
+        "report_generated_at": report.get("generated_at"),
+        "report_file": str(latest_file),
+        "active_strategy": {
+            "source": "config_snapshot",
+            "strategy_params_file": str(ACTIVE_STRATEGY_PARAMS_SOURCE),
+            "backtest_params_file": str(ACTIVE_BACKTEST_PARAMS_SOURCE),
+            "strategy_params": strategy_params,
+            "backtest_params": backtest_params,
+            "tracked_params": tracked_active,
+            "summary": _param_summary(strategy_params),
+        },
+        "recommendation": {
+            "promote": bool(report.get("promote")),
+            "promotion_mode": report.get("promotion_mode"),
+            "promotion_reason": report.get("promotion_reason", ""),
+            "best_params": best_params if isinstance(best_params, dict) else {},
+            "tracked_best_params": tracked_best,
+            "matches_active_strategy": bool(tracked_active and tracked_best and tracked_active == tracked_best),
+        },
+    }
+
+    ACTIVE_RESEARCH_SNAPSHOT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    ACTIVE_RESEARCH_SNAPSHOT_FILE.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
 
 
 def fetch_history(ticker: str, period: str, interval: str) -> pd.DataFrame:
@@ -576,7 +637,7 @@ def build_regime_param_overrides(best_params: Dict[str, object]) -> Dict[str, ob
     }
 
 
-def maybe_commit_promoted_result(
+def maybe_commit_research_artifacts(
     report: Dict[str, object],
     latest_file: Path,
     reports_dir: Path,
@@ -777,9 +838,11 @@ def main() -> None:
 
     report["candidate_regime_overrides_file"] = str(candidate_regime_file)
     report["live_regime_applied"] = live_regime_applied
+    report["active_strategy_snapshot_file"] = str(ACTIVE_RESEARCH_SNAPSHOT_FILE)
 
     latest_file = reports_dir / "autoresearch_last.json"
     latest_file.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    write_active_strategy_snapshot(report, latest_file)
 
     top = report["best"]
     print("\n[autoresearch] ===== SUMMARY =====")
@@ -794,13 +857,14 @@ def main() -> None:
     print("Best recency-weighted metrics:", top["summary"])
     print("Promotion decision:", report["promote"], "|", report["promotion_reason"])
     print("Report file:", str(latest_file))
+    print("Active strategy snapshot file:", str(ACTIVE_RESEARCH_SNAPSHOT_FILE))
     print("Candidate regime overrides file:", str(candidate_regime_file))
     if live_regime_applied:
         print("Regime overrides file:", str(regime_params_file))
     elif report.get("promote"):
         print("Live regime overrides not applied; rerun with --apply-promoted-regime to update config/regime_params.json")
 
-    maybe_commit_promoted_result(
+    maybe_commit_research_artifacts(
         report=report,
         latest_file=latest_file,
         reports_dir=reports_dir,

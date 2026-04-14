@@ -1111,11 +1111,13 @@
                 <span class="metric-value" id="ar-promote">---</span>
               </div>
               <div class="metric-row">
-                <span class="metric-label">Active Strategy</span>
-                <span class="metric-value" id="ar-active-strategy">---</span>
+                <span class="metric-label">Active Config</span>
+                <span class="metric-value compact" id="ar-active-config"
+                  >---</span
+                >
               </div>
               <div class="metric-row">
-                <span class="metric-label">Last Swarm Run</span>
+                <span class="metric-label">Last Research Run</span>
                 <span class="metric-value" id="ar-updated">---</span>
               </div>
             </div>
@@ -1592,21 +1594,30 @@
         const scoreEl = document.getElementById("ar-score");
         const passRateEl = document.getElementById("ar-pass-rate");
         const promoteEl = document.getElementById("ar-promote");
-        const activeStrategyEl = document.getElementById("ar-active-strategy");
+        const activeConfigEl = document.getElementById("ar-active-config");
         const updatedEl = document.getElementById("ar-updated");
         const latestRunPromoted = Boolean(data.latest_run_promote);
-        const hasActivePromotedStrategy = Boolean(
-          data.has_active_promoted_strategy,
-        );
+        const active = data.active_params || {};
+        const activeEmaText =
+          active.ema_short !== undefined && active.ema_long !== undefined
+            ? `EMA ${active.ema_short}/${active.ema_long}`
+            : "EMA -/-";
+        const activeRsiText =
+          active.rsi_overbought !== undefined &&
+          active.rsi_oversold !== undefined
+            ? `RSI ${active.rsi_overbought}/${active.rsi_oversold}`
+            : "RSI -/-";
+        const activeCmfText =
+          active.cmf_window !== undefined
+            ? `CMF ${active.cmf_window}`
+            : "CMF -";
 
         if (statusEl) {
           statusEl.innerText = "Loaded";
           statusEl.className = "metric-value value-bullish";
         }
         if (toggleStatusEl) {
-          toggleStatusEl.innerText = hasActivePromotedStrategy
-            ? "Promoted"
-            : "Loaded";
+          toggleStatusEl.innerText = latestRunPromoted ? "Recommend" : "Hold";
         }
         if (scoreEl) {
           scoreEl.innerText =
@@ -1631,16 +1642,22 @@
           passRateEl.innerText = `${emaText} · ${rsiText} · ${cmfText}`;
         }
         if (promoteEl) {
-          promoteEl.innerText = latestRunPromoted ? "Promoted" : "Not Promoted";
+          promoteEl.innerText = latestRunPromoted ? "Pass" : "Hold";
           promoteEl.className = `metric-value ${latestRunPromoted ? "value-bullish" : "value-bearish"}`;
           promoteEl.title = data.promotion_reason || "";
         }
-        if (activeStrategyEl) {
-          activeStrategyEl.innerText = hasActivePromotedStrategy
-            ? "Promoted strategy available"
-            : "No promoted strategy saved";
-          activeStrategyEl.className = `metric-value ${hasActivePromotedStrategy ? "value-bullish" : "value-bearish"}`;
-          activeStrategyEl.title = data.active_strategy_reason || "";
+        if (activeConfigEl) {
+          const hasActiveParams =
+            active.ema_short !== undefined ||
+            active.ema_long !== undefined ||
+            active.rsi_overbought !== undefined ||
+            active.rsi_oversold !== undefined ||
+            active.cmf_window !== undefined;
+          activeConfigEl.innerText = hasActiveParams
+            ? `${activeEmaText} · ${activeRsiText} · ${activeCmfText}`
+            : data.active_strategy_status || "N/A";
+          activeConfigEl.className = `metric-value compact ${data.active_matches_best_candidate ? "value-bullish" : ""}`;
+          activeConfigEl.title = data.active_strategy_reason || "";
         }
         if (updatedEl) {
           updatedEl.innerText = data.latest_generated_at
