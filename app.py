@@ -289,6 +289,8 @@ def _format_rr_direction_grade(rr_signal):
 def _format_rr_target_bucket_probability(rr_signal):
     rr_signal = rr_signal if isinstance(rr_signal, dict) else {}
     target_bucket = str(rr_signal.get("targetBucket") or "").strip()
+    if target_bucket:
+        target_bucket = target_bucket.replace("_atr", " ATR").replace("_", " ")
     if not target_bucket:
         target_move_atr = rr_signal.get("targetMoveAtr")
         if isinstance(target_move_atr, (int, float)):
@@ -318,12 +320,24 @@ def _format_market_structure_change(changes, market_structure):
     return current_structure or "N/A"
 
 
+def _is_rr_signal_actionable(rr_signal):
+    rr_signal = rr_signal if isinstance(rr_signal, dict) else {}
+    status = str(rr_signal.get("status") or "").strip()
+    direction = str(rr_signal.get("direction") or "").strip()
+    grade = str(rr_signal.get("grade") or "").strip()
+    return (
+        status in {"arming", "ready"}
+        and direction in {"Bullish", "Bearish"}
+        and grade in {"A+ (Quant)", "A (High Accuracy)", "B (Qualified)"}
+    )
+
+
 def _build_signal_notification(changes, rr_signal, market_structure):
     changed_keys = set((changes or {}).keys())
     title = (
         "XAUUSD Market Structure Changed"
         if "market_structure" in changed_keys
-        else "XAUUSD Direction / Grade Changed"
+        else ("XAUUSD Adaptive RR Signal" if "rr_signal_status" in changed_keys else "XAUUSD Direction / Grade Changed")
     )
     body = "\n".join(
         [
@@ -1858,6 +1872,7 @@ def _indicator_monitor_loop():
                         rr_signal_status = str(rr_signal_payload.get("status") or "")
                         rr_signal_grade = str(rr_signal_payload.get("grade") or "")
                         rr_signal_direction = str(rr_signal_payload.get("direction") or "")
+                        rr_signal_actionable = _is_rr_signal_actionable(rr_signal_payload)
                         verdict = str(payload.get("verdict") or "")
                         confidence_bucket = _confidence_bucket(payload.get("confidence"))
                         previous_trade_playbook_stage = str(alert_state.get("last_trade_playbook_stage", ""))
@@ -1917,7 +1932,10 @@ def _indicator_monitor_loop():
                             warning_changed = False
                             event_regime_changed = False
                             breakout_bias_changed = False
-                        market_structure_changed = "market_structure" in notification_changes
+                        market_structure_changed = (
+                            "market_structure" in notification_changes
+                            and rr_signal_actionable
+                        )
                         verdict_changed = "verdict" in notification_changes and bool(verdict)
                         confidence_changed = (
                             "confidence_bucket" in notification_changes
@@ -1931,18 +1949,19 @@ def _indicator_monitor_loop():
                             and bool(rr_signal_status)
                             and rr_signal_status != previous_rr_signal_status
                             and rr_signal_status in {"arming", "ready"}
+                            and rr_signal_actionable
                         )
                         rr_signal_grade_changed = (
                             "rr_signal_grade" in notification_changes
                             and bool(rr_signal_grade)
                             and rr_signal_grade != previous_rr_signal_grade
-                            and rr_signal_direction in {"Bullish", "Bearish"}
+                            and rr_signal_actionable
                         )
                         rr_signal_direction_changed = (
                             "rr_signal_direction" in notification_changes
                             and bool(rr_signal_direction)
                             and rr_signal_direction != previous_rr_signal_direction
-                            and rr_signal_direction in {"Bullish", "Bearish"}
+                            and rr_signal_actionable
                         )
                         entry_readiness_changed = (
                             "entry_readiness" in notification_changes
@@ -1955,6 +1974,7 @@ def _indicator_monitor_loop():
                         )
                         should_alert = bool(
                             market_structure_changed
+                            or rr_signal_status_changed
                             or rr_signal_grade_changed
                             or rr_signal_direction_changed
                         )

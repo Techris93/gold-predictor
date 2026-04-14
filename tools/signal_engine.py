@@ -1105,6 +1105,7 @@ def _build_rr_signal_state(
         allowed_grades.add("B (Qualified)")
     send_signal = not blockers and grade in allowed_grades
     status = "ready" if send_signal else ("arming" if grade.startswith("A") and direction in {"Bullish", "Bearish"} else "standby")
+    display_direction = direction if status in {"arming", "ready"} else "Neutral"
 
     trigger = "breakout_continuation"
     sr_reaction = str(support_resistance.get("reaction") or "None")
@@ -1124,18 +1125,18 @@ def _build_rr_signal_state(
 
     sl_distance = sl_pips * pip_size
     tp_distance = tp_pips * pip_size
-    entry_price = round(current_price, 2) if current_price > 0 else None
+    entry_price = round(current_price, 2) if current_price > 0 and display_direction in {"Bullish", "Bearish"} else None
     stop_loss = None
     take_profit = None
-    if current_price > 0 and direction in {"Bullish", "Bearish"}:
-        if direction == "Bullish":
+    if current_price > 0 and display_direction in {"Bullish", "Bearish"}:
+        if display_direction == "Bullish":
             stop_loss = round(current_price - sl_distance, 2)
             take_profit = round(current_price + tp_distance, 2)
         else:
             stop_loss = round(current_price + sl_distance, 2)
             take_profit = round(current_price - tp_distance, 2)
 
-    status_text = "Stand by until higher-quality directional conditions form."
+    status_text = "Stand by. Current RR direction is not actionable yet."
     if status == "arming":
         status_text = "Directional setup detected; waiting for full target-bucket confirmation."
     elif status == "ready":
@@ -1151,7 +1152,8 @@ def _build_rr_signal_state(
         "tier": tier,
         "grade": grade,
         "quantScore": round(quant_score, 2),
-        "direction": direction,
+        "direction": display_direction,
+        "candidateDirection": direction,
         "mtfAgreement": mtf_directional_matches,
         "mtfConflict": mtf_conflict_count,
         "h1DirectionalFilterPass": h1_filter_pass,
