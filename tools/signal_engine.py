@@ -1097,6 +1097,20 @@ def _build_rr_signal_state(
         and big_move_risk >= h1_neutral_min_big_move_risk
         and (not h1_neutral_require_h4_non_opposition or not h4_opposes_candidate)
     )
+    strong_directional_stack = (
+        direction in {"Bullish", "Bearish"}
+        and directional_probability >= max(min_move_probability, 0.60)
+        and float(tradeability_score) >= max(min_tradeability_score - 6.0, 50.0)
+        and (mtf_directional_matches >= 2 or momentum_override_qualified)
+    )
+    effective_min_confidence = min_confidence
+    effective_min_expected_edge = min_expected_edge
+    effective_target_atr = selected_target_atr
+    if strong_directional_stack:
+        # Allow earlier arming when direction quality is strong and stack agreement is clean.
+        effective_min_confidence = min(min_confidence, 60.0)
+        effective_min_expected_edge = min(min_expected_edge, 0.008)
+        effective_target_atr = min(selected_target_atr, 1.2)
 
     tier = "watch"
     grade = "Watchlist"
@@ -1116,16 +1130,16 @@ def _build_rr_signal_state(
     blockers = []
     if direction not in {"Bullish", "Bearish"}:
         blockers.append("No directional bias")
-    if float(confidence) < min_confidence:
-        blockers.append(f"Confidence below {int(min_confidence)}%")
+    if float(confidence) < effective_min_confidence:
+        blockers.append(f"Confidence below {int(effective_min_confidence)}%")
     if float(tradeability_score) < min_tradeability_score:
         blockers.append(f"Tradeability below {round(min_tradeability_score, 1)}")
     if move_probability < min_move_probability:
         blockers.append(f"Target bucket probability below {round(min_move_probability * 100)}%")
-    if projected_move_pips < target_move_pips and projected_move_atr < max(0.9, selected_target_atr * 0.9):
-        blockers.append(f"Projected move below {round(selected_target_atr, 1)} ATR / {int(target_move_pips)} pips")
-    if float(expected_edge_pct) < min_expected_edge:
-        blockers.append(f"Expected edge below {round(min_expected_edge, 2)}")
+    if projected_move_pips < target_move_pips and projected_move_atr < max(0.9, effective_target_atr * 0.9):
+        blockers.append(f"Projected move below {round(effective_target_atr, 1)} ATR / {int(target_move_pips)} pips")
+    if float(expected_edge_pct) < effective_min_expected_edge:
+        blockers.append(f"Expected edge below {round(effective_min_expected_edge, 3)}")
     if action_state not in {"LONG_ACTIVE", "SHORT_ACTIVE", "SETUP_LONG", "SETUP_SHORT"} and not momentum_override_qualified:
         blockers.append("Execution state not directional")
     if mtf_directional_matches < 2 and not momentum_override_qualified:
@@ -2213,17 +2227,26 @@ def compute_prediction_from_ta(ta_data):
     if verdict == "Neutral" and max(bull_trigger, bear_trigger) < (trigger_min_score * 0.75) and max(bullish_prob_30, bearish_prob_30) < 0.58:
         no_trade_reasons.append("No clean trigger is present.")
     fakeout_risk_score = float(((regime_state.get("components") or {}).get("fakeout_risk_score")) or 0.0)
-    if fakeout_risk_score >= 3.0:
+    directional_conviction = max(bullish_prob_60, bearish_prob_60)
+    fakeout_hard_block = (
+        fakeout_risk_score >= 3.6
+        and not (
+            directional_conviction >= 0.74
+            and expansion_probability_60m >= 58.0
+            and tradeability_score >= breakout_setup_tradeability_floor
+        )
+    )
+    if fakeout_hard_block:
         anti_chop_reasons.append("Breakout risk is elevated, but fakeout risk remains high.")
 
     if anti_chop_reasons:
         penalty += anti_chop_penalty
-    if fakeout_risk_score >= 3.0:
+    if fakeout_hard_block:
         penalty += fakeout_risk_penalty
         if action_state in {"SETUP_LONG", "SETUP_SHORT"}:
             action_state = "WAIT"
             action = "hold"
-        if not no_trade_reasons:
+        if not no_trade_reasons and anti_chop_reasons:
             no_trade_reasons.append(anti_chop_reasons[0])
 
     confidence = base_conf - penalty
@@ -2347,24 +2370,36 @@ def compute_prediction_from_ta(ta_data):
     fakeout_cap = float(strategy_params.get("meta_fakeout_prob_cap", 0.42))
     exit_cap = float(strategy_params.get("meta_exit_prob_cap", 0.58))
     min_expected_edge_pct = float(strategy_params.get("min_expected_edge_pct", 0.06))
+    effective_min_expected_edge_pct = min_expected_edge_pct
+    if directional_bias_source == "breakout_stack":
+        effective_min_expected_edge_pct = min(min_expected_edge_pct, 0.005)
+    elif regime_label == "trend" and directional_bias in {"Bullish", "Bearish"}:
+        effective_min_expected_edge_pct = min(min_expected_edge_pct, 0.005)
     effective_fakeout_cap = fakeout_cap
     if directional_bias_source == "breakout_stack":
         if action_state in {"LONG_ACTIVE", "SHORT_ACTIVE"}:
             effective_fakeout_cap = max(fakeout_cap, breakout_active_fakeout_probability_cap)
         elif action_state in {"SETUP_LONG", "SETUP_SHORT"}:
             effective_fakeout_cap = max(fakeout_cap, breakout_setup_fakeout_probability_cap)
+    promoted_by_breakout = breakout_active_eligible or breakout_setup_eligible
 
     if action_state in {"LONG_ACTIVE", "SHORT_ACTIVE", "SETUP_LONG", "SETUP_SHORT"}:
-        if meta_scores["entry_timing_score"] < entry_threshold:
-            no_trade_reasons.append("Entry timing model is not yet confirming momentum quality.")
-        if meta_scores["fakeout_probability"] > effective_fakeout_cap:
-            no_trade_reasons.append("Fakeout probability is elevated for the current setup.")
-        if meta_scores["exit_risk_probability"] > exit_cap and action_state in {"SETUP_LONG", "SETUP_SHORT"}:
-            no_trade_reasons.append("Exit risk model is too high for a fresh entry.")
-        if expected_edge_pct < min_expected_edge_pct:
+        if directional_bias_source == "breakout_stack" and promoted_by_breakout:
+            if meta_scores["fakeout_probability"] > (effective_fakeout_cap + 0.10):
+                no_trade_reasons.append("Fakeout probability is elevated for the current setup.")
+            if meta_scores["exit_risk_probability"] > (exit_cap + 0.10) and action_state in {"SETUP_LONG", "SETUP_SHORT"}:
+                no_trade_reasons.append("Exit risk model is too high for a fresh entry.")
+        else:
+            if meta_scores["entry_timing_score"] < entry_threshold:
+                no_trade_reasons.append("Entry timing model is not yet confirming momentum quality.")
+            if meta_scores["fakeout_probability"] > effective_fakeout_cap:
+                no_trade_reasons.append("Fakeout probability is elevated for the current setup.")
+            if meta_scores["exit_risk_probability"] > exit_cap and action_state in {"SETUP_LONG", "SETUP_SHORT"}:
+                no_trade_reasons.append("Exit risk model is too high for a fresh entry.")
+            if execution_meta["meta_label_probability"] < transition_setup_entry_prob_floor:
+                no_trade_reasons.append("Meta-label probability is not strong enough yet.")
+        if expected_edge_pct < effective_min_expected_edge_pct:
             no_trade_reasons.append("Expected value edge is below the execution threshold.")
-        if execution_meta["meta_label_probability"] < transition_setup_entry_prob_floor:
-            no_trade_reasons.append("Meta-label probability is not strong enough yet.")
 
         if no_trade_reasons and action_state in {"LONG_ACTIVE", "SHORT_ACTIVE", "SETUP_LONG", "SETUP_SHORT"}:
             action_state = "WAIT"
@@ -2372,6 +2407,24 @@ def compute_prediction_from_ta(ta_data):
             confidence = min(confidence, max(no_trade_confidence_cap + 8, 68.0))
 
     all_no_trade_reasons = list(hard_no_trade_reasons) + list(no_trade_reasons)
+    primary_hard_no_trade_reason = hard_no_trade_reasons[0] if hard_no_trade_reasons else ""
+    primary_soft_no_trade_reason = no_trade_reasons[0] if no_trade_reasons else ""
+    primary_no_trade_reason = primary_hard_no_trade_reason or primary_soft_no_trade_reason
+
+    if verdict in {"Bullish", "Bearish"} and not hard_no_trade_reasons and not no_trade_reasons:
+        directional_prob_60 = max(bullish_prob_60, bearish_prob_60)
+        if (
+            action_state in {"LONG_ACTIVE", "SHORT_ACTIVE"}
+            and directional_prob_60 >= 0.68
+            and tradeability_score >= medium_tradeability_threshold
+        ):
+            confidence = max(confidence, 66)
+        elif (
+            action_state in {"SETUP_LONG", "SETUP_SHORT"}
+            and directional_prob_60 >= 0.64
+            and tradeability_score >= transition_setup_tradeability_floor
+        ):
+            confidence = max(confidence, 60)
 
     forecast_state = _build_forecast_state(
         regime_bucket,
@@ -2459,8 +2512,18 @@ def compute_prediction_from_ta(ta_data):
         return f"Signals are conflicted across trend, price action, and breakout context. No trade is allowed yet. {reason_text}"
 
     if all_no_trade_reasons:
-        trade_guidance["sellLevel"] = "Weak"
-        trade_guidance["buyLevel"] = "Weak"
+        if primary_hard_no_trade_reason or conflicted_bias_stack:
+            trade_guidance["sellLevel"] = "Weak"
+            trade_guidance["buyLevel"] = "Weak"
+        elif directional_bias == "Bullish":
+            trade_guidance["sellLevel"] = "Weak"
+            if trade_guidance.get("buyLevel") == "Weak":
+                trade_guidance["buyLevel"] = "Watch"
+        elif directional_bias == "Bearish":
+            trade_guidance["buyLevel"] = "Weak"
+            if trade_guidance.get("sellLevel") == "Weak":
+                trade_guidance["sellLevel"] = "Watch"
+
         if conflicted_bias_stack:
             trade_guidance["summary"] = _conflicted_summary(all_no_trade_reasons[0])
         elif directional_bias == "Bearish":
@@ -2536,7 +2599,10 @@ def compute_prediction_from_ta(ta_data):
         "raw_verdict": verdict,
         "verdict": verdict,
         "confidence": confidence,
-        "noTradeReason": all_no_trade_reasons[0] if all_no_trade_reasons else "",
+        "noTradeReason": primary_no_trade_reason,
+        "noTradeReasonHard": primary_hard_no_trade_reason,
+        "noTradeReasonSoft": primary_soft_no_trade_reason,
+        "hasHardNoTrade": bool(primary_hard_no_trade_reason),
         "setupScore": round(max(bull_setup, bear_setup), 2),
         "triggerScore": round(max(bull_trigger, bear_trigger), 2),
         "directionScore": direction_score,

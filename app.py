@@ -1378,7 +1378,9 @@ def _stabilize_decision_status(decision_status):
 def _stabilize_prediction(prediction, ta_data):
     raw_verdict = prediction.get("verdict", "Neutral")
     raw_confidence = int(prediction.get("confidence", 50) or 50)
-    no_trade_reason = prediction.get("noTradeReason") or ""
+    hard_no_trade_reason = prediction.get("noTradeReasonHard") or ""
+    soft_no_trade_reason = prediction.get("noTradeReasonSoft") or ""
+    has_hard_no_trade = bool(prediction.get("hasHardNoTrade")) or bool(hard_no_trade_reason)
     event_risk_active = bool((ta_data.get("event_risk") or {}).get("active"))
     state = _load_json_file(
         PREDICTION_STATE_FILE,
@@ -1399,7 +1401,7 @@ def _stabilize_prediction(prediction, ta_data):
     stable_verdict = state.get("stable_verdict", "Neutral")
     stable_confidence = int(state.get("stable_confidence", 50) or 50)
 
-    if no_trade_reason or event_risk_active:
+    if has_hard_no_trade or event_risk_active:
         stable_verdict = "Neutral"
         stable_confidence = min(raw_confidence, 60)
     elif raw_verdict == "Neutral":
@@ -1409,6 +1411,9 @@ def _stabilize_prediction(prediction, ta_data):
     elif raw_streak >= PREDICTION_CONFIRMATION_COUNT:
         stable_verdict = raw_verdict
         stable_confidence = raw_confidence
+        if soft_no_trade_reason:
+            # Keep directional read visible while acknowledging a soft execution blocker.
+            stable_confidence = max(52, min(stable_confidence, 72))
     else:
         stable_confidence = min(raw_confidence, 58)
 
