@@ -962,6 +962,7 @@ def _build_rr_signal_state(
     mtf_conflict_count = sum(1 for value in mtf_votes if value in {"Bullish", "Bearish"} and value != direction and direction in {"Bullish", "Bearish"})
     mtf_quality = mtf_directional_matches / 3.0 if direction in {"Bullish", "Bearish"} else 0.0
     h1_filter_pass = direction in {"Bullish", "Bearish"} and h1_trend == direction
+    h4_filter_pass = direction in {"Bullish", "Bearish"} and h4_trend in {direction, "Neutral"}
 
     session_context = _build_session_context(ta_data)
     now_hour_utc = int(session_context.get("hour") or datetime.now(timezone.utc).hour)
@@ -1071,6 +1072,10 @@ def _build_rr_signal_state(
         blockers.append("Insufficient multi-timeframe directional agreement")
     if direction in {"Bullish", "Bearish"} and not h1_filter_pass:
         blockers.append("H1 directional filter is not aligned")
+    if direction in {"Bullish", "Bearish"} and h4_trend in {"Bullish", "Bearish"} and not h4_filter_pass:
+        blockers.append("H4 trend opposes H1 direction")
+    if direction in {"Bullish", "Bearish"} and m15_trend in {"Bullish", "Bearish"} and m15_trend != direction:
+        blockers.append("M15 trend disagrees with H1 direction")
     if no_trade_reasons:
         reason = str(no_trade_reasons[0])
         soft_match = any(term in reason for term in soft_no_trade_terms)
@@ -1154,10 +1159,15 @@ def _build_rr_signal_state(
         "quantScore": round(quant_score, 2),
         "direction": display_direction,
         "candidateDirection": direction,
+        "directionTimeframe": "1h",
+        "entryTriggerTimeframe": "15m",
         "mtfAgreement": mtf_directional_matches,
         "mtfConflict": mtf_conflict_count,
         "h1DirectionalFilterPass": h1_filter_pass,
         "h1Trend": h1_trend,
+        "h4DirectionalFilterPass": h4_filter_pass,
+        "h4Trend": h4_trend,
+        "m15Trend": m15_trend,
         "targetMovePips": round(target_move_pips, 1),
         "targetMoveAtr": round(selected_target_atr, 2),
         "targetBucket": selected_bucket_key,
@@ -1435,11 +1445,14 @@ def compute_prediction_from_ta(ta_data):
     strategy_params, active_regime_profile = _apply_regime_overrides(strategy_params, ta_data)
 
     verdict = "Neutral"
-    trend = ta_data.get("ema_trend", "Neutral")
+    mtf = ta_data.get("multi_timeframe", {})
+    m15_trend = str(mtf.get("m15_trend") or ta_data.get("execution_trend") or "Neutral")
+    h1_trend = str(mtf.get("h1_trend") or ta_data.get("ema_trend") or "Neutral")
+    h4_trend = str(mtf.get("h4_trend") or "Neutral")
+    trend = h1_trend if h1_trend in {"Bullish", "Bearish"} else str(ta_data.get("ema_trend") or "Neutral")
     volume = (ta_data.get("volume_analysis") or {}).get("overall_volume_signal", "Neutral")
     regime = (ta_data.get("volatility_regime") or {}).get("market_regime", "Range-Bound")
     adx_14 = (ta_data.get("volatility_regime") or {}).get("adx_14", 0)
-    mtf = ta_data.get("multi_timeframe", {})
     alignment_score = mtf.get("alignment_score", 0)
     alignment_label = mtf.get("alignment_label", "Mixed / Low Alignment")
     pa_struct = (ta_data.get("price_action") or {}).get("structure", "Consolidating")
@@ -1487,7 +1500,6 @@ def compute_prediction_from_ta(ta_data):
     no_trade_adx_threshold = float(strategy_params.get("no_trade_adx_threshold", 18))
     no_trade_confidence_cap = float(strategy_params.get("no_trade_confidence_cap", 60))
     event_risk_penalty = float(strategy_params.get("event_risk_penalty", 15.0))
-    high_breakout_threshold = float(strategy_params.get("high_breakout_threshold", 64.0))
     directional_expansion_threshold = float(strategy_params.get("directional_expansion_threshold", 78.0))
     event_watch_setup_weight = float(strategy_params.get("event_watch_setup_weight", 0.35))
     event_breakout_setup_weight = float(strategy_params.get("event_breakout_setup_weight", 0.7))
@@ -1717,30 +1729,52 @@ def compute_prediction_from_ta(ta_data):
     bullish_prob_60 = _safe_float(direction_probabilities.get("up_60m"), 0.5)
     bearish_prob_60 = _safe_float(direction_probabilities.get("down_60m"), 0.5)
 
-    directional_bias = "Neutral"
+    probabilistic_direction = "Neutral"
     if bullish_prob_60 >= direction_probability_floor and bullish_prob_60 >= bearish_prob_60 + 0.06:
-        directional_bias = "Bullish"
+        probabilistic_direction = "Bullish"
     elif bearish_prob_60 >= direction_probability_floor and bearish_prob_60 >= bullish_prob_60 + 0.06:
-        directional_bias = "Bearish"
+        probabilistic_direction = "Bearish"
     elif score_diff >= verdict_margin_threshold * 1.15:
-        directional_bias = "Bullish"
+        probabilistic_direction = "Bullish"
     elif score_diff <= -verdict_margin_threshold * 1.15:
-        directional_bias = "Bearish"
+        probabilistic_direction = "Bearish"
+
+    h1_direction = h1_trend if h1_trend in {"Bullish", "Bearish"} else "Neutral"
+    h4_direction = h4_trend if h4_trend in {"Bullish", "Bearish"} else "Neutral"
+    h4_opposes_h1 = (
+        h1_direction in {"Bullish", "Bearish"}
+        and h4_direction in {"Bullish", "Bearish"}
+        and h4_direction != h1_direction
+    )
+    h4_filter_pass = h1_direction in {"Bullish", "Bearish"} and h4_direction in {h1_direction, "Neutral"}
+    m15_trigger_aligned = h1_direction in {"Bullish", "Bearish"} and m15_trend == h1_direction
+    m15_trigger_conflict = (
+        h1_direction in {"Bullish", "Bearish"}
+        and m15_trend in {"Bullish", "Bearish"}
+        and m15_trend != h1_direction
+    )
+
+    directional_bias = h1_direction
+    if h4_opposes_h1:
+        directional_bias = "Neutral"
 
     if warning_ladder in {"Directional Expansion Likely", "Active Momentum Event"} and event_breakout_bias != "Neutral":
-        if directional_bias == "Neutral" and big_move_risk >= high_breakout_threshold:
-            directional_bias = event_breakout_bias
-        elif directional_bias != "Neutral" and directional_bias != event_breakout_bias:
+        if directional_bias != "Neutral" and directional_bias != event_breakout_bias:
             message = "Directional event regime conflicts with the core setup."
             if warning_ladder == "Active Momentum Event":
                 hard_no_trade_reasons.append(message)
             else:
                 no_trade_reasons.append(message)
 
-    if directional_bias == "Bullish" and (bull_trigger >= (trigger_min_score * 0.75) or bullish_prob_30 >= 0.60):
-        verdict = "Bullish"
-    elif directional_bias == "Bearish" and (bear_trigger >= (trigger_min_score * 0.75) or bearish_prob_30 >= 0.60):
-        verdict = "Bearish"
+    if directional_bias in {"Bullish", "Bearish"}:
+        verdict = directional_bias
+
+    if h1_direction == "Neutral":
+        no_trade_reasons.append("H1 direction is neutral.")
+    if h4_opposes_h1:
+        hard_no_trade_reasons.append("H4 trend opposes H1 direction.")
+    if m15_trigger_conflict:
+        no_trade_reasons.append("M15 trend disagrees with H1 direction.")
 
     conflict_count = 0
     doji_is_indecision = (
@@ -1837,14 +1871,32 @@ def compute_prediction_from_ta(ta_data):
         exit_risk_score = 4.0 if (no_trade_reasons or hard_no_trade_reasons) else 2.0
 
     action_state = "WAIT"
-    if regime_label not in {"event-risk", "unstable"} and tradeability_score >= transition_setup_tradeability_floor:
+    if (
+        directional_bias in {"Bullish", "Bearish"}
+        and h4_filter_pass
+        and not m15_trigger_conflict
+        and regime_label not in {"event-risk", "unstable"}
+        and tradeability_score >= transition_setup_tradeability_floor
+    ):
         if directional_bias == "Bullish":
-            if bullish_prob_30 >= 0.64 and bullish_prob_60 >= 0.62 and bull_trigger >= trigger_min_score and tradeability_score >= medium_tradeability_threshold:
+            if (
+                m15_trigger_aligned
+                and bullish_prob_30 >= 0.64
+                and bullish_prob_60 >= 0.62
+                and bull_trigger >= trigger_min_score
+                and tradeability_score >= medium_tradeability_threshold
+            ):
                 action_state = "LONG_ACTIVE"
             elif bullish_prob_60 >= transition_setup_entry_prob_floor and direction_score >= direction_hold_threshold:
                 action_state = "SETUP_LONG"
         elif directional_bias == "Bearish":
-            if bearish_prob_30 >= 0.64 and bearish_prob_60 >= 0.62 and bear_trigger >= trigger_min_score and tradeability_score >= medium_tradeability_threshold:
+            if (
+                m15_trigger_aligned
+                and bearish_prob_30 >= 0.64
+                and bearish_prob_60 >= 0.62
+                and bear_trigger >= trigger_min_score
+                and tradeability_score >= medium_tradeability_threshold
+            ):
                 action_state = "SHORT_ACTIVE"
             elif bearish_prob_60 >= transition_setup_entry_prob_floor and direction_score >= direction_hold_threshold:
                 action_state = "SETUP_SHORT"
@@ -2149,7 +2201,7 @@ def compute_prediction_from_ta(ta_data):
         trade_guidance["summary"] += " Active momentum event conditions are in force."
 
     return {
-        "raw_verdict": directional_bias if directional_bias in {"Bullish", "Bearish"} else ("Bullish" if score_diff >= verdict_margin_threshold else ("Bearish" if score_diff <= -verdict_margin_threshold else "Neutral")),
+        "raw_verdict": verdict,
         "verdict": verdict,
         "confidence": confidence,
         "noTradeReason": all_no_trade_reasons[0] if all_no_trade_reasons else "",
@@ -2175,9 +2227,19 @@ def compute_prediction_from_ta(ta_data):
             "regime_bucket": regime_bucket,
             "active_regime_profile": active_regime_profile,
             "directional_bias": directional_bias,
+            "directional_bias_source": "h1",
             "tradeability": tradeability_label,
             "action": action,
             "action_state": action_state,
+            "direction_timeframe": "1h",
+            "entry_trigger_timeframe": "15m",
+            "m15_trend": m15_trend,
+            "h1_trend": h1_trend,
+            "h4_trend": h4_trend,
+            "h4_directional_filter_pass": h4_filter_pass,
+            "m15_trigger_aligned": m15_trigger_aligned,
+            "m15_trigger_conflict": m15_trigger_conflict,
+            "probabilistic_direction": probabilistic_direction,
             "anti_chop_active": bool(anti_chop_reasons),
             "anti_chop_reasons": anti_chop_reasons,
             "entry_timing_score": meta_scores["entry_timing_score"],

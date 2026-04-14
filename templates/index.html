@@ -778,6 +778,12 @@
                 >---</span
               >
             </div>
+            <div class="metric-row">
+              <span class="metric-label">Timeframe Gate</span>
+              <span class="metric-value compact" id="ms-timeframe-gate"
+                >---</span
+              >
+            </div>
           </section>
 
           <section class="section-card">
@@ -821,6 +827,12 @@
             <div class="metric-row">
               <span class="metric-label">Direction / Grade</span>
               <span class="metric-value" id="rr-direction-grade">---</span>
+            </div>
+            <div class="metric-row">
+              <span class="metric-label">Timeframe Filter</span>
+              <span class="metric-value compact" id="rr-timeframe-filter"
+                >---</span
+              >
             </div>
             <div class="metric-row">
               <span class="metric-label">Target Bucket Probability</span>
@@ -2071,6 +2083,7 @@
         const marketScoresEl = document.getElementById("ms-scores");
         marketScoresEl.innerText = `Direction ${Number(marketScores.direction || 0).toFixed(2)} · Tradeability ${Number(marketScores.tradeability || 0).toFixed(2)} · Exit Risk ${Number(marketScores.exit_risk || 0).toFixed(2)} · Stability ${Number(marketScores.stability || 0).toFixed(2)}`;
         const directionModelEl = document.getElementById("ms-direction-model");
+        const timeframeGateEl = document.getElementById("ms-timeframe-gate");
         if (directionModelEl) {
           const directionProbabilities =
             marketState.direction_probabilities || {};
@@ -2083,6 +2096,32 @@
             Number(directionProbabilities[`${directionKey}_60m`] || 0.5) * 100
           ).toFixed(1)}%`;
           directionModelEl.className = `metric-value compact ${marketBiasText === "Bullish" ? "value-bullish" : marketBiasText === "Bearish" ? "value-bearish" : ""}`;
+        }
+        if (timeframeGateEl) {
+          const directionSource = String(
+            marketState.directional_bias_source || "h1",
+          ).toUpperCase();
+          const directionTimeframe = String(
+            marketState.direction_timeframe || "1h",
+          ).toUpperCase();
+          const entryTriggerTimeframe = String(
+            marketState.entry_trigger_timeframe || "15m",
+          ).toUpperCase();
+          const h1Trend = String(marketState.h1_trend || "Neutral");
+          const h4Trend = String(marketState.h4_trend || "Neutral");
+          const m15Trend = String(marketState.m15_trend || "Neutral");
+          const h4Pass = Boolean(marketState.h4_directional_filter_pass);
+          const m15Aligned = Boolean(marketState.m15_trigger_aligned);
+          const m15Conflict = Boolean(marketState.m15_trigger_conflict);
+          const h4GateLabel = h4Pass ? "pass" : "veto";
+          const m15GateLabel = m15Conflict
+            ? "conflict"
+            : m15Aligned
+              ? "aligned"
+              : "waiting";
+          timeframeGateEl.innerText = `${directionSource} ${directionTimeframe} bias ${h1Trend} · H4 ${h4Trend} ${h4GateLabel} · M15 ${entryTriggerTimeframe} ${m15Trend} ${m15GateLabel}`;
+          timeframeGateEl.className = `metric-value compact ${!h4Pass || m15Conflict ? "value-bearish" : m15Aligned ? (marketBiasText === "Bullish" ? "value-bullish" : marketBiasText === "Bearish" ? "value-bearish" : "") : ""}`;
+          timeframeGateEl.title = `Direction is owned by ${directionSource} on ${directionTimeframe}; ${entryTriggerTimeframe} is entry-only.`;
         }
 
         const regimeState =
@@ -2179,6 +2218,9 @@
         const rrBucketsEl = document.getElementById("rr-buckets");
         const rrLevelsEl = document.getElementById("rr-levels");
         const rrSummaryEl = document.getElementById("rr-summary");
+        const rrTimeframeFilterEl = document.getElementById(
+          "rr-timeframe-filter",
+        );
 
         if (rrStatusEl) {
           rrStatusEl.innerText = humanizeWords(rrStatus);
@@ -2187,6 +2229,22 @@
         if (rrDirectionGradeEl) {
           rrDirectionGradeEl.innerText = `${rrDirection} · ${rrGrade}`;
           rrDirectionGradeEl.className = `metric-value ${rrDirection === "Bullish" ? "value-bullish" : rrDirection === "Bearish" ? "value-bearish" : ""}`;
+        }
+        if (rrTimeframeFilterEl) {
+          const rrDirectionTf = String(
+            rrSignal.directionTimeframe || "1h",
+          ).toUpperCase();
+          const rrEntryTf = String(
+            rrSignal.entryTriggerTimeframe || "15m",
+          ).toUpperCase();
+          const rrH1Trend = String(rrSignal.h1Trend || "Neutral");
+          const rrH4Trend = String(rrSignal.h4Trend || "Neutral");
+          const rrM15Trend = String(rrSignal.m15Trend || "Neutral");
+          const rrH1Pass = Boolean(rrSignal.h1DirectionalFilterPass);
+          const rrH4Pass = Boolean(rrSignal.h4DirectionalFilterPass);
+          const rrM15Pass = Boolean(rrSignal.m15TriggerConfirmed);
+          rrTimeframeFilterEl.innerText = `Dir ${rrDirectionTf} · H1 ${rrH1Trend} ${rrH1Pass ? "pass" : "block"} · H4 ${rrH4Trend} ${rrH4Pass ? "pass" : "veto"} · M15 ${rrEntryTf} ${rrM15Trend} ${rrM15Pass ? "trigger" : "waiting"}`;
+          rrTimeframeFilterEl.className = `metric-value compact ${!rrH4Pass || !rrH1Pass ? "value-bearish" : rrM15Pass ? (rrDirection === "Bullish" ? "value-bullish" : rrDirection === "Bearish" ? "value-bearish" : "") : ""}`;
         }
         if (rrProbabilityEl) {
           rrProbabilityEl.innerText = `${humanizeWords(rrSignal.targetBucket || "1.0_atr")} · ${rrProbability.toFixed(1)}%`;
