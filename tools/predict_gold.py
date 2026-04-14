@@ -29,9 +29,16 @@ except ImportError:
     }))
     sys.exit(1)
 
-from tools.twelvedata_market_data import canonical_gold_symbol, get_td_client, fetch_cross_asset_context
+from tools.twelvedata_market_data import (
+    TD_OUTPUT_TIMEZONE,
+    canonical_gold_symbol,
+    fetch_cross_asset_context,
+    get_td_client,
+    normalize_ohlcv_frame,
+)
 from tools.event_regime import annotate_event_regime_features, compute_event_regime_snapshot
 from tools.price_action import classify_price_action
+from tools.signal_engine import build_ta_payload_from_row, normalize_strategy_params, prepare_historical_features
 
 DEFAULT_STRATEGY_PARAMS = {
     "ema_short": 20,
@@ -96,7 +103,9 @@ def _load_json_config(relative_path, fallback):
     return fallback.copy()
 
 
-ACTIVE_STRATEGY_PARAMS = _load_json_config("config/strategy_params.json", DEFAULT_STRATEGY_PARAMS)
+ACTIVE_STRATEGY_PARAMS = normalize_strategy_params(
+    _load_json_config("config/strategy_params.json", DEFAULT_STRATEGY_PARAMS)
+)
 LAST_SUCCESSFUL_TA = None
 LAST_TA_REFRESH_TS = 0
 LAST_CROSS_ASSET_CONTEXT = None
@@ -146,12 +155,17 @@ def _fetch_td_trend(symbol, interval, outputsize=200):
         return dict(cached.get("payload", {}))
 
     try:
-        ts = td_client.time_series(symbol=symbol, interval=interval, outputsize=outputsize)
-        df_tf = ts.as_pandas()
-        if df_tf.empty or 'close' not in df_tf.columns:
+        ts = td_client.time_series(
+            symbol=symbol,
+            interval=interval,
+            outputsize=outputsize,
+            timezone=TD_OUTPUT_TIMEZONE,
+        )
+        df_tf = normalize_ohlcv_frame(ts.as_pandas())
+        if df_tf.empty or 'Close' not in df_tf.columns:
             return {"trend": "Neutral", "data_points": 0, "source": "twelvedata"}
 
-        close = pd.to_numeric(df_tf['close'], errors='coerce').dropna().sort_index()
+        close = pd.to_numeric(df_tf['Close'], errors='coerce').dropna().sort_index()
         payload = {
             "trend": _calc_trend_from_close(close),
             "data_points": int(len(close)),
@@ -396,15 +410,19 @@ def get_technical_analysis():
         last_td_error = None
         for _ in range(2):
             try:
-                ts = td_client.time_series(symbol=td_symbol, interval=TECHNICAL_BASE_INTERVAL, outputsize=200)
-                df = ts.as_pandas()
+                ts = td_client.time_series(
+                    symbol=td_symbol,
+                    interval=TECHNICAL_BASE_INTERVAL,
+                    outputsize=200,
+                    timezone=TD_OUTPUT_TIMEZONE,
+                )
+                df = normalize_ohlcv_frame(ts.as_pandas())
 
                 if df.empty:
                     last_td_error = "Twelve Data returned an empty time series."
                     continue
 
                 data_source = "Twelve Data (Real-Time)"
-                df.columns = [col.capitalize() for col in df.columns]
 
                 try:
                     price_data = td_client.price(symbol=td_symbol).as_json()
@@ -563,22 +581,27 @@ def get_technical_analysis():
             "data_points_analyzed": len(df),
             "active_strategy_params": ACTIVE_STRATEGY_PARAMS.copy(),
         }
-        df = annotate_event_regime_features(df, event_windows=_load_event_risk_windows())
-        latest = df.iloc[-1]
+        strategy_params = normalize_strategy_params(ACTIVE_STRATEGY_PARAMS)
+        enriched = prepare_historical_features(df, strategy_params)
+        latest = enriched.iloc[-1]
+        prev = enriched.iloc[-2] if len(enriched) > 1 else latest
         cross_asset_context = _get_cached_cross_asset_context()
-        result["cross_asset_context"] = cross_asset_context
-        result["event_regime"] = compute_event_regime_snapshot(
+        support_resistance = _support_resistance_snapshot(enriched, latest, prev)
+        shared_payload = build_ta_payload_from_row(
             latest,
-            trend=effective_trend,
-            alignment_label=mtf["alignment_label"],
-            market_structure=pa_structure,
-            candle_pattern=candle_pattern,
+            strategy_params,
             event_risk=result["event_risk"],
             cross_asset_context=cross_asset_context,
-            expansion_watch_threshold=float(ACTIVE_STRATEGY_PARAMS.get("expansion_watch_threshold", 48.0)),
-            high_breakout_threshold=float(ACTIVE_STRATEGY_PARAMS.get("high_breakout_threshold", 64.0)),
-            directional_expansion_threshold=float(ACTIVE_STRATEGY_PARAMS.get("directional_expansion_threshold", 78.0)),
+            support_resistance=support_resistance,
         )
+        result.update(shared_payload)
+        result["data_source"] = data_source
+        result["base_interval"] = TECHNICAL_BASE_INTERVAL
+        result["last_updated_at"] = now_ts
+        result["stale_data"] = False
+        result["served_from_cache"] = False
+        result["data_points_analyzed"] = len(df)
+        result["cross_asset_context"] = cross_asset_context
 
         LAST_SUCCESSFUL_TA = dict(result)
         LAST_TA_REFRESH_TS = now_ts

@@ -704,10 +704,6 @@
               <span class="metric-label">Market Structure</span>
               <span class="metric-value" id="pa-structure">---</span>
             </div>
-            <div class="metric-row">
-              <span class="metric-label">Candle Pattern</span>
-              <span class="metric-value" id="pa-pattern">---</span>
-            </div>
           </section>
 
           <section class="section-card">
@@ -776,6 +772,12 @@
               <span class="metric-label">Composite Scores</span>
               <span class="metric-value compact" id="ms-scores">---</span>
             </div>
+            <div class="metric-row">
+              <span class="metric-label">Direction Model</span>
+              <span class="metric-value compact" id="ms-direction-model"
+                >---</span
+              >
+            </div>
           </section>
 
           <section class="section-card">
@@ -804,10 +806,14 @@
               <span class="metric-label">Expected Range / Cross-Asset</span>
               <span class="metric-value compact" id="rs-context">---</span>
             </div>
+            <div class="metric-row">
+              <span class="metric-label">Bar Session / Microstructure</span>
+              <span class="metric-value compact" id="rs-session">---</span>
+            </div>
           </section>
 
           <section class="section-card">
-            <div class="section-title">RR200 Signal (1:2)</div>
+            <div class="section-title">Adaptive RR Signal (1:2)</div>
             <div class="metric-row">
               <span class="metric-label">Signal Status</span>
               <span class="metric-value" id="rr-status">---</span>
@@ -817,12 +823,16 @@
               <span class="metric-value" id="rr-direction-grade">---</span>
             </div>
             <div class="metric-row">
-              <span class="metric-label">200+ Pip Probability</span>
+              <span class="metric-label">Target Bucket Probability</span>
               <span class="metric-value" id="rr-probability">---</span>
             </div>
             <div class="metric-row">
-              <span class="metric-label">Projected Move</span>
+              <span class="metric-label">Projected Move / ATR</span>
               <span class="metric-value" id="rr-projected">---</span>
+            </div>
+            <div class="metric-row">
+              <span class="metric-label">ATR Buckets</span>
+              <span class="metric-value compact" id="rr-buckets">---</span>
             </div>
             <div class="metric-row">
               <span class="metric-label">Entry / SL / TP</span>
@@ -838,7 +848,9 @@
             </div>
             <div class="metric-row">
               <span class="metric-label">Expected / Day</span>
-              <span class="metric-value compact" id="rr-live-expected">---</span>
+              <span class="metric-value compact" id="rr-live-expected"
+                >---</span
+              >
             </div>
           </section>
 
@@ -1035,8 +1047,8 @@
                     </li>
                     <li>
                       <span class="check-icon">-</span
-                      ><strong>Indecision:</strong> Candle Pattern is Doji or
-                      another weak reversal candle near key levels.
+                      ><strong>Indecision:</strong> Summary flags indecision or
+                      no clean trigger near key levels.
                     </li>
                     <li>
                       <span class="check-icon">-</span><strong>Rule:</strong> If
@@ -1327,7 +1339,9 @@
           return updatedAt ? `${base} Last fresh update: ${updatedAt}` : base;
         }
 
-        const baseInterval = ta.base_interval ? ` · Base ${String(ta.base_interval).toUpperCase()}` : "";
+        const baseInterval = ta.base_interval
+          ? ` · Base ${String(ta.base_interval).toUpperCase()}`
+          : "";
         return updatedAt
           ? `${ta.data_source}${baseInterval} · Updated ${updatedAt}`
           : `${ta.data_source || "Market data available"}${baseInterval}`;
@@ -1416,7 +1430,6 @@
           confidence: "Confidence",
           trend: "Trend",
           market_structure: "Market Structure",
-          candle_pattern: "Candle Pattern",
           rsi_14: "RSI",
           ema_20: "EMA 20",
           ema_50: "EMA 50",
@@ -1651,7 +1664,6 @@
 
       function computeTradeGuidance(ta, confidence) {
         const structure = ta.price_action?.structure || "Consolidating";
-        const pattern = ta.price_action?.latest_candle_pattern || "None";
         const trend = ta.ema_trend || "Neutral";
         const regime = ta.volatility_regime?.market_regime || "Range-Bound";
         const alignment =
@@ -1676,9 +1688,6 @@
         if (structure.includes("Bearish")) sellScore += 2;
         else if (structure.includes("Bullish")) buyScore += 2;
 
-        if (pattern.includes("Bearish")) sellScore += 1;
-        if (pattern.includes("Bullish")) buyScore += 1;
-
         if (rsi < 45) sellScore += 1;
         else if (rsi > 55) buyScore += 1;
 
@@ -1687,16 +1696,10 @@
           else if (buyScore > sellScore) buyScore += 1;
         }
 
-        if (
-          trend === "Bearish" &&
-          (structure.includes("Bullish") || pattern.includes("Bullish"))
-        ) {
+        if (trend === "Bearish" && structure.includes("Bullish")) {
           exitRisk += 2;
         }
-        if (
-          trend === "Bullish" &&
-          (structure.includes("Bearish") || pattern.includes("Bearish"))
-        ) {
+        if (trend === "Bullish" && structure.includes("Bearish")) {
           exitRisk += 2;
         }
         if (alignment.includes("Mixed")) exitRisk += 1;
@@ -1707,12 +1710,11 @@
         const exitLevel =
           exitRisk >= 3 ? "High" : exitRisk >= 2 ? "Medium" : "Low";
 
-        const priceActionBias =
-          structure.includes("Bearish") || pattern.includes("Bearish")
-            ? "Bearish"
-            : structure.includes("Bullish") || pattern.includes("Bullish")
-              ? "Bullish"
-              : "Neutral";
+        const priceActionBias = structure.includes("Bearish")
+          ? "Bearish"
+          : structure.includes("Bullish")
+            ? "Bullish"
+            : "Neutral";
         const alignmentBias = alignment.includes("Bearish")
           ? "Bearish"
           : alignment.includes("Bullish")
@@ -1762,12 +1764,40 @@
         });
       }
 
+      function getUtcSessionLabel(dateValue) {
+        const date =
+          dateValue instanceof Date
+            ? dateValue
+            : dateValue
+              ? new Date(dateValue)
+              : null;
+        if (!date || Number.isNaN(date.getTime())) return "Off";
+        const hour = date.getUTCHours();
+        if (hour >= 12 && hour < 16) return "London / New York Overlap";
+        if (hour >= 7 && hour < 12) return "London";
+        if (hour >= 12 && hour < 21) return "New York";
+        if (hour >= 0 && hour < 7) return "Asia";
+        return "Off";
+      }
+
+      function formatUtcTimeShort(dateValue) {
+        const date =
+          dateValue instanceof Date
+            ? dateValue
+            : dateValue
+              ? new Date(dateValue)
+              : null;
+        if (!date || Number.isNaN(date.getTime())) return "n/a";
+        const hours = String(date.getUTCHours()).padStart(2, "0");
+        const minutes = String(date.getUTCMinutes()).padStart(2, "0");
+        return `${hours}:${minutes} UTC`;
+      }
+
       function evaluateDecisionChecklist(data, ta, tradeGuidance) {
         const verdict = String(data?.verdict || "Neutral");
         const confidence = Number(data?.confidence || 0);
         const trend = String(ta?.ema_trend || "Neutral");
         const structure = String(ta?.price_action?.structure || "");
-        const pattern = String(ta?.price_action?.latest_candle_pattern || "");
         const alignment = String(
           ta?.multi_timeframe?.alignment_label || "Mixed / Low Alignment",
         );
@@ -1784,15 +1814,14 @@
         );
         const hasBullishTrigger =
           /bullish|breakout|continuation|support rejection/i.test(
-            `${structure} ${pattern} ${summary}`,
+            `${structure} ${summary}`,
           );
         const hasBearishTrigger =
           /bearish|breakdown|rejection|resistance rejection/i.test(
-            `${structure} ${pattern} ${summary}`,
+            `${structure} ${summary}`,
           );
-        const hasDojiLikePattern = /doji|indecision|spinning top/i.test(
-          pattern,
-        );
+        const hasIndecisionSignal =
+          /doji|indecision|spinning top|no clean trigger/i.test(summary);
         const noCleanTrigger = /no clean trigger/i.test(summary);
         const bullishAlignment =
           /bullish/i.test(alignment) && !/mixed/i.test(alignment);
@@ -1806,7 +1835,7 @@
           verdict === "Bullish" && confidence >= 70,
           trend === "Bullish" && hasBullishStructure,
           bullishAlignment,
-          !hasDojiLikePattern && !noCleanTrigger && hasBullishTrigger,
+          !hasIndecisionSignal && !noCleanTrigger && hasBullishTrigger,
           /watch|strong/i.test(buyLevel) && /low|medium/i.test(exitLevel),
         ];
 
@@ -1814,7 +1843,7 @@
           verdict === "Bearish" && confidence >= 70,
           trend === "Bearish" && hasBearishStructure,
           bearishAlignment,
-          !hasDojiLikePattern && !noCleanTrigger && hasBearishTrigger,
+          !hasIndecisionSignal && !noCleanTrigger && hasBearishTrigger,
           /watch|strong/i.test(sellLevel) && /low|medium/i.test(exitLevel),
         ];
 
@@ -1822,7 +1851,7 @@
           verdict === "Neutral" || /mixed/i.test(alignment) || noCleanTrigger,
           exitLevel === "High" || confidence < 60,
           structureConflict,
-          hasDojiLikePattern,
+          hasIndecisionSignal,
           buyLevel === "Weak" && sellLevel === "Weak",
         ];
 
@@ -1955,13 +1984,6 @@
         else if (ta.price_action.structure.includes("Bearish"))
           paStructureEl.className = "metric-value value-bearish";
 
-        const paPatternEl = document.getElementById("pa-pattern");
-        paPatternEl.innerText = ta.price_action.latest_candle_pattern;
-        if (ta.price_action.latest_candle_pattern.includes("Bullish"))
-          paPatternEl.className = "metric-value value-bullish";
-        else if (ta.price_action.latest_candle_pattern.includes("Bearish"))
-          paPatternEl.className = "metric-value value-bearish";
-
         document.getElementById("ta-rsi").innerText =
           `${ta.rsi_14} (${ta.rsi_signal.split(" ")[0]})`;
         document.getElementById("ta-ema20").innerText = ta.ema_20;
@@ -2032,6 +2054,20 @@
 
         const marketScoresEl = document.getElementById("ms-scores");
         marketScoresEl.innerText = `Direction ${Number(marketScores.direction || 0).toFixed(2)} · Tradeability ${Number(marketScores.tradeability || 0).toFixed(2)} · Exit Risk ${Number(marketScores.exit_risk || 0).toFixed(2)} · Stability ${Number(marketScores.stability || 0).toFixed(2)}`;
+        const directionModelEl = document.getElementById("ms-direction-model");
+        if (directionModelEl) {
+          const directionProbabilities =
+            marketState.direction_probabilities || {};
+          const directionKey = marketBiasText === "Bearish" ? "down" : "up";
+          directionModelEl.innerText = `15m ${(
+            Number(directionProbabilities[`${directionKey}_15m`] || 0.5) * 100
+          ).toFixed(1)}% · 30m ${(
+            Number(directionProbabilities[`${directionKey}_30m`] || 0.5) * 100
+          ).toFixed(1)}% · 60m ${(
+            Number(directionProbabilities[`${directionKey}_60m`] || 0.5) * 100
+          ).toFixed(1)}%`;
+          directionModelEl.className = `metric-value compact ${marketBiasText === "Bullish" ? "value-bullish" : marketBiasText === "Bearish" ? "value-bearish" : ""}`;
+        }
 
         const regimeState =
           data.RegimeState && typeof data.RegimeState === "object"
@@ -2064,6 +2100,43 @@
             ? "n/a"
             : `${Number(regimeState.minutes_to_next_event).toFixed(0)}m`;
         regimeContextEl.innerText = `Range ${regimeState.expected_range_expansion || "---"} · Cross-asset ${crossAssetText} · Next event ${minutesText}`;
+        const sessionContextEl = document.getElementById("rs-session");
+        if (sessionContextEl) {
+          const session = ta.session_context || {};
+          const barSession =
+            session.bar_session && typeof session.bar_session === "object"
+              ? session.bar_session
+              : {};
+          const structureContext = ta.structure_context || {};
+          const barTimestampUtc =
+            barSession.timestampUtc ||
+            session.barTimestampUtc ||
+            ta.bar_timestamp_utc;
+          const barLabel =
+            barSession.label ||
+            session.label ||
+            getUtcSessionLabel(barTimestampUtc);
+          const barTimeText =
+            barSession.timeDisplayUtc ||
+            session.barTimeDisplayUtc ||
+            formatUtcTimeShort(barTimestampUtc);
+          const nowUtc = new Date();
+          const currentLabel = getUtcSessionLabel(nowUtc);
+          const currentTimeText = formatUtcTimeShort(nowUtc);
+          const vwapDelta = Number(structureContext.distSessionVwapPct || 0);
+          const orb = Number(structureContext.openingRangeBreak || 0);
+          const orbText =
+            orb > 0 ? "ORB Bullish" : orb < 0 ? "ORB Bearish" : "ORB Neutral";
+          const sweep = Number(structureContext.sweepReclaimSignal || 0);
+          const sweepText =
+            sweep > 0
+              ? "Sweep Bullish"
+              : sweep < 0
+                ? "Sweep Bearish"
+                : "No Sweep";
+          sessionContextEl.innerText = `Bar ${barLabel} ${barTimeText} · Now ${currentLabel} ${currentTimeText} · VWAP ${vwapDelta.toFixed(2)}% · ${orbText} · ${sweepText}`;
+          sessionContextEl.className = `metric-value compact ${orb > 0 || sweep > 0 ? "value-bullish" : orb < 0 || sweep < 0 ? "value-bearish" : ""}`;
+        }
 
         const rrSignal =
           data.RR200Signal && typeof data.RR200Signal === "object"
@@ -2078,12 +2151,16 @@
         const rrEntry = rrSignal.entryPrice;
         const rrSl = rrSignal.stopLossPrice;
         const rrTp = rrSignal.takeProfitPrice;
-        const rrBlockers = Array.isArray(rrSignal.blockers) ? rrSignal.blockers : [];
+        const rrBlockers = Array.isArray(rrSignal.blockers)
+          ? rrSignal.blockers
+          : [];
 
         const rrStatusEl = document.getElementById("rr-status");
-        const rrDirectionGradeEl = document.getElementById("rr-direction-grade");
+        const rrDirectionGradeEl =
+          document.getElementById("rr-direction-grade");
         const rrProbabilityEl = document.getElementById("rr-probability");
         const rrProjectedEl = document.getElementById("rr-projected");
+        const rrBucketsEl = document.getElementById("rr-buckets");
         const rrLevelsEl = document.getElementById("rr-levels");
         const rrSummaryEl = document.getElementById("rr-summary");
 
@@ -2096,16 +2173,26 @@
           rrDirectionGradeEl.className = `metric-value ${rrDirection === "Bullish" ? "value-bullish" : rrDirection === "Bearish" ? "value-bearish" : ""}`;
         }
         if (rrProbabilityEl) {
-          rrProbabilityEl.innerText = `${rrProbability.toFixed(1)}%`;
+          rrProbabilityEl.innerText = `${humanizeWords(rrSignal.targetBucket || "1.0_atr")} · ${rrProbability.toFixed(1)}%`;
           rrProbabilityEl.className = `metric-value ${rrProbability >= 70 ? "value-bullish" : rrProbability >= 55 ? "" : "value-bearish"}`;
         }
         if (rrProjectedEl) {
-          rrProjectedEl.innerText = `${rrProjectedMove.toFixed(1)} pips (target ${rrTargetMove.toFixed(0)})`;
+          rrProjectedEl.innerText = `${rrProjectedMove.toFixed(1)} pips / ${Number(rrSignal.projectedMoveAtr || 0).toFixed(2)} ATR (target ${rrTargetMove.toFixed(0)})`;
           rrProjectedEl.className = `metric-value ${rrProjectedMove >= rrTargetMove ? "value-bullish" : "value-bearish"}`;
+        }
+        if (rrBucketsEl) {
+          const buckets = rrSignal.moveBuckets || {};
+          rrBucketsEl.innerText = `0.5 ${(Number(buckets["0.5_atr"] || 0) * 100).toFixed(0)}% · 1.0 ${(Number(buckets["1.0_atr"] || 0) * 100).toFixed(0)}% · 1.5 ${(Number(buckets["1.5_atr"] || 0) * 100).toFixed(0)}% · 2.0 ${(Number(buckets["2.0_atr"] || 0) * 100).toFixed(0)}%`;
+          rrBucketsEl.className = "metric-value compact";
         }
         if (rrLevelsEl) {
           rrLevelsEl.innerText =
-            rrEntry !== undefined && rrEntry !== null && rrSl !== undefined && rrSl !== null && rrTp !== undefined && rrTp !== null
+            rrEntry !== undefined &&
+            rrEntry !== null &&
+            rrSl !== undefined &&
+            rrSl !== null &&
+            rrTp !== undefined &&
+            rrTp !== null
               ? `${Number(rrEntry).toFixed(2)} / ${Number(rrSl).toFixed(2)} / ${Number(rrTp).toFixed(2)}`
               : "Awaiting directional setup";
         }
@@ -2118,9 +2205,12 @@
           data.RR200LiveCounter && typeof data.RR200LiveCounter === "object"
             ? data.RR200LiveCounter
             : {};
-        const rrToday = rrLive.today && typeof rrLive.today === "object" ? rrLive.today : {};
+        const rrToday =
+          rrLive.today && typeof rrLive.today === "object" ? rrLive.today : {};
         const rrTodayTiers =
-          rrToday.tiers && typeof rrToday.tiers === "object" ? rrToday.tiers : {};
+          rrToday.tiers && typeof rrToday.tiers === "object"
+            ? rrToday.tiers
+            : {};
         const rrExpected =
           rrLive.expected_daily && typeof rrLive.expected_daily === "object"
             ? rrLive.expected_daily

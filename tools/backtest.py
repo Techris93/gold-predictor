@@ -80,6 +80,44 @@ ACTIVE_BACKTEST_PARAMS = _load_json_config("config/backtest_params.json", DEFAUL
 FEATURE_REPORT_FILE = os.path.join(BASE_DIR, "tools", "reports", "backtest_feature_analysis.json")
 CONFIDENCE_CALIBRATION_FILE = os.path.join(BASE_DIR, "tools", "reports", "confidence_calibration.json")
 OUTCOME_SUMMARY_FILE = os.path.join(BASE_DIR, "tools", "reports", "signal_outcome_summary.json")
+DEFAULT_BACKTEST_FEE_BPS = 3.0
+DEFAULT_BACKTEST_SLIPPAGE_BPS = 2.0
+
+
+def _interval_to_minutes(interval):
+    raw = str(interval or "1h").strip().lower()
+    mapping = {
+        "15m": 15,
+        "15min": 15,
+        "30m": 30,
+        "30min": 30,
+        "60m": 60,
+        "60min": 60,
+        "1h": 60,
+        "4h": 240,
+        "1d": 1440,
+        "1day": 1440,
+        "1w": 10080,
+        "1week": 10080,
+    }
+    if raw in mapping:
+        return mapping[raw]
+    if raw.endswith("min") and raw[:-3].isdigit():
+        return max(1, int(raw[:-3]))
+    if raw.endswith("m") and raw[:-1].isdigit():
+        return max(1, int(raw[:-1]))
+    if raw.endswith("h") and raw[:-1].isdigit():
+        return max(1, int(raw[:-1]) * 60)
+    if raw.endswith("day") and raw[:-3].isdigit():
+        return max(1, int(raw[:-3]) * 1440)
+    if raw.endswith("d") and raw[:-1].isdigit():
+        return max(1, int(raw[:-1]) * 1440)
+    return 60
+
+
+def _bars_for_horizon(interval, horizon_minutes):
+    interval_minutes = max(1, _interval_to_minutes(interval))
+    return max(1, int(np.ceil(float(horizon_minutes) / interval_minutes)))
 
 def generate_signals(df, params=None):
     params = normalize_strategy_params(params or ACTIVE_BACKTEST_PARAMS)
@@ -140,7 +178,6 @@ def summarize_transition_metrics(df, states):
     adverse_moves = []
     reversal_lengths = []
 
-    last_action_state = states[0].get("action_state")
     current_persistence = 1
 
     for i in range(1, len(states)):
@@ -222,12 +259,6 @@ def summarize_feature_hit_metrics(df, states):
             feature_names.append("structure_drift")
         if hits.get("structure_range_pressure"):
             feature_names.append("structure_range_pressure")
-        if hits.get("candle_engulfing"):
-            feature_names.append("candle_engulfing")
-        if hits.get("candle_reversal"):
-            feature_names.append("candle_reversal")
-        if hits.get("candle_doji"):
-            feature_names.append("candle_doji")
 
         for feature_name in feature_names:
             bucket = tracked.setdefault(feature_name, {"hits": 0, "wins": 0, "returns": []})
@@ -280,6 +311,50 @@ def _simulate_from_signals(df, signals):
         trades.append({'type': 'Long', 'pnl': pnl})
     elif position == -1:
         pnl = (entry_price - df['Close'].iloc[-1]) / entry_price
+        trades.append({'type': 'Short', 'pnl': pnl})
+
+    return trades
+
+
+def _simulate_from_signals_with_costs(df, signals, fee_bps=DEFAULT_BACKTEST_FEE_BPS, slippage_bps=DEFAULT_BACKTEST_SLIPPAGE_BPS):
+    fee = float(fee_bps) / 10000.0
+    slippage = float(slippage_bps) / 10000.0
+    position = 0
+    entry_price = 0.0
+    trades = []
+
+    for i in range(len(df) - 1):
+        signal = signals.iloc[i]
+        next_open = float(df['Open'].iloc[i + 1])
+        long_fill = next_open * (1 + slippage)
+        short_fill = next_open * (1 - slippage)
+
+        if position == 0:
+            if signal == 'Buy':
+                position = 1
+                entry_price = long_fill
+            elif signal == 'Sell':
+                position = -1
+                entry_price = short_fill
+        elif position == 1:
+            if signal == 'Sell':
+                pnl = ((short_fill - entry_price) / entry_price) - (2 * fee)
+                trades.append({'type': 'Long', 'pnl': pnl})
+                position = -1
+                entry_price = short_fill
+        elif position == -1:
+            if signal == 'Buy':
+                pnl = ((entry_price - long_fill) / entry_price) - (2 * fee)
+                trades.append({'type': 'Short', 'pnl': pnl})
+                position = 1
+                entry_price = long_fill
+
+    final_close = float(df['Close'].iloc[-1])
+    if position == 1:
+        pnl = ((final_close - entry_price) / entry_price) - (2 * fee)
+        trades.append({'type': 'Long', 'pnl': pnl})
+    elif position == -1:
+        pnl = ((entry_price - final_close) / entry_price) - (2 * fee)
         trades.append({'type': 'Short', 'pnl': pnl})
 
     return trades
@@ -556,11 +631,6 @@ def summarize_ablation_metrics(df, base_params):
             "drift_weight": 0.0,
             "range_pressure_weight": 0.0,
         },
-        "without_candle_pattern": {
-            **base_params,
-            "engulfing_weight": 0.0,
-            "reversal_candle_weight": 0.0,
-        },
         "without_price_action": {
             **base_params,
             "breakout_weight": 0.0,
@@ -591,8 +661,10 @@ def summarize_ablation_metrics(df, base_params):
     return summaries
 
 
-def summarize_big_move_metrics(df, states):
-    if not states or len(df) < 6:
+def summarize_big_move_metrics(df, states, interval="15min"):
+    bars_60m = _bars_for_horizon(interval, 60)
+    bars_4h = _bars_for_horizon(interval, 240)
+    if not states or len(df) < (bars_4h + 2):
         return {}
 
     watch_hits_60m = 0
@@ -606,19 +678,20 @@ def summarize_big_move_metrics(df, states):
     lead_times = []
     regime_counts = {}
 
-    max_index = min(len(states), len(df) - 4)
+    max_horizon_bars = max(bars_60m, bars_4h)
+    max_index = min(len(states), len(df) - max_horizon_bars)
     for i in range(max_index):
         entry = float(df["Close"].iloc[i])
-        next_bar = df.iloc[i + 1]
-        next_four = df.iloc[i + 1 : i + 5]
-        future_move_60m = max(abs(float(next_bar["High"]) - entry), abs(entry - float(next_bar["Low"])))
-        future_move_4h = max(abs(float(next_four["High"].max()) - entry), abs(entry - float(next_four["Low"].min())))
+        next_hour = df.iloc[i + 1 : i + 1 + bars_60m]
+        next_four_hours = df.iloc[i + 1 : i + 1 + bars_4h]
+        future_move_60m = max(abs(float(next_hour["High"].max()) - entry), abs(entry - float(next_hour["Low"].min())))
+        future_move_4h = max(abs(float(next_four_hours["High"].max()) - entry), abs(entry - float(next_four_hours["Low"].min())))
         true_60m = future_move_60m >= 8.0
         true_4h = future_move_4h >= 15.0
         total_true_60m += 1 if true_60m else 0
         total_true_4h += 1 if true_4h else 0
 
-        regime_state = state_regime = states[i].get("regime_state") or {}
+        regime_state = states[i].get("regime_state") or {}
         ladder = str(regime_state.get("warning_ladder", "Normal"))
         event_regime = str(regime_state.get("event_regime", "normal"))
         regime_counts[event_regime] = regime_counts.get(event_regime, 0) + 1
@@ -635,7 +708,7 @@ def summarize_big_move_metrics(df, states):
             active_true_4h += 1 if true_4h else 0
 
         if true_4h:
-            for lookback in range(1, min(4, i + 1)):
+            for lookback in range(1, min(max(4, bars_60m), i + 1)):
                 previous_ladder = str((states[i - lookback].get("regime_state") or {}).get("warning_ladder", "Normal"))
                 if previous_ladder in {"Expansion Watch", "High Breakout Risk", "Directional Expansion Likely", "Active Momentum Event"}:
                     lead_times.append(lookback)
@@ -648,6 +721,8 @@ def summarize_big_move_metrics(df, states):
         "label_definition": {
             "big_move_60m_price_points": 8.0,
             "big_move_4h_price_points": 15.0,
+            "bars_60m": bars_60m,
+            "bars_4h": bars_4h,
         },
         "label_prevalence": {
             "true_60m_rate": _safe_ratio(total_true_60m, max_index),
@@ -668,11 +743,15 @@ def summarize_big_move_metrics(df, states):
     }
 
 
-def summarize_large_move_labels(df, states):
-    if len(df) < 8:
+def summarize_large_move_labels(df, states, interval="15min"):
+    bars_30m = _bars_for_horizon(interval, 30)
+    bars_60m = _bars_for_horizon(interval, 60)
+    bars_4h = _bars_for_horizon(interval, 240)
+    max_horizon_bars = max(bars_30m, bars_60m, bars_4h)
+    if len(df) < (max_horizon_bars + 2):
         return {}
 
-    total = min(len(states), len(df) - 4)
+    total = min(len(states), len(df) - max_horizon_bars)
     label_counts = {
         "abs_move_gt_300pips_30m": 0,
         "abs_move_gt_500pips_60m": 0,
@@ -681,11 +760,12 @@ def summarize_large_move_labels(df, states):
     }
     for i in range(total):
         entry = float(df["Close"].iloc[i])
-        one = df.iloc[i + 1]
-        four = df.iloc[i + 1 : i + 5]
-        move_30m = max(abs(float(one["High"]) - entry), abs(entry - float(one["Low"])))
-        move_60m = move_30m
-        move_4h = max(abs(float(four["High"].max()) - entry), abs(entry - float(four["Low"].min())))
+        next_thirty = df.iloc[i + 1 : i + 1 + bars_30m]
+        next_hour = df.iloc[i + 1 : i + 1 + bars_60m]
+        next_four_hours = df.iloc[i + 1 : i + 1 + bars_4h]
+        move_30m = max(abs(float(next_thirty["High"].max()) - entry), abs(entry - float(next_thirty["Low"].min())))
+        move_60m = max(abs(float(next_hour["High"].max()) - entry), abs(entry - float(next_hour["Low"].min())))
+        move_4h = max(abs(float(next_four_hours["High"].max()) - entry), abs(entry - float(next_four_hours["Low"].min())))
         if move_30m >= 4.0:
             label_counts["abs_move_gt_300pips_30m"] += 1
         if move_60m >= 8.0:
@@ -761,25 +841,206 @@ def summarize_decision_quality_metrics(df, states):
     }
 
 
-def summarize_confidence_reliability(df, states):
+def generate_triple_barrier_labels(df, enriched, states, params=None):
+    if not states or len(df) < 12 or enriched is None or enriched.empty:
+        return []
+
+    strategy_params = normalize_strategy_params(params or ACTIVE_BACKTEST_PARAMS)
+    stop_atr = float(strategy_params.get("triple_barrier_stop_atr", 0.85) or 0.85)
+    horizon_bars = max(3, int(strategy_params.get("triple_barrier_horizon_bars", 8) or 8))
+    target_buckets = [0.5, 1.0, 1.5, 2.0]
+    max_index = min(len(states), len(df) - horizon_bars - 1, len(enriched) - 1)
+    records = []
+
+    for i in range(max_index):
+        state = states[i]
+        direction = str(state.get("verdict") or state.get("directional_bias") or "Neutral")
+        if direction not in {"Bullish", "Bearish"}:
+            continue
+
+        entry_price = float(df["Close"].iloc[i])
+        atr_value = float(enriched["ATR_14"].iloc[i]) if "ATR_14" in enriched.columns else 0.0
+        if atr_value <= 0:
+            continue
+
+        future = df.iloc[i + 1 : i + 1 + horizon_bars]
+        if future.empty:
+            continue
+
+        if direction == "Bullish":
+            mfe_atr = (float(future["High"].max()) - entry_price) / atr_value
+            mae_atr = (entry_price - float(future["Low"].min())) / atr_value
+        else:
+            mfe_atr = (entry_price - float(future["Low"].min())) / atr_value
+            mae_atr = (float(future["High"].max()) - entry_price) / atr_value
+
+        target_results = {}
+        for target_atr in target_buckets:
+            stop_distance = atr_value * stop_atr
+            target_distance = atr_value * target_atr
+            label = 0
+            barrier = "timeout"
+            resolve_bar = i + horizon_bars
+
+            for offset, (_, future_row) in enumerate(future.iterrows(), start=1):
+                future_high = float(future_row["High"])
+                future_low = float(future_row["Low"])
+                if direction == "Bullish":
+                    stop_hit = future_low <= (entry_price - stop_distance)
+                    target_hit = future_high >= (entry_price + target_distance)
+                else:
+                    stop_hit = future_high >= (entry_price + stop_distance)
+                    target_hit = future_low <= (entry_price - target_distance)
+
+                if stop_hit and target_hit:
+                    label = -1
+                    barrier = "both_stop_first"
+                    resolve_bar = i + offset
+                    break
+                if target_hit:
+                    label = 1
+                    barrier = "target"
+                    resolve_bar = i + offset
+                    break
+                if stop_hit:
+                    label = -1
+                    barrier = "stop"
+                    resolve_bar = i + offset
+                    break
+
+            if label == 0:
+                final_close = float(future["Close"].iloc[-1])
+                signed_move_atr = ((final_close - entry_price) / atr_value) if direction == "Bullish" else ((entry_price - final_close) / atr_value)
+                if signed_move_atr >= target_atr * 0.55:
+                    label = 1
+                    barrier = "close_favor"
+                elif signed_move_atr <= -(stop_atr * 0.55):
+                    label = -1
+                    barrier = "close_fail"
+
+            target_results[f"{target_atr:.1f}_atr"] = {
+                "label": int(label),
+                "barrier": barrier,
+                "resolve_bar": int(resolve_bar),
+            }
+
+        meta_label = int(
+            target_results.get("1.0_atr", {}).get("label") == 1
+            and mfe_atr >= 1.0
+            and mae_atr <= (stop_atr * 1.05)
+        )
+        records.append(
+            {
+                "index": int(i),
+                "timestamp": state.get("timestamp"),
+                "direction": direction,
+                "confidence": float(state.get("confidence") or 50.0),
+                "regime_bucket": str(state.get("regime_bucket") or "transition"),
+                "execution_status": str((state.get("execution_state") or {}).get("status") or "stand_aside"),
+                "targets": target_results,
+                "mfe_atr": round(float(mfe_atr), 4),
+                "mae_atr": round(float(mae_atr), 4),
+                "meta_label": meta_label,
+            }
+        )
+
+    return records
+
+
+def summarize_triple_barrier_metrics(label_records):
+    if not label_records:
+        return {}
+
+    overall = {}
+    by_regime = {}
+    for record in label_records:
+        regime_bucket = str(record.get("regime_bucket") or "transition")
+        regime_summary = by_regime.setdefault(regime_bucket, {})
+        for bucket_key, target in (record.get("targets") or {}).items():
+            overall_bucket = overall.setdefault(bucket_key, {"count": 0, "wins": 0, "losses": 0})
+            regime_bucket_summary = regime_summary.setdefault(bucket_key, {"count": 0, "wins": 0, "losses": 0})
+            label = int(target.get("label") or 0)
+            for bucket in (overall_bucket, regime_bucket_summary):
+                bucket["count"] += 1
+                bucket["wins"] += 1 if label == 1 else 0
+                bucket["losses"] += 1 if label == -1 else 0
+
+    def _hit_rates(source):
+        return {
+            key: {
+                "count": int(value["count"]),
+                "hit_rate": round(value["wins"] / value["count"], 4) if value["count"] else 0.0,
+                "loss_rate": round(value["losses"] / value["count"], 4) if value["count"] else 0.0,
+            }
+            for key, value in source.items()
+        }
+
+    return {
+        "overall": _hit_rates(overall),
+        "by_regime": {regime: _hit_rates(summary) for regime, summary in by_regime.items()},
+    }
+
+
+def summarize_meta_label_metrics(label_records):
+    if not label_records:
+        return {}
+
+    grouped = {}
+    for record in label_records:
+        regime_bucket = str(record.get("regime_bucket") or "transition")
+        execution_status = str(record.get("execution_status") or "stand_aside")
+        key = f"{regime_bucket}:{execution_status}"
+        bucket = grouped.setdefault(key, {"count": 0, "positive": 0, "mfe": [], "mae": []})
+        bucket["count"] += 1
+        bucket["positive"] += int(record.get("meta_label") or 0)
+        bucket["mfe"].append(float(record.get("mfe_atr") or 0.0))
+        bucket["mae"].append(float(record.get("mae_atr") or 0.0))
+
+    return {
+        key: {
+            "count": int(value["count"]),
+            "positive_rate": round(value["positive"] / value["count"], 4) if value["count"] else 0.0,
+            "avg_mfe_atr": round(float(np.mean(value["mfe"])), 4) if value["mfe"] else 0.0,
+            "avg_mae_atr": round(float(np.mean(value["mae"])), 4) if value["mae"] else 0.0,
+        }
+        for key, value in grouped.items()
+    }
+
+
+def summarize_confidence_reliability(df, states, label_records=None):
     if not states or len(df) < 4:
         return {}
 
     buckets = {}
     regime_scores = {}
     calibration_table = {}
+    move_bucket_hits = {}
+    meta_label_rates = {}
     brier_terms = []
     rolling_points = []
+    label_lookup = {int(record.get("index")): record for record in (label_records or [])}
     max_index = min(len(states), len(df) - 3)
     for i in range(max_index):
         state = states[i]
         verdict = state.get("verdict")
         if verdict not in {"Bullish", "Bearish"}:
             continue
-        entry_price = float(df["Close"].iloc[i])
-        future_close = float(df["Close"].iloc[i + 3])
-        realized = (future_close - entry_price) / max(entry_price, 1e-8)
-        success = realized > 0 if verdict == "Bullish" else realized < 0
+        label_record = label_lookup.get(int(i))
+        if label_record is not None:
+            success = int((label_record.get("targets") or {}).get("1.0_atr", {}).get("label") or 0) == 1
+            for bucket_key, bucket_value in (label_record.get("targets") or {}).items():
+                regime_bucket = str(label_record.get("regime_bucket") or "transition")
+                target_bucket = move_bucket_hits.setdefault(regime_bucket, {}).setdefault(bucket_key, {"count": 0, "wins": 0})
+                target_bucket["count"] += 1
+                target_bucket["wins"] += 1 if int(bucket_value.get("label") or 0) == 1 else 0
+            meta_bucket = meta_label_rates.setdefault(str(label_record.get("regime_bucket") or "transition"), {"count": 0, "positive": 0})
+            meta_bucket["count"] += 1
+            meta_bucket["positive"] += int(label_record.get("meta_label") or 0)
+        else:
+            entry_price = float(df["Close"].iloc[i])
+            future_close = float(df["Close"].iloc[i + 3])
+            realized = (future_close - entry_price) / max(entry_price, 1e-8)
+            success = realized > 0 if verdict == "Bullish" else realized < 0
         confidence = float(state.get("confidence") or 50.0)
         predicted_prob = max(0.0, min(1.0, confidence / 100.0))
         actual = 1.0 if success else 0.0
@@ -831,6 +1092,17 @@ def summarize_confidence_reliability(df, states):
         "confidence_buckets": confidence_buckets,
         "reliability_curve": reliability_curve,
         "brier_score": round(float(np.mean(brier_terms)), 6) if brier_terms else None,
+        "move_bucket_hit_rates": {
+            regime: {
+                bucket_key: round(bucket_value["wins"] / bucket_value["count"], 4) if bucket_value["count"] else 0.0
+                for bucket_key, bucket_value in buckets_for_regime.items()
+            }
+            for regime, buckets_for_regime in move_bucket_hits.items()
+        },
+        "meta_label_rates": {
+            regime: round(value["positive"] / value["count"], 4) if value["count"] else 0.0
+            for regime, value in meta_label_rates.items()
+        },
     }
     if rolling_points:
         df_roll = pd.DataFrame(rolling_points)
@@ -904,11 +1176,12 @@ def summarize_execution_state_metrics(df, states):
     }
 
 
-def summarize_tail_event_metrics(df, states):
-    if not states or len(df) < 8:
+def summarize_tail_event_metrics(df, states, interval="15min"):
+    bars_4h = _bars_for_horizon(interval, 240)
+    if not states or len(df) < (bars_4h + 2):
         return {}
 
-    max_index = min(len(states), len(df) - 4)
+    max_index = min(len(states), len(df) - bars_4h)
     model_total = 0
     model_wins = 0
     naive_total = 0
@@ -935,16 +1208,30 @@ def summarize_tail_event_metrics(df, states):
         tail_windows += 1
 
         entry = float(df["Close"].iloc[i])
-        future_close = float(df["Close"].iloc[i + 4])
+        future_close = float(df["Close"].iloc[i + bars_4h])
         realized = (future_close - entry) / max(entry, 1e-8)
         realized_dir = "Bullish" if realized > 0 else ("Bearish" if realized < 0 else "Neutral")
 
         verdict = str(state.get("verdict") or "Neutral")
         breakout_bias = str((state.get("forecast_state") or {}).get("breakoutBias") or "Neutral")
         directional_bias = str((state.get("forecast_state") or {}).get("directionalBias") or "Neutral")
-        model_dir = breakout_bias if breakout_bias in {"Bullish", "Bearish"} else (
-            directional_bias if directional_bias in {"Bullish", "Bearish"} else verdict
+        tail_horizon_bias = str((state.get("forecast_state") or {}).get("tailHorizonBias") or "Neutral")
+        direction_probs = (state.get("forecast_state") or {}).get("directionProbabilities") or {}
+        directional_edge = max(
+            float(direction_probs.get("up_60m") or 0.5),
+            float(direction_probs.get("down_60m") or 0.5),
         )
+        directional_confluence = int(((regime_state.get("components") or {}).get("directional_confluence_count")) or 0)
+        if tail_horizon_bias in {"Bullish", "Bearish"}:
+            model_dir = tail_horizon_bias
+        elif directional_bias in {"Bullish", "Bearish"} and directional_edge >= 0.56:
+            model_dir = directional_bias
+        elif verdict in {"Bullish", "Bearish"} and directional_edge >= 0.54:
+            model_dir = verdict
+        elif breakout_bias in {"Bullish", "Bearish"} and directional_confluence >= 4:
+            model_dir = breakout_bias
+        else:
+            model_dir = "Neutral"
         if model_dir in {"Bullish", "Bearish"}:
             model_total += 1
             if model_dir == realized_dir:
@@ -959,6 +1246,7 @@ def summarize_tail_event_metrics(df, states):
     naive_hit_rate = (naive_wins / naive_total) if naive_total else 0.0
     return {
         "tail_windows": int(tail_windows),
+        "horizon_bars": int(bars_4h),
         "model_count": int(model_total),
         "model_hit_rate_4h": round(model_hit_rate, 4),
         "naive_count": int(naive_total),
@@ -1001,6 +1289,21 @@ def summarize_quality_gate_metrics(trade_summary, big_move_metrics, execution_st
     }
 
 
+def summarize_cost_aware_assessment(no_cost_summary, cost_aware_summary):
+    no_cost_summary = no_cost_summary if isinstance(no_cost_summary, dict) else {}
+    cost_aware_summary = cost_aware_summary if isinstance(cost_aware_summary, dict) else {}
+    no_cost_roi = float(no_cost_summary.get("roi") or 0.0)
+    cost_aware_roi = float(cost_aware_summary.get("roi") or 0.0)
+    return {
+        "passed": cost_aware_roi > 0.0,
+        "checks": {
+            "roi_positive": cost_aware_roi > 0.0,
+            "capital_preserved": float(cost_aware_summary.get("final_capital") or 10000.0) >= 10000.0,
+        },
+        "roi_drag_pct": round(no_cost_roi - cost_aware_roi, 2),
+    }
+
+
 def summarize_outcome_log(df, states):
     if not states or len(df) < 5:
         return {}
@@ -1031,7 +1334,13 @@ def summarize_outcome_log(df, states):
         )
     return {"records": records[:500]}
 
-def run_backtest(ticker="XAU/USD", period="2y", interval="15min"):
+def run_backtest(
+    ticker="XAU/USD",
+    period="2y",
+    interval="15min",
+    fee_bps=DEFAULT_BACKTEST_FEE_BPS,
+    slippage_bps=DEFAULT_BACKTEST_SLIPPAGE_BPS,
+):
     print(f"Fetching {period} of {interval} data for {ticker}...")
     try:
         df = fetch_history(period=period, interval=interval, ticker=ticker)
@@ -1044,6 +1353,7 @@ def run_backtest(ticker="XAU/USD", period="2y", interval="15min"):
 
     signals, states, enriched = generate_signals(df)
     trades = _simulate_from_signals(df, signals)
+    cost_aware_trades = _simulate_from_signals_with_costs(df, signals, fee_bps=fee_bps, slippage_bps=slippage_bps)
 
     print("-" * 50)
     print("BACKTEST RESULTS (Using Current Strategy Rules)")
@@ -1070,16 +1380,21 @@ def run_backtest(ticker="XAU/USD", period="2y", interval="15min"):
         print(f"Average Loss:       {avg_loss:.2f}%")
         print(f"Final Capital:      ${capital:.2f} (from $10,000 start)")
         summary = _trade_summary(trades)
+        cost_aware_summary = _trade_summary(cost_aware_trades)
+        cost_aware_assessment = summarize_cost_aware_assessment(summary, cost_aware_summary)
         rr200_v2 = _simulate_rr200_v2(df, states, params=ACTIVE_BACKTEST_PARAMS)
         rr200_summary = rr200_v2.get("summary", {})
         transition_metrics = summarize_transition_metrics(df, states)
         feature_hit_metrics = summarize_feature_hit_metrics(df, states)
         ablation_metrics = summarize_ablation_metrics(df, ACTIVE_BACKTEST_PARAMS)
-        big_move_metrics = summarize_big_move_metrics(df, states)
-        confidence_reliability = summarize_confidence_reliability(df, states)
+        big_move_metrics = summarize_big_move_metrics(df, states, interval=interval)
+        triple_barrier_labels = generate_triple_barrier_labels(df, enriched, states, params=ACTIVE_BACKTEST_PARAMS)
+        triple_barrier_metrics = summarize_triple_barrier_metrics(triple_barrier_labels)
+        meta_label_metrics = summarize_meta_label_metrics(triple_barrier_labels)
+        confidence_reliability = summarize_confidence_reliability(df, states, label_records=triple_barrier_labels)
         execution_state_metrics = summarize_execution_state_metrics(df, states)
-        tail_event_metrics = summarize_tail_event_metrics(df, states)
-        large_move_labels = summarize_large_move_labels(df, states)
+        tail_event_metrics = summarize_tail_event_metrics(df, states, interval=interval)
+        large_move_labels = summarize_large_move_labels(df, states, interval=interval)
         decision_quality_metrics = summarize_decision_quality_metrics(df, states)
         quality_gate = summarize_quality_gate_metrics(
             summary,
@@ -1136,6 +1451,20 @@ def run_backtest(ticker="XAU/USD", period="2y", interval="15min"):
             print("Confidence Reliability:")
             for regime_bucket, value in sorted((confidence_reliability.get("regime_confidence") or {}).items()):
                 print(f"  {regime_bucket}: {float(value):.2f}%")
+        if triple_barrier_metrics:
+            print("Triple Barrier Metrics:")
+            for bucket_key, metrics in sorted((triple_barrier_metrics.get("overall") or {}).items()):
+                print(
+                    f"  {bucket_key}: hit_rate={metrics.get('hit_rate', 0.0):.4f} "
+                    f"loss_rate={metrics.get('loss_rate', 0.0):.4f} count={metrics.get('count', 0)}"
+                )
+        if meta_label_metrics:
+            print("Meta Label Metrics:")
+            for bucket_key, metrics in sorted(meta_label_metrics.items()):
+                print(
+                    f"  {bucket_key}: positive_rate={metrics.get('positive_rate', 0.0):.4f} "
+                    f"avg_mfe={metrics.get('avg_mfe_atr', 0.0):.4f} avg_mae={metrics.get('avg_mae_atr', 0.0):.4f}"
+                )
         if execution_state_metrics:
             print("Execution State Metrics:")
             for status, metrics in sorted(execution_state_metrics.items()):
@@ -1169,8 +1498,17 @@ def run_backtest(ticker="XAU/USD", period="2y", interval="15min"):
                 f"enter_correct={decision_quality_metrics.get('enter_correct_rate', 0.0):.4f} "
                 f"regret_vs_stand_aside={decision_quality_metrics.get('avg_regret_vs_stand_aside_pct', 0.0):.4f}%"
             )
-        print(f"Quality Gate: {'PASS' if quality_gate.get('passed') else 'FAIL'}")
+        print("Cost-Aware Summary:")
+        print(
+            f"  fee={float(fee_bps):.1f}bps slippage={float(slippage_bps):.1f}bps "
+            f"trades={cost_aware_summary.get('trades', 0)} win_rate={cost_aware_summary.get('win_rate', 0.0):.2f}% "
+            f"roi={cost_aware_summary.get('roi', 0.0):.2f}% final_capital=${cost_aware_summary.get('final_capital', 10000.0):.2f}"
+        )
+        print(f"No-Cost Quality Gate: {'PASS' if quality_gate.get('passed') else 'FAIL'}")
         for key, ok in (quality_gate.get("checks") or {}).items():
+            print(f"  {key}: {'ok' if ok else 'fail'}")
+        print(f"Cost-Aware Assessment: {'PASS' if cost_aware_assessment.get('passed') else 'FAIL'}")
+        for key, ok in (cost_aware_assessment.get("checks") or {}).items():
             print(f"  {key}: {'ok' if ok else 'fail'}")
         os.makedirs(os.path.dirname(FEATURE_REPORT_FILE), exist_ok=True)
         with open(FEATURE_REPORT_FILE, "w", encoding="utf-8") as handle:
@@ -1179,16 +1517,28 @@ def run_backtest(ticker="XAU/USD", period="2y", interval="15min"):
                     "ticker": ticker,
                     "period": period,
                     "interval": interval,
+                    "cost_assumptions": {
+                        "fee_bps": float(fee_bps),
+                        "slippage_bps": float(slippage_bps),
+                    },
+                    "trade_summary": {
+                        "no_cost": summary,
+                        "cost_aware": cost_aware_summary,
+                    },
                     "feature_hit_metrics": feature_hit_metrics,
                     "ablation_metrics": ablation_metrics,
                     "transition_metrics": transition_metrics,
                     "big_move_metrics": big_move_metrics,
+                    "triple_barrier_metrics": triple_barrier_metrics,
+                    "meta_label_metrics": meta_label_metrics,
                     "confidence_reliability": confidence_reliability,
                     "execution_state_metrics": execution_state_metrics,
                     "tail_event_metrics": tail_event_metrics,
                     "large_move_labels": large_move_labels,
                     "decision_quality_metrics": decision_quality_metrics,
+                    "quality_gate_basis": "no_cost",
                     "quality_gate": quality_gate,
+                    "cost_aware_assessment": cost_aware_assessment,
                     "rr200_v2_summary": rr200_summary,
                 },
                 handle,

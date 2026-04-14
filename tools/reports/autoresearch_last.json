@@ -1,27 +1,159 @@
 {
-  "generated_at": "2026-04-10T11:40:25.903323+00:00",
+  "generated_at": "2026-04-13T23:51:18.108893+00:00",
   "top_5": [
     {
       "params": {
-        "ema_short": 9,
-        "ema_long": 26,
-        "rsi_overbought": 65,
+        "ema_short": 10,
+        "ema_long": 58,
+        "rsi_overbought": 68,
+        "rsi_oversold": 18,
+        "cmf_window": 12
+      },
+      "median_score": -3.380393835295761,
+      "mean_score": -3.5384257527693155,
+      "weighted_score": -3.573155331773709,
+      "weighted_median_score": -3.380393835295761,
+      "ranking_score": -3.3803938352957608,
+      "folds": 9,
+      "pass_rate": 0.2222222222222222,
+      "recency_weighted_pass_rate": 0.1984126984126984,
+      "summary": {
+        "trades": 16.484126984126984,
+        "roi": -0.9577966444308607,
+        "test_horizon_days": 1.2499999999999998,
+        "max_drawdown": 2.311679023243271,
+        "win_rate": 16.28616598154413,
+        "profit_factor": 0.9042403058832624,
+        "expectancy": 0.00873496608043432,
+        "sharpe": -18.859837666124488,
+        "recent_median_score": -3.380393835295761,
+        "score_std": 1.75698871601455,
+        "score_min": -7.177203471954792,
+        "score_max": -1.3302746517537973
+      }
+    },
+    {
+      "params": {
+        "ema_short": 10,
+        "ema_long": 58,
+        "rsi_overbought": 68,
+        "rsi_oversold": 18,
+        "cmf_window": 14
+      },
+      "median_score": -3.380393835295761,
+      "mean_score": -3.6354829674239957,
+      "weighted_score": -3.665519782133109,
+      "weighted_median_score": -3.380393835295761,
+      "ranking_score": -3.3803938352957608,
+      "folds": 9,
+      "pass_rate": 0.2222222222222222,
+      "recency_weighted_pass_rate": 0.1984126984126984,
+      "summary": {
+        "trades": 16.642857142857146,
+        "roi": -1.0467576853305798,
+        "test_horizon_days": 1.2499999999999998,
+        "max_drawdown": 2.4457530077843406,
+        "win_rate": 16.253302594643475,
+        "profit_factor": 0.9487974929585148,
+        "expectancy": 0.0036990893817574187,
+        "sharpe": -18.935834333531215,
+        "recent_median_score": -3.380393835295761,
+        "score_std": 1.917479972011207,
+        "score_min": -7.177203471954792,
+        "score_max": -1.140031178462749
+      }
+    },
+    {
+      "params": {
+        "ema_short": 10,
+        "ema_long": 58,
+        "rsi_overbought": 68,
+        "rsi_oversold": 20,
+        "cmf_window": 12
+      },
+      "median_score": -3.380393835295761,
+      "mean_score": -3.5384257527693155,
+      "weighted_score": -3.573155331773709,
+      "weighted_median_score": -3.380393835295761,
+      "ranking_score": -3.3803938352957608,
+      "folds": 9,
+      "pass_rate": 0.2222222222222222,
+      "recency_weighted_pass_rate": 0.1984126984126984,
+      "summary": {
+        "trades": 16.484126984126984,
+        "roi": -0.9577966444308607,
+        "test_horizon_days": 1.2499999999999998,
+        "max_drawdown": 2.311679023243271,
+        "win_rate": 16.28616598154413,
+        "profit_factor": 0.9042403058832624,
+        "expectancy": 0.00873496608043432,
+        "sharpe": -18.859837666124488,
+        "recent_median_score": -3.380393835295761,
+        "score_std": 1.75698871601455,
+        "score_min": -7.177203471954792,
+        "score_max": -1.3302746517537973
+      }
+    },
+    {
+      "params": {
+        "ema_short": 10,
+        "ema_long": 58,
+        "rsi_overbought": 68,
         "rsi_oversold": 20,
         "cmf_window": 14
       },
-      "median_score": -17.907822386612704,
-      "mean_score": -17.907822386612704,
-      "folds": 2,
-      "pass_rate": 0.0,
+      "median_score": -3.380393835295761,
+      "mean_score": -3.6354829674239957,
+      "weighted_score": -3.665519782133109,
+      "weighted_median_score": -3.380393835295761,
+      "ranking_score": -3.3803938352957608,
+      "folds": 9,
+      "pass_rate": 0.2222222222222222,
+      "recency_weighted_pass_rate": 0.1984126984126984,
       "summary": {
-        "trades": 10.5,
-        "roi": -5.594241409844159,
-        "cagr": -47.20700769726071,
-        "max_drawdown": 11.874807583212922,
-        "win_rate": 52.77777777777778,
-        "profit_factor": 0.6419824494477523,
-        "expectancy": -0.4707857904145117,
-        "sharpe": -0.6085459880568249
+        "trades": 16.642857142857146,
+        "roi": -1.0467576853305798,
+        "test_horizon_days": 1.2499999999999998,
+        "max_drawdown": 2.4457530077843406,
+        "win_rate": 16.253302594643475,
+        "profit_factor": 0.9487974929585148,
+        "expectancy": 0.0036990893817574187,
+        "sharpe": -18.935834333531215,
+        "recent_median_score": -3.380393835295761,
+        "score_std": 1.917479972011207,
+        "score_min": -7.177203471954792,
+        "score_max": -1.140031178462749
+      }
+    },
+    {
+      "params": {
+        "ema_short": 10,
+        "ema_long": 58,
+        "rsi_overbought": 68,
+        "rsi_oversold": 22,
+        "cmf_window": 12
+      },
+      "median_score": -3.380393835295761,
+      "mean_score": -3.5384257527693155,
+      "weighted_score": -3.573155331773709,
+      "weighted_median_score": -3.380393835295761,
+      "ranking_score": -3.3803938352957608,
+      "folds": 9,
+      "pass_rate": 0.2222222222222222,
+      "recency_weighted_pass_rate": 0.1984126984126984,
+      "summary": {
+        "trades": 16.484126984126984,
+        "roi": -0.9577966444308607,
+        "test_horizon_days": 1.2499999999999998,
+        "max_drawdown": 2.311679023243271,
+        "win_rate": 16.28616598154413,
+        "profit_factor": 0.9042403058832624,
+        "expectancy": 0.00873496608043432,
+        "sharpe": -18.859837666124488,
+        "recent_median_score": -3.380393835295761,
+        "score_std": 1.75698871601455,
+        "score_min": -7.177203471954792,
+        "score_max": -1.3302746517537973
       }
     }
   ],
@@ -30,49 +162,100 @@
       "ema_short": 20,
       "ema_long": 100,
       "rsi_overbought": 70,
-      "rsi_oversold": 20,
+      "rsi_oversold": 30,
       "cmf_window": 14
     },
-    "median_score": -23.16182772825418,
-    "mean_score": -23.16182772825418,
-    "folds": 2,
-    "pass_rate": 0.0,
+    "median_score": -4.268498766012924,
+    "mean_score": -3.9310931850248974,
+    "weighted_score": -3.9831146834990094,
+    "weighted_median_score": -4.268498766012924,
+    "ranking_score": -4.175284724925861,
+    "folds": 9,
+    "pass_rate": 0.4444444444444444,
+    "recency_weighted_pass_rate": 0.3968253968253968,
     "summary": {
-      "trades": 7.5,
-      "roi": -7.541206026310594,
-      "cagr": -59.92520367193135,
-      "max_drawdown": 9.464202993777793,
-      "win_rate": 41.07142857142857,
-      "profit_factor": 0.4008102167236747,
-      "expectancy": -0.9819445200942374,
-      "sharpe": -0.8557299514733665
+      "trades": 15.007936507936508,
+      "roi": -0.9038010467008519,
+      "test_horizon_days": 1.2499999999999998,
+      "max_drawdown": 2.2744142606876427,
+      "win_rate": 22.407037407037404,
+      "profit_factor": 1.8681787792470657,
+      "expectancy": 0.031703070425094654,
+      "sharpe": -18.16223368077317,
+      "recent_median_score": -3.8024285605776105,
+      "score_std": 1.722234700650761,
+      "score_min": -6.144188378716789,
+      "score_max": -1.0501481035777065
     }
   },
   "best": {
     "params": {
-      "ema_short": 9,
-      "ema_long": 26,
-      "rsi_overbought": 65,
-      "rsi_oversold": 20,
-      "cmf_window": 14
+      "ema_short": 10,
+      "ema_long": 58,
+      "rsi_overbought": 68,
+      "rsi_oversold": 18,
+      "cmf_window": 12
     },
-    "median_score": -17.907822386612704,
-    "mean_score": -17.907822386612704,
-    "folds": 2,
-    "pass_rate": 0.0,
+    "median_score": -3.380393835295761,
+    "mean_score": -3.5384257527693155,
+    "weighted_score": -3.573155331773709,
+    "weighted_median_score": -3.380393835295761,
+    "ranking_score": -3.3803938352957608,
+    "folds": 9,
+    "pass_rate": 0.2222222222222222,
+    "recency_weighted_pass_rate": 0.1984126984126984,
     "summary": {
-      "trades": 10.5,
-      "roi": -5.594241409844159,
-      "cagr": -47.20700769726071,
-      "max_drawdown": 11.874807583212922,
-      "win_rate": 52.77777777777778,
-      "profit_factor": 0.6419824494477523,
-      "expectancy": -0.4707857904145117,
-      "sharpe": -0.6085459880568249
+      "trades": 16.484126984126984,
+      "roi": -0.9577966444308607,
+      "test_horizon_days": 1.2499999999999998,
+      "max_drawdown": 2.311679023243271,
+      "win_rate": 16.28616598154413,
+      "profit_factor": 0.9042403058832624,
+      "expectancy": 0.00873496608043432,
+      "sharpe": -18.859837666124488,
+      "recent_median_score": -3.380393835295761,
+      "score_std": 1.75698871601455,
+      "score_min": -7.177203471954792,
+      "score_max": -1.3302746517537973
     }
   },
+  "ranking_method": "robust_median_recency_blend",
   "promote": false,
   "promotion_mode": "auto",
-  "promotion_reason": "Hold: score delta 5.254, pass_rate 0.00, pf 0.64.",
-  "evaluation_mode": "monthly_walkforward"
+  "promotion_reason": "Hold: robust delta 0.795, weighted pass_rate 0.20, weighted_median -3.38, pf 0.90.",
+  "evaluation_mode": "default_walkforward",
+  "parameter_surface_file": "/Users/chrixchange/.openclaw/workspace/gold-predictor/config/backtest_params.json",
+  "cost_assumptions": {
+    "fee_bps": 3.0,
+    "slippage_bps": 2.0
+  },
+  "search_space": {
+    "ema_short": [
+      10,
+      12,
+      14
+    ],
+    "ema_long": [
+      42,
+      50,
+      58
+    ],
+    "rsi_overbought": [
+      68,
+      70,
+      72
+    ],
+    "rsi_oversold": [
+      18,
+      20,
+      22
+    ],
+    "cmf_window": [
+      12,
+      14
+    ],
+    "candidate_count": 162
+  },
+  "candidate_regime_overrides_file": "/Users/chrixchange/.openclaw/workspace/gold-predictor/tools/reports/autoresearch_regime_candidate.json",
+  "live_regime_applied": false
 }

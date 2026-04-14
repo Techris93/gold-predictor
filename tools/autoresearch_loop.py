@@ -28,7 +28,6 @@ from typing import Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
-import ta
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -37,12 +36,17 @@ if str(BASE_DIR) not in sys.path:
 load_dotenv(BASE_DIR / ".env")
 
 from tools.twelvedata_market_data import fetch_history as fetch_td_history
+from tools.backtest import ACTIVE_BACKTEST_PARAMS
 from tools.signal_engine import (
     build_ta_payload_from_row,
     compute_prediction_from_ta,
     normalize_strategy_params,
     prepare_historical_features,
 )
+
+
+ACTIVE_RESEARCH_TEMPLATE_SOURCE = BASE_DIR / "config" / "backtest_params.json"
+ACTIVE_RESEARCH_TEMPLATE = normalize_strategy_params(ACTIVE_BACKTEST_PARAMS)
 
 
 @dataclass(frozen=True)
@@ -74,42 +78,61 @@ def fetch_history(ticker: str, period: str, interval: str) -> pd.DataFrame:
 
 
 def _to_strategy_dict(p: StrategyParams) -> Dict[str, int]:
-    return {
-        "ema_short": p.ema_short,
-        "ema_long": p.ema_long,
-        "rsi_window": 14,
-        "rsi_overbought": p.rsi_overbought,
-        "rsi_oversold": p.rsi_oversold,
-        "adx_window": 14,
-        "adx_trending_threshold": 22,
-        "adx_weak_trend_threshold": 18,
-        "atr_window": 14,
-        "atr_trending_percent_threshold": 0.25,
-        "cmf_window": p.cmf_window,
-        "cmf_strong_buy_threshold": 0.10,
-        "cmf_strong_sell_threshold": -0.10,
-        "alignment_weight": 1.0,
-        "strong_volume_weight": 1.5,
-        "verdict_margin_threshold": 1.2,
-        "confidence_margin_multiplier": 8.0,
-        "rangebound_penalty": 8.0,
-        "mixed_alignment_penalty": 6.0,
-        "mtf_intervals": ["15min", "1h", "4h"],
-    }
+    merged = dict(ACTIVE_RESEARCH_TEMPLATE)
+    merged.update(
+        {
+            "ema_short": p.ema_short,
+            "ema_long": p.ema_long,
+            "rsi_overbought": p.rsi_overbought,
+            "rsi_oversold": p.rsi_oversold,
+            "cmf_window": p.cmf_window,
+        }
+    )
+    return normalize_strategy_params(merged)
 
 
 def compute_indicators(df: pd.DataFrame, p: StrategyParams) -> pd.DataFrame:
     return prepare_historical_features(df, normalize_strategy_params(_to_strategy_dict(p)))
 
 
+def interval_to_minutes(interval: str) -> int:
+    raw = str(interval or "1h").strip().lower()
+    mapping = {
+        "15m": 15,
+        "15min": 15,
+        "30m": 30,
+        "30min": 30,
+        "60m": 60,
+        "60min": 60,
+        "1h": 60,
+        "4h": 240,
+        "1d": 1440,
+        "1day": 1440,
+    }
+    if raw in mapping:
+        return mapping[raw]
+    if raw.endswith("min") and raw[:-3].isdigit():
+        return max(1, int(raw[:-3]))
+    if raw.endswith("m") and raw[:-1].isdigit():
+        return max(1, int(raw[:-1]))
+    if raw.endswith("h") and raw[:-1].isdigit():
+        return max(1, int(raw[:-1]) * 60)
+    if raw.endswith("d") and raw[:-1].isdigit():
+        return max(1, int(raw[:-1]) * 1440)
+    return 60
+
+
 def generate_signals(df: pd.DataFrame, p: StrategyParams) -> pd.Series:
     enriched = compute_indicators(df, p)
     signals = pd.Series("Neutral", index=enriched.index, dtype="object")
-    strategy_params = normalize_strategy_params(_to_strategy_dict(p))
+    strategy_params = _to_strategy_dict(p)
+    regime_memory: Dict[str, object] = {}
 
     for i in range(len(enriched)):
-        ta_payload = build_ta_payload_from_row(enriched.iloc[i], strategy_params)
+        ta_payload = build_ta_payload_from_row(enriched.iloc[i], strategy_params, regime_memory=regime_memory)
         prediction = compute_prediction_from_ta(ta_payload)
+        if isinstance(prediction.get("_regime_memory"), dict):
+            regime_memory = dict(prediction.get("_regime_memory") or {})
         verdict = prediction.get("verdict")
         if verdict == "Bullish":
             signals.iloc[i] = "Buy"
@@ -175,12 +198,13 @@ def max_drawdown_from_equity(equity_curve: np.ndarray) -> float:
     return float(abs(np.min(dd)))
 
 
-def compute_metrics(trade_returns: List[float], bars_in_test: int) -> Dict[str, float]:
+def compute_metrics(trade_returns: List[float], bars_in_test: int, bar_minutes: int = 60) -> Dict[str, float]:
+    test_horizon_days = float((bars_in_test * max(1, bar_minutes)) / (60 * 24))
     if len(trade_returns) == 0:
         return {
             "trades": 0,
             "roi": 0.0,
-            "cagr": 0.0,
+            "test_horizon_days": test_horizon_days,
             "max_drawdown": 0.0,
             "win_rate": 0.0,
             "profit_factor": 0.0,
@@ -194,10 +218,6 @@ def compute_metrics(trade_returns: List[float], bars_in_test: int) -> Dict[str, 
 
     equity = np.cumprod(1 + arr)
     total_return = float(equity[-1] - 1)
-
-    # Convert bars to years for hourly bars.
-    years = max((bars_in_test / (24 * 365)), 1e-6)
-    cagr = float((equity[-1] ** (1 / years)) - 1) if equity[-1] > 0 else -1.0
 
     max_dd = max_drawdown_from_equity(equity)
     win_rate = float((len(wins) / len(arr)) * 100)
@@ -213,7 +233,7 @@ def compute_metrics(trade_returns: List[float], bars_in_test: int) -> Dict[str, 
     return {
         "trades": int(len(arr)),
         "roi": total_return * 100,
-        "cagr": cagr * 100,
+        "test_horizon_days": test_horizon_days,
         "max_drawdown": max_dd * 100,
         "win_rate": win_rate,
         "profit_factor": profit_factor,
@@ -223,17 +243,32 @@ def compute_metrics(trade_returns: List[float], bars_in_test: int) -> Dict[str, 
 
 
 def composite_score(metrics: Dict[str, float]) -> float:
-    # Reward return quality; penalize drawdown and very low trade counts.
+    # Use capped components so one short-lived outlier fold does not dominate ranking.
     trade_penalty = 0.0 if metrics["trades"] >= 20 else (20 - metrics["trades"]) * 0.4
+    roi_component = float(np.clip(metrics["roi"], -8.0, 8.0))
+    sharpe_component = float(np.clip(metrics["sharpe"], -3.0, 3.0))
+    expectancy_component = float(np.clip(metrics["expectancy"], -0.25, 0.25)) * 10.0
+    pf_component = (float(np.clip(metrics["profit_factor"], 0.0, 2.5)) - 1.0) * 6.0
+    drawdown_component = float(np.clip(metrics["max_drawdown"], 0.0, 12.0))
     score = (
-        0.45 * metrics["sharpe"]
-        + 0.30 * metrics["cagr"]
-        - 0.20 * metrics["max_drawdown"]
-        + 0.05 * metrics["win_rate"]
-        + 0.10 * min(metrics["profit_factor"], 3.0)
+        0.45 * roi_component
+        + 0.20 * sharpe_component
+        + 0.15 * expectancy_component
+        + 0.10 * pf_component
+        - 0.20 * drawdown_component
         - trade_penalty
     )
     return float(score)
+
+
+def weighted_median(values: np.ndarray, weights: np.ndarray) -> float:
+    if values.size == 0:
+        return 0.0
+    order = np.argsort(values)
+    sorted_values = values[order]
+    sorted_weights = weights[order]
+    cutoff = float(sorted_weights.sum()) * 0.5
+    return float(sorted_values[np.searchsorted(np.cumsum(sorted_weights), cutoff, side="left")])
 
 
 def walkforward_ranges(n: int, train_bars: int, test_bars: int, step_bars: int) -> List[Tuple[int, int, int, int]]:
@@ -259,6 +294,7 @@ def evaluate_params(
     step_bars: int,
     fee_bps: float,
     slippage_bps: float,
+    interval_minutes: int,
 ) -> Dict[str, object]:
     spans = walkforward_ranges(len(base_df), train_bars, test_bars, step_bars)
     if not spans:
@@ -285,7 +321,7 @@ def evaluate_params(
         local_signals = signals.loc[test_index]
 
         trades = simulate_trades(local, local_signals, fee_bps=fee_bps, slippage_bps=slippage_bps)
-        metrics = compute_metrics(trades, bars_in_test=len(local))
+        metrics = compute_metrics(trades, bars_in_test=len(local), bar_minutes=interval_minutes)
         score = composite_score(metrics)
 
         fold_metrics.append(metrics)
@@ -296,52 +332,109 @@ def evaluate_params(
             "params": p.as_dict(),
             "median_score": -999.0,
             "mean_score": -999.0,
+            "weighted_score": -999.0,
+            "weighted_median_score": -999.0,
+            "ranking_score": -999.0,
             "folds": 0,
             "pass_rate": 0.0,
+            "recency_weighted_pass_rate": 0.0,
             "summary": {},
         }
 
-    def med(key: str) -> float:
-        vals = [m[key] for m in fold_metrics]
-        return float(np.median(vals))
+    folds = len(fold_metrics)
+    recency_weights = np.linspace(0.75, 1.35, folds)
+    fold_score_array = np.array(fold_scores, dtype=float)
+    weighted_median_score = weighted_median(fold_score_array, recency_weights)
+    recent_median_score = float(np.median(fold_score_array[-min(3, len(fold_score_array)):]))
+    ranking_score = float(
+        (0.50 * weighted_median_score)
+        + (0.30 * float(np.median(fold_score_array)))
+        + (0.20 * recent_median_score)
+    )
+
+    def weighted(key: str) -> float:
+        vals = np.array([m[key] for m in fold_metrics], dtype=float)
+        return float(np.average(vals, weights=recency_weights)) if vals.size else 0.0
 
     pass_count = 0
+    pass_flags: List[float] = []
     for m in fold_metrics:
-        if m["profit_factor"] >= 1.15 and m["max_drawdown"] <= 20 and m["expectancy"] > 0:
+        passed = m["profit_factor"] >= 1.15 and m["max_drawdown"] <= 20 and m["expectancy"] > 0
+        if passed:
             pass_count += 1
+        pass_flags.append(1.0 if passed else 0.0)
 
-    folds = len(fold_metrics)
     pass_rate = pass_count / folds
+    weighted_score = float(np.average(fold_score_array, weights=recency_weights))
+    recency_weighted_pass_rate = float(np.average(np.array(pass_flags, dtype=float), weights=recency_weights)) if pass_flags else 0.0
 
     summary = {
-        "trades": med("trades"),
-        "roi": med("roi"),
-        "cagr": med("cagr"),
-        "max_drawdown": med("max_drawdown"),
-        "win_rate": med("win_rate"),
-        "profit_factor": med("profit_factor"),
-        "expectancy": med("expectancy"),
-        "sharpe": med("sharpe"),
+        "trades": weighted("trades"),
+        "roi": weighted("roi"),
+        "test_horizon_days": weighted("test_horizon_days"),
+        "max_drawdown": weighted("max_drawdown"),
+        "win_rate": weighted("win_rate"),
+        "profit_factor": weighted("profit_factor"),
+        "expectancy": weighted("expectancy"),
+        "sharpe": weighted("sharpe"),
+        "recent_median_score": recent_median_score,
+        "score_std": float(np.std(fold_score_array)),
+        "score_min": float(np.min(fold_score_array)),
+        "score_max": float(np.max(fold_score_array)),
     }
 
     return {
         "params": p.as_dict(),
-        "median_score": float(np.median(fold_scores)),
-        "mean_score": float(np.mean(fold_scores)),
+        "median_score": float(np.median(fold_score_array)),
+        "mean_score": float(np.mean(fold_score_array)),
+        "weighted_score": weighted_score,
+        "weighted_median_score": weighted_median_score,
+        "ranking_score": ranking_score,
         "folds": folds,
         "pass_rate": float(pass_rate),
+        "recency_weighted_pass_rate": recency_weighted_pass_rate,
         "summary": summary,
     }
 
 
-def param_grid() -> List[StrategyParams]:
+def parse_int_values(raw: str) -> List[int]:
+    tokens = [token.strip() for token in str(raw or "").split(",") if token.strip()]
+    if not tokens:
+        return []
+
+    values: List[int] = []
+    seen = set()
+    for token in tokens:
+        try:
+            value = int(token)
+        except ValueError as exc:
+            raise ValueError(f"Invalid integer value '{token}' in comma-separated list: {raw}") from exc
+        if value not in seen:
+            seen.add(value)
+            values.append(value)
+    return values
+
+
+def param_grid(
+    ema_short_values: List[int] | None = None,
+    ema_long_values: List[int] | None = None,
+    rsi_overbought_values: List[int] | None = None,
+    rsi_oversold_values: List[int] | None = None,
+    cmf_window_values: List[int] | None = None,
+) -> List[StrategyParams]:
+    ema_short_values = ema_short_values or [9, 12, 20]
+    ema_long_values = ema_long_values or [26, 50, 100]
+    rsi_overbought_values = rsi_overbought_values or [65, 70, 75]
+    rsi_oversold_values = rsi_oversold_values or [20, 25, 30]
+    cmf_window_values = cmf_window_values or [14, 20]
+
     grid = []
     for es, el, rob, ros, cmf in itertools.product(
-        [9, 12, 20],
-        [26, 50, 100],
-        [65, 70, 75],
-        [20, 25, 30],
-        [14, 20],
+        ema_short_values,
+        ema_long_values,
+        rsi_overbought_values,
+        rsi_oversold_values,
+        cmf_window_values,
     ):
         if es >= el:
             continue
@@ -350,23 +443,38 @@ def param_grid() -> List[StrategyParams]:
 
 
 def make_report(results: List[Dict[str, object]], baseline: Dict[str, object]) -> Dict[str, object]:
-    ranked = sorted(results, key=lambda r: r["median_score"], reverse=True)
+    ranked = sorted(
+        results,
+        key=lambda r: (
+            r.get("ranking_score", r.get("weighted_median_score", r["median_score"])),
+            r.get("recency_weighted_pass_rate", r["pass_rate"]),
+            r["median_score"],
+        ),
+        reverse=True,
+    )
     best = ranked[0] if ranked else None
 
     promote = False
     promotion_mode = "auto"
     reason = "No result"
     if best is not None:
-        baseline_score = float(baseline["median_score"])
-        improved_by = float(best["median_score"]) - baseline_score
-        robust = float(best["pass_rate"]) >= 0.6 and float(best["summary"].get("profit_factor", 0)) >= 1.2
+        baseline_score = float(baseline.get("ranking_score", baseline.get("weighted_median_score", baseline["median_score"])))
+        improved_by = float(best.get("ranking_score", best.get("weighted_median_score", best["median_score"]))) - baseline_score
+        robust = (
+            float(best.get("recency_weighted_pass_rate", best["pass_rate"])) >= 0.6
+            and float(best["summary"].get("profit_factor", 0)) >= 1.2
+            and float(best.get("weighted_median_score", best["median_score"])) >= float(baseline.get("weighted_median_score", baseline["median_score"]))
+        )
         if improved_by >= 0.5 and robust:
             promote = True
-            reason = f"Promote: improved score by {improved_by:.3f} with pass_rate {best['pass_rate']:.2f}."
+            reason = (
+                f"Promote: improved robust score by {improved_by:.3f} "
+                f"with weighted pass_rate {best.get('recency_weighted_pass_rate', best['pass_rate']):.2f}."
+            )
         else:
             reason = (
-                f"Hold: score delta {improved_by:.3f}, pass_rate {best['pass_rate']:.2f}, "
-                f"pf {best['summary'].get('profit_factor', 0):.2f}."
+                f"Hold: robust delta {improved_by:.3f}, weighted pass_rate {best.get('recency_weighted_pass_rate', best['pass_rate']):.2f}, "
+                f"weighted_median {best.get('weighted_median_score', best['median_score']):.2f}, pf {best['summary'].get('profit_factor', 0):.2f}."
             )
 
         # Manual override (keeps auto logic intact for normal runs).
@@ -385,6 +493,7 @@ def make_report(results: List[Dict[str, object]], baseline: Dict[str, object]) -
         "top_5": ranked[:5],
         "baseline": baseline,
         "best": best,
+        "ranking_method": "robust_median_recency_blend",
         "promote": promote,
         "promotion_mode": promotion_mode,
         "promotion_reason": reason,
@@ -545,6 +654,16 @@ def main() -> None:
     parser.add_argument("--fee-bps", type=float, default=3.0)
     parser.add_argument("--slippage-bps", type=float, default=2.0)
     parser.add_argument("--max-runs", type=int, default=0, help="Limit number of parameter sets for quick runs.")
+    parser.add_argument("--ema-short-values", default="", help="Comma-separated EMA short values for the search grid.")
+    parser.add_argument("--ema-long-values", default="", help="Comma-separated EMA long values for the search grid.")
+    parser.add_argument("--rsi-overbought-values", default="", help="Comma-separated RSI overbought values for the search grid.")
+    parser.add_argument("--rsi-oversold-values", default="", help="Comma-separated RSI oversold values for the search grid.")
+    parser.add_argument("--cmf-window-values", default="", help="Comma-separated CMF window values for the search grid.")
+    parser.add_argument(
+        "--apply-promoted-regime",
+        action="store_true",
+        help="Apply promoted regime overrides to config/regime_params.json. Without this flag, research runs never touch live regime config.",
+    )
     parser.add_argument("--auto-branch", action="store_true", help="Create/switch to an autoresearch feature branch.")
     parser.add_argument("--commit-on-promote", action="store_true", help="Commit report artifacts only when promotion gate passes.")
     parser.add_argument("--push", action="store_true", help="Push feature branch after successful promotion commit.")
@@ -558,6 +677,7 @@ def main() -> None:
 
     print("[autoresearch] fetching data...")
     base_df = fetch_history(args.ticker, args.period, args.interval)
+    interval_minutes = interval_to_minutes(args.interval)
     print(f"[autoresearch] candles loaded: {len(base_df)}")
     if args.monthly and (args.train_bars + args.test_bars) > len(base_df):
         train_bars = max(500, int(len(base_df) * 0.70))
@@ -572,22 +692,29 @@ def main() -> None:
             f"train={args.train_bars}, test={args.test_bars}, step={args.step_bars}",
         )
 
-    candidates = param_grid()
+    ema_short_values = parse_int_values(args.ema_short_values) or [9, 12, 20]
+    ema_long_values = parse_int_values(args.ema_long_values) or [26, 50, 100]
+    rsi_overbought_values = parse_int_values(args.rsi_overbought_values) or [65, 70, 75]
+    rsi_oversold_values = parse_int_values(args.rsi_oversold_values) or [20, 25, 30]
+    cmf_window_values = parse_int_values(args.cmf_window_values) or [14, 20]
+
+    candidates = param_grid(
+        ema_short_values=ema_short_values,
+        ema_long_values=ema_long_values,
+        rsi_overbought_values=rsi_overbought_values,
+        rsi_oversold_values=rsi_oversold_values,
+        cmf_window_values=cmf_window_values,
+    )
     if args.max_runs > 0:
         candidates = candidates[: args.max_runs]
     print(f"[autoresearch] testing {len(candidates)} parameter sets")
 
-    baseline_file = BASE_DIR / "config" / "strategy_params.json"
-    try:
-        active = json.loads(baseline_file.read_text(encoding="utf-8"))
-    except Exception:
-        active = {}
     baseline_params = StrategyParams(
-        int(active.get("ema_short", 20)),
-        int(active.get("ema_long", 100)),
-        int(active.get("rsi_overbought", 70)),
-        int(active.get("rsi_oversold", 20)),
-        int(active.get("cmf_window", 14)),
+        int(ACTIVE_RESEARCH_TEMPLATE.get("ema_short", 20)),
+        int(ACTIVE_RESEARCH_TEMPLATE.get("ema_long", 100)),
+        int(ACTIVE_RESEARCH_TEMPLATE.get("rsi_overbought", 70)),
+        int(ACTIVE_RESEARCH_TEMPLATE.get("rsi_oversold", 20)),
+        int(ACTIVE_RESEARCH_TEMPLATE.get("cmf_window", 14)),
     )
     baseline = evaluate_params(
         base_df,
@@ -597,6 +724,7 @@ def main() -> None:
         step_bars=args.step_bars,
         fee_bps=args.fee_bps,
         slippage_bps=args.slippage_bps,
+        interval_minutes=interval_minutes,
     )
 
     results = []
@@ -609,6 +737,7 @@ def main() -> None:
             step_bars=args.step_bars,
             fee_bps=args.fee_bps,
             slippage_bps=args.slippage_bps,
+            interval_minutes=interval_minutes,
         )
         results.append(out)
 
@@ -617,17 +746,40 @@ def main() -> None:
 
     report = make_report(results, baseline)
     report["evaluation_mode"] = "monthly_walkforward" if args.monthly else "default_walkforward"
+    report["parameter_surface_file"] = str(ACTIVE_RESEARCH_TEMPLATE_SOURCE)
+    report["cost_assumptions"] = {
+        "fee_bps": args.fee_bps,
+        "slippage_bps": args.slippage_bps,
+    }
+    report["search_space"] = {
+        "ema_short": ema_short_values,
+        "ema_long": ema_long_values,
+        "rsi_overbought": rsi_overbought_values,
+        "rsi_oversold": rsi_oversold_values,
+        "cmf_window": cmf_window_values,
+        "candidate_count": len(candidates),
+    }
 
     reports_dir = Path(__file__).resolve().parent / "reports"
     reports_dir.mkdir(parents=True, exist_ok=True)
 
-    latest_file = reports_dir / "autoresearch_last.json"
-    latest_file.write_text(json.dumps(report, indent=2), encoding="utf-8")
-
     regime_params_file = BASE_DIR / "config" / "regime_params.json"
+    candidate_regime_file = reports_dir / "autoresearch_regime_candidate.json"
     best_params = (report.get("best") or {}).get("params") or {}
     regime_overrides = build_regime_param_overrides(best_params)
-    regime_params_file.write_text(json.dumps(regime_overrides, indent=2), encoding="utf-8")
+    candidate_regime_file.write_text(json.dumps(regime_overrides, indent=2), encoding="utf-8")
+
+    live_regime_applied = False
+    if report.get("promote") and args.apply_promoted_regime:
+        regime_params_file.write_text(json.dumps(regime_overrides, indent=2), encoding="utf-8")
+
+        live_regime_applied = True
+
+    report["candidate_regime_overrides_file"] = str(candidate_regime_file)
+    report["live_regime_applied"] = live_regime_applied
+
+    latest_file = reports_dir / "autoresearch_last.json"
+    latest_file.write_text(json.dumps(report, indent=2), encoding="utf-8")
 
     top = report["best"]
     print("\n[autoresearch] ===== SUMMARY =====")
@@ -637,11 +789,16 @@ def main() -> None:
 
     print("Best params:", top["params"])
     print("Best median score:", round(float(top["median_score"]), 4))
+    print("Best robust score:", round(float(top.get("ranking_score", top["median_score"])), 4))
     print("Best pass rate:", round(float(top["pass_rate"]), 3))
-    print("Best median metrics:", top["summary"])
+    print("Best recency-weighted metrics:", top["summary"])
     print("Promotion decision:", report["promote"], "|", report["promotion_reason"])
     print("Report file:", str(latest_file))
-    print("Regime overrides file:", str(regime_params_file))
+    print("Candidate regime overrides file:", str(candidate_regime_file))
+    if live_regime_applied:
+        print("Regime overrides file:", str(regime_params_file))
+    elif report.get("promote"):
+        print("Live regime overrides not applied; rerun with --apply-promoted-regime to update config/regime_params.json")
 
     maybe_commit_promoted_result(
         report=report,

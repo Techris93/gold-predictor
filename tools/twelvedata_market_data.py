@@ -20,6 +20,7 @@ load_dotenv(BASE_DIR / ".env")
 TD_API_KEY = os.getenv("TWELVE_DATA_API_KEY", "").strip()
 TD_SYMBOL = os.getenv("TWELVE_DATA_SYMBOL", "XAU/USD").strip() or "XAU/USD"
 MAX_OUTPUTSIZE = 5000
+TD_OUTPUT_TIMEZONE = "UTC"
 
 _TD_CLIENT: Optional[TDClient] = None
 
@@ -96,6 +97,15 @@ def bars_for_period(period: str, interval: str) -> int:
     return max(100, min(MAX_OUTPUTSIZE, bars))
 
 
+def _to_utc_datetime_index(values) -> pd.DatetimeIndex:
+    parsed = pd.to_datetime(values, errors="coerce", utc=True)
+    if not isinstance(parsed, pd.DatetimeIndex):
+        parsed = pd.DatetimeIndex(parsed)
+    if parsed.tz is None:
+        return parsed.tz_localize(TD_OUTPUT_TIMEZONE)
+    return parsed.tz_convert(TD_OUTPUT_TIMEZONE)
+
+
 def normalize_ohlcv_frame(frame: pd.DataFrame) -> pd.DataFrame:
     if frame is None or frame.empty:
         return pd.DataFrame()
@@ -108,14 +118,18 @@ def normalize_ohlcv_frame(frame: pd.DataFrame) -> pd.DataFrame:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
     if "Datetime" in df.columns:
-        df["Datetime"] = pd.to_datetime(df["Datetime"], errors="coerce", utc=False)
+        df["Datetime"] = _to_utc_datetime_index(df["Datetime"])
         df = df.set_index("Datetime")
 
     if not isinstance(df.index, pd.DatetimeIndex):
         try:
-            df.index = pd.to_datetime(df.index, errors="coerce", utc=False)
+            df.index = _to_utc_datetime_index(df.index)
         except Exception:
             pass
+    elif df.index.tz is None:
+        df.index = df.index.tz_localize(TD_OUTPUT_TIMEZONE)
+    else:
+        df.index = df.index.tz_convert(TD_OUTPUT_TIMEZONE)
 
     df = df.sort_index()
     df = df.dropna(subset=[col for col in ["Open", "High", "Low", "Close"] if col in df.columns])
@@ -137,7 +151,12 @@ def fetch_history(period: str = "365d", interval: str = "1h", ticker: Optional[s
     td_interval = interval_to_twelvedata(interval)
     outputsize = bars_for_period(period, td_interval)
 
-    ts = client.time_series(symbol=symbol, interval=td_interval, outputsize=outputsize)
+    ts = client.time_series(
+        symbol=symbol,
+        interval=td_interval,
+        outputsize=outputsize,
+        timezone=TD_OUTPUT_TIMEZONE,
+    )
     df = normalize_ohlcv_frame(ts.as_pandas())
     if df.empty:
         raise RuntimeError(f"No historical data fetched from Twelve Data for {symbol}.")
@@ -161,7 +180,12 @@ def fetch_live_price(ticker: Optional[str] = None) -> Optional[float]:
 def _fetch_symbol_snapshot(client: TDClient, candidates: list[str], interval: str = "1h", outputsize: int = 8) -> dict:
     for symbol in candidates:
         try:
-            ts = client.time_series(symbol=symbol, interval=interval, outputsize=outputsize)
+            ts = client.time_series(
+                symbol=symbol,
+                interval=interval,
+                outputsize=outputsize,
+                timezone=TD_OUTPUT_TIMEZONE,
+            )
             frame = normalize_ohlcv_frame(ts.as_pandas())
             if frame.empty or "Close" not in frame.columns or len(frame) < 2:
                 continue

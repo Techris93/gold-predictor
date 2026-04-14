@@ -208,6 +208,10 @@ def _write_confidence_calibration(best_result):
     if not isinstance(pass_rate, (int, float)):
         return
 
+    existing = _read_json(CONFIDENCE_CALIBRATION_FILE)
+    if not isinstance(existing, dict):
+        existing = {}
+
     calibrated = round(max(50.0, min(95.0, 45.0 + (float(pass_rate) * 100.0))), 2)
     payload = {
         "regime_confidence": {
@@ -228,6 +232,9 @@ def _write_confidence_calibration(best_result):
         },
         "reliability_curve": {},
     }
+    for key in ["reliability_curve", "ev_buckets", "move_bucket_hit_rates", "meta_label_rates", "rolling_brier"]:
+        if key in existing:
+            payload[key] = existing[key]
     _write_json(CONFIDENCE_CALIBRATION_FILE, payload)
 
 

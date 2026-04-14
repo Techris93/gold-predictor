@@ -107,7 +107,6 @@ CHANGE_SUMMARY_ORDER = [
     "rr_signal_grade",
     "rr_signal_direction",
     "market_structure",
-    "candle_pattern",
     "verdict",
     "confidence_bucket",
     "execution_permission",
@@ -214,7 +213,6 @@ def _summarize_changes_for_push(changes):
         "rr_signal_grade": "Quant Grade",
         "rr_signal_direction": "RR Direction",
         "market_structure": "Market Structure",
-        "candle_pattern": "Candle Pattern",
         "verdict": "Verdict",
         "confidence_bucket": "AI Confidence",
         "execution_permission": "Execution Permission",
@@ -238,7 +236,6 @@ def _notification_title_for_changes(changes):
     changed_keys = set((changes or {}).keys())
     has_playbook = "trade_playbook_stage" in changed_keys
     has_structure = "market_structure" in changed_keys
-    has_pattern = "candle_pattern" in changed_keys
     has_warning = "warning_ladder" in changed_keys
     has_event_regime = "event_regime" in changed_keys
     has_breakout_bias = "breakout_bias" in changed_keys
@@ -253,33 +250,29 @@ def _notification_title_for_changes(changes):
 
     if has_rr_status or has_rr_grade or has_rr_direction:
         return "XAUUSD RR200 Signal Changed"
-    if has_playbook and has_warning and not has_structure and not has_pattern and not has_permission:
+    if has_playbook and has_warning and not has_structure and not has_permission:
         return "XAUUSD Trade Setup Changed"
-    if has_playbook and (has_breakout_bias or has_entry_readiness or has_exit_urgency) and not has_structure and not has_pattern and not has_permission:
+    if has_playbook and (has_breakout_bias or has_entry_readiness or has_exit_urgency) and not has_structure and not has_permission:
         return "XAUUSD Trade Setup Changed"
-    if has_playbook and not has_warning and not has_event_regime and not has_structure and not has_pattern and not has_permission:
+    if has_playbook and not has_warning and not has_event_regime and not has_structure and not has_permission:
         return "XAUUSD Trade Playbook Changed"
-    if (has_warning or has_event_regime or has_breakout_bias) and not has_structure and not has_pattern and not has_permission and not has_verdict and not has_confidence:
+    if (has_warning or has_event_regime or has_breakout_bias) and not has_structure and not has_permission and not has_verdict and not has_confidence:
         return "XAUUSD Trade Context Changed"
-    if has_verdict and not has_structure and not has_pattern and not has_permission and not has_confidence:
+    if has_verdict and not has_structure and not has_permission and not has_confidence:
         return "XAUUSD Verdict Changed"
-    if has_confidence and not has_structure and not has_pattern and not has_permission and not has_verdict:
+    if has_confidence and not has_structure and not has_permission and not has_verdict:
         return "XAUUSD Confidence Changed"
-    if has_structure and not has_pattern and not has_permission:
+    if has_structure and not has_permission:
         return "XAUUSD Market Structure Changed"
-    if has_pattern and not has_structure and not has_permission:
-        return "XAUUSD Candle Pattern Changed"
-    if has_exit_urgency and not has_structure and not has_pattern and not has_permission:
+    if has_exit_urgency and not has_structure and not has_permission:
         return "XAUUSD Risk State Changed"
-    if has_entry_readiness and not has_structure and not has_pattern and not has_permission:
+    if has_entry_readiness and not has_structure and not has_permission:
         return "XAUUSD Trade Setup Changed"
-    if has_permission and not has_structure and not has_pattern:
+    if has_permission and not has_structure:
         return "XAUUSD Execution Permission Changed"
-    if (has_playbook or has_verdict or has_confidence or has_warning or has_event_regime or has_breakout_bias or has_entry_readiness or has_exit_urgency or has_rr_status or has_rr_grade or has_rr_direction) and not has_structure and not has_pattern and not has_permission:
+    if (has_playbook or has_verdict or has_confidence or has_warning or has_event_regime or has_breakout_bias or has_entry_readiness or has_exit_urgency or has_rr_status or has_rr_grade or has_rr_direction) and not has_structure and not has_permission:
         return "XAUUSD State Changed"
-    if has_structure and has_pattern and not has_permission:
-        return "XAUUSD Price Action Changed"
-    if has_permission and (has_structure or has_pattern or has_verdict or has_confidence or has_warning or has_event_regime or has_playbook or has_breakout_bias or has_entry_readiness or has_exit_urgency):
+    if has_permission and (has_structure or has_verdict or has_confidence or has_warning or has_event_regime or has_playbook or has_breakout_bias or has_entry_readiness or has_exit_urgency):
         return "XAUUSD Structure / Execution Changed"
     if has_playbook or has_verdict or has_confidence or has_warning or has_event_regime or has_breakout_bias or has_entry_readiness or has_exit_urgency or has_rr_status or has_rr_grade or has_rr_direction:
         return "XAUUSD State Changed"
@@ -650,13 +643,6 @@ def _is_warning_boundary_wobble(
     )
 
 
-def _is_significant_candle_pattern(value):
-    value = str(value or "")
-    if not value or value == "None":
-        return False
-    return any(token in value for token in ["Engulfing", "Doji", "Hammer", "Shooting Star"])
-
-
 def _is_forming_setup_wobble(changes, trade_playbook, execution_permission, decision_status):
     if not isinstance(changes, dict) or not changes:
         return False
@@ -707,7 +693,6 @@ def _evaluate_decision_status(verdict, confidence, ta_data, trade_guidance):
     price_action = (ta_data or {}).get("price_action") or {}
     mtf = (ta_data or {}).get("multi_timeframe") or {}
     structure = str(price_action.get("structure") or "")
-    pattern = str(price_action.get("latest_candle_pattern") or "")
     alignment = str(mtf.get("alignment_label") or "Mixed / Low Alignment")
     summary = str((trade_guidance or {}).get("summary") or "")
     buy_level = str((trade_guidance or {}).get("buyLevel") or "Weak")
@@ -715,9 +700,9 @@ def _evaluate_decision_status(verdict, confidence, ta_data, trade_guidance):
     exit_level = str((trade_guidance or {}).get("exitLevel") or "Low")
     has_bullish_structure = bool(re.search(r"bullish|breakout|continuation", structure, re.IGNORECASE))
     has_bearish_structure = bool(re.search(r"bearish|breakdown|rejection", structure, re.IGNORECASE))
-    has_bullish_trigger = bool(re.search(r"bullish|breakout|continuation|support rejection", f"{structure} {pattern} {summary}", re.IGNORECASE))
-    has_bearish_trigger = bool(re.search(r"bearish|breakdown|rejection|resistance rejection", f"{structure} {pattern} {summary}", re.IGNORECASE))
-    has_doji_like_pattern = bool(re.search(r"doji|indecision|spinning top", pattern, re.IGNORECASE))
+    has_bullish_trigger = bool(re.search(r"bullish|breakout|continuation|support rejection", f"{structure} {summary}", re.IGNORECASE))
+    has_bearish_trigger = bool(re.search(r"bearish|breakdown|rejection|resistance rejection", f"{structure} {summary}", re.IGNORECASE))
+    has_indecision_signal = bool(re.search(r"doji|indecision|spinning top|no clean trigger", summary, re.IGNORECASE))
     no_clean_trigger = "no clean trigger" in summary.lower()
     bullish_alignment = "bullish" in alignment.lower() and "mixed" not in alignment.lower()
     bearish_alignment = "bearish" in alignment.lower() and "mixed" not in alignment.lower()
@@ -733,7 +718,7 @@ def _evaluate_decision_status(verdict, confidence, ta_data, trade_guidance):
         blocked_reasons = []
         if tradeability.lower() == "low":
             blocked_reasons.append("tradeability is still low")
-        if regime.lower() in {"unstable", "range", "event-risk", "transition"}:
+        if regime.lower() in {"unstable", "range", "event-risk"}:
             blocked_reasons.append(f"the market regime is {regime.lower()}")
         blocked_reason = " and ".join(blocked_reasons) if blocked_reasons else None
         if action_state == "SETUP_LONG":
@@ -756,21 +741,21 @@ def _evaluate_decision_status(verdict, confidence, ta_data, trade_guidance):
             verdict == "Bullish" and confidence >= 70,
             trend == "Bullish" and has_bullish_structure,
             bullish_alignment,
-            not has_doji_like_pattern and not no_clean_trigger and has_bullish_trigger,
+            not has_indecision_signal and not no_clean_trigger and has_bullish_trigger,
             buy_level in {"Watch", "Strong"} and exit_level in {"Low", "Medium"},
         ]
         sell_checks = [
             verdict == "Bearish" and confidence >= 70,
             trend == "Bearish" and has_bearish_structure,
             bearish_alignment,
-            not has_doji_like_pattern and not no_clean_trigger and has_bearish_trigger,
+            not has_indecision_signal and not no_clean_trigger and has_bearish_trigger,
             sell_level in {"Watch", "Strong"} and exit_level in {"Low", "Medium"},
         ]
         exit_checks = [
             verdict == "Neutral" or "mixed" in alignment.lower() or no_clean_trigger,
             exit_level == "High" or confidence < 60,
             structure_conflict,
-            has_doji_like_pattern,
+            has_indecision_signal,
             buy_level == "Weak" and sell_level == "Weak",
         ]
         buy_passed = sum(1 for item in buy_checks if item)
@@ -813,21 +798,21 @@ def _evaluate_decision_status(verdict, confidence, ta_data, trade_guidance):
         verdict == "Bullish" and confidence >= 70,
         trend == "Bullish" and has_bullish_structure,
         bullish_alignment,
-        not has_doji_like_pattern and not no_clean_trigger and has_bullish_trigger,
+        not has_indecision_signal and not no_clean_trigger and has_bullish_trigger,
         buy_level in {"Watch", "Strong"} and exit_level in {"Low", "Medium"},
     ]
     sell_checks = [
         verdict == "Bearish" and confidence >= 70,
         trend == "Bearish" and has_bearish_structure,
         bearish_alignment,
-        not has_doji_like_pattern and not no_clean_trigger and has_bearish_trigger,
+        not has_indecision_signal and not no_clean_trigger and has_bearish_trigger,
         sell_level in {"Watch", "Strong"} and exit_level in {"Low", "Medium"},
     ]
     exit_checks = [
         verdict == "Neutral" or "mixed" in alignment.lower() or no_clean_trigger,
         exit_level == "High" or confidence < 60,
         structure_conflict,
-        has_doji_like_pattern,
+        has_indecision_signal,
         buy_level == "Weak" and sell_level == "Weak",
     ]
 
@@ -883,7 +868,7 @@ def _evaluate_execution_permission(decision_status, market_state):
         blockers = []
         if tradeability.lower() == "low":
             blockers.append("low tradeability")
-        if regime.lower() in {"unstable", "range", "event-risk", "transition"}:
+        if regime.lower() in {"unstable", "range", "event-risk"}:
             blockers.append(f"{regime.lower()} regime")
         blocker_text = " and ".join(blockers)
         if blocker_text:
@@ -1432,7 +1417,6 @@ def _extract_indicator_snapshot(payload):
             else (regime_state.get("breakout_bias") if isinstance(regime_state, dict) else None)
         ),
         "market_structure": (pa.get("structure") if isinstance(pa, dict) else None),
-        "candle_pattern": (pa.get("latest_candle_pattern") if isinstance(pa, dict) else None),
         "verdict": payload.get("verdict"),
         "confidence_bucket": _confidence_bucket(payload.get("confidence")),
         "execution_permission": ((payload.get("ExecutionPermission") or {}).get("text")),
@@ -1821,7 +1805,6 @@ def _indicator_monitor_loop():
                                 "last_trade_playbook_stage": "",
                                 "last_execution_permission": "",
                                 "last_market_structure": "",
-                                "last_candle_pattern": "",
                                 "last_warning_ladder": "",
                                 "last_event_regime": "",
                                 "last_breakout_bias": "",
@@ -1850,7 +1833,6 @@ def _indicator_monitor_loop():
                         entry_readiness = str(trade_playbook_payload.get("entryReadiness") or "")
                         exit_urgency = str(trade_playbook_payload.get("exitUrgency") or "")
                         market_structure = str(((payload.get("TechnicalAnalysis") or {}).get("price_action") or {}).get("structure") or "")
-                        candle_pattern = str(((payload.get("TechnicalAnalysis") or {}).get("price_action") or {}).get("latest_candle_pattern") or "")
                         warning_ladder = str(trade_playbook_payload.get("warningLadder") or (payload.get("RegimeState") or {}).get("warning_ladder") or "")
                         event_regime = str(trade_playbook_payload.get("eventRegime") or (payload.get("RegimeState") or {}).get("event_regime") or "")
                         breakout_bias = str(trade_playbook_payload.get("breakoutBias") or (payload.get("RegimeState") or {}).get("breakout_bias") or "")
@@ -1919,7 +1901,6 @@ def _indicator_monitor_loop():
                             event_regime_changed = False
                             breakout_bias_changed = False
                         market_structure_changed = "market_structure" in notification_changes
-                        candle_pattern_changed = "candle_pattern" in notification_changes
                         verdict_changed = "verdict" in notification_changes and bool(verdict)
                         confidence_changed = (
                             "confidence_bucket" in notification_changes
@@ -1967,7 +1948,6 @@ def _indicator_monitor_loop():
                             or exit_urgency_changed
                             or
                             market_structure_changed
-                            or candle_pattern_changed
                             or verdict_changed
                             or confidence_changed
                             or (execution_permission_changed and decision_confirmed)
@@ -1978,7 +1958,7 @@ def _indicator_monitor_loop():
                             and rr_signal_status == "ready"
                             and rr_signal_grade in {"A+ (Quant)", "A (High Accuracy)", "B (Qualified)"}
                         )
-                        if market_structure_changed or candle_pattern_changed:
+                        if market_structure_changed:
                             signal_class = "price_action"
                         elif execution_permission_changed and decision_confirmed:
                             signal_class = "execution"
@@ -1990,7 +1970,6 @@ def _indicator_monitor_loop():
                             signal_class = "context"
                         elif (
                             market_structure_changed
-                            or candle_pattern_changed
                             or verdict_changed
                             or confidence_changed
                             or entry_readiness_changed
@@ -2016,7 +1995,6 @@ def _indicator_monitor_loop():
                             last_trade_playbook_stage = str(alert_state.get("last_trade_playbook_stage", ""))
                             last_execution_permission = str(alert_state.get("last_execution_permission", ""))
                             last_market_structure = str(alert_state.get("last_market_structure", ""))
-                            last_candle_pattern = str(alert_state.get("last_candle_pattern", ""))
                             last_warning_ladder = str(alert_state.get("last_warning_ladder", ""))
                             last_event_regime = str(alert_state.get("last_event_regime", ""))
                             last_breakout_bias = str(alert_state.get("last_breakout_bias", ""))
@@ -2040,7 +2018,6 @@ def _indicator_monitor_loop():
                             duplicate_breakout_bias = breakout_bias_changed and breakout_bias == last_breakout_bias
                             duplicate_execution = execution_permission_changed and execution_permission == last_execution_permission
                             duplicate_structure = market_structure_changed and market_structure == last_market_structure
-                            duplicate_pattern = candle_pattern_changed and candle_pattern == last_candle_pattern
                             duplicate_verdict = verdict_changed and verdict == last_verdict
                             duplicate_confidence = confidence_changed and confidence_bucket == last_confidence_bucket
                             duplicate_entry_readiness = entry_readiness_changed and entry_readiness == last_entry_readiness
@@ -2055,7 +2032,6 @@ def _indicator_monitor_loop():
                                 or duplicate_breakout_bias
                                 or duplicate_execution
                                 or duplicate_structure
-                                or duplicate_pattern
                                 or duplicate_verdict
                                 or duplicate_confidence
                                 or duplicate_entry_readiness
@@ -2084,14 +2060,14 @@ def _indicator_monitor_loop():
                             if (
                                 should_alert
                                 and boundary_wobble
-                                and not (market_structure_changed or candle_pattern_changed)
+                                and not market_structure_changed
                                 and (now_ts - last_boundary_wobble_ts) < BOUNDARY_WOBBLE_COOLDOWN_SECONDS
                             ):
                                 should_alert = False
                         if (
                             should_alert
                             and boundary_wobble
-                            and not (market_structure_changed or candle_pattern_changed)
+                            and not market_structure_changed
                         ):
                             should_alert = False
                         if not should_alert:
@@ -2153,7 +2129,6 @@ def _indicator_monitor_loop():
                                 "last_trade_playbook_stage": trade_playbook_stage,
                                 "last_execution_permission": execution_permission,
                                 "last_market_structure": market_structure,
-                                "last_candle_pattern": candle_pattern,
                                 "last_warning_ladder": warning_ladder,
                                 "last_event_regime": event_regime,
                                 "last_breakout_bias": breakout_bias,

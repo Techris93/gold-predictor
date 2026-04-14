@@ -18,9 +18,8 @@
   "confidence_margin_multiplier": 7.0,
   "rangebound_penalty": 6.0,
   "mixed_alignment_penalty": 4.0,
-  "mtf_intervals": [
-    "15min",
-    "1h",
-    "4h"
-  ]
+  "direction_probability_floor": 0.58,
+  "transition_setup_tradeability_floor": 56.0,
+  "transition_setup_entry_prob_floor": 0.6,
+  "mtf_intervals": ["15min", "1h", "4h"]
 }
