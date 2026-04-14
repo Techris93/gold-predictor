@@ -1373,10 +1373,16 @@
 
         const card = document.createElement("div");
         card.className = "push-item";
-        card.innerHTML = `
-          <div class="push-title">${title}</div>
-          <div class="push-body">${body}</div>
-        `;
+        const titleEl = document.createElement("div");
+        titleEl.className = "push-title";
+        titleEl.textContent = title;
+
+        const bodyEl = document.createElement("div");
+        bodyEl.className = "push-body";
+        bodyEl.textContent = body;
+        bodyEl.style.whiteSpace = "pre-line";
+
+        card.append(titleEl, bodyEl);
         feed.prepend(card);
 
         while (feed.children.length > 4) {
@@ -1489,18 +1495,11 @@
         });
 
         indicatorSocket.on("indicator_change", (payload) => {
-          const changeText = summarizeChanges(payload?.changes || {});
-          const verdict = payload?.verdict || "Neutral";
-          const confidence = payload?.confidence ?? "N/A";
-          const title = payload?.title || "Execution Permission Changed";
-          const executionPermissionText =
-            payload?.execution_permission &&
-            typeof payload.execution_permission === "object"
-              ? payload.execution_permission.text || ""
-              : "";
-          const body = executionPermissionText
-            ? `${changeText} | ${executionPermissionText}`
-            : `${changeText} | Verdict: ${verdict} (${confidence}%)`;
+          const title = payload?.title || "XAUUSD Direction / Grade Changed";
+          const body =
+            typeof payload?.message === "string" && payload.message.trim()
+              ? payload.message
+              : summarizeChanges(payload?.changes || {});
 
           showPushToast(title, body);
 
@@ -1508,7 +1507,7 @@
             "Notification" in window &&
             Notification.permission === "granted"
           ) {
-            new Notification(`XAUUSD ${title}`, {
+            new Notification(title, {
               body,
             });
           }

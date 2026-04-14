@@ -279,6 +279,62 @@ def _notification_title_for_changes(changes):
     return "XAUUSD Execution Permission Changed"
 
 
+def _format_rr_direction_grade(rr_signal):
+    rr_signal = rr_signal if isinstance(rr_signal, dict) else {}
+    direction = str(rr_signal.get("direction") or "Neutral").strip() or "Neutral"
+    grade = str(rr_signal.get("grade") or "N/A").strip() or "N/A"
+    return f"{direction} · {grade}"
+
+
+def _format_rr_target_bucket_probability(rr_signal):
+    rr_signal = rr_signal if isinstance(rr_signal, dict) else {}
+    target_bucket = str(rr_signal.get("targetBucket") or "").strip()
+    if not target_bucket:
+        target_move_atr = rr_signal.get("targetMoveAtr")
+        if isinstance(target_move_atr, (int, float)):
+            target_bucket = f"{float(target_move_atr):.1f} ATR"
+
+    move_probability = rr_signal.get("moveProbability")
+    probability_text = "N/A"
+    if isinstance(move_probability, (int, float)):
+        probability_text = f"{float(move_probability) * 100.0:.1f}%"
+
+    return f"{target_bucket or 'N/A'} · {probability_text}"
+
+
+def _format_market_structure_change(changes, market_structure):
+    changes = changes if isinstance(changes, dict) else {}
+    structure_change = changes.get("market_structure")
+    current_structure = str(market_structure or "").strip()
+    if isinstance(structure_change, dict):
+        previous = str(structure_change.get("previous") or "").strip()
+        current = str(structure_change.get("current") or current_structure).strip()
+        if previous and current and previous != current:
+            return f"{previous} -> {current}"
+        if current:
+            return current
+        if previous:
+            return previous
+    return current_structure or "N/A"
+
+
+def _build_signal_notification(changes, rr_signal, market_structure):
+    changed_keys = set((changes or {}).keys())
+    title = (
+        "XAUUSD Market Structure Changed"
+        if "market_structure" in changed_keys
+        else "XAUUSD Direction / Grade Changed"
+    )
+    body = "\n".join(
+        [
+            f"Direction / Grade: {_format_rr_direction_grade(rr_signal)}",
+            f"Target Bucket Probability: {_format_rr_target_bucket_probability(rr_signal)}",
+            f"Market Structure: {_format_market_structure_change(changes, market_structure)}",
+        ]
+    )
+    return {"title": title, "body": body}
+
+
 def _humanize_words(value):
     text = str(value or "").strip()
     if not text:
@@ -422,35 +478,17 @@ def _has_background_alert_channels():
     return _has_push_subscribers() or _telegram_enabled()
 
 
-def _send_telegram_notification(changes, verdict, confidence, trade_guidance, decision_status, execution_permission):
+def _send_telegram_notification(changes, rr_signal, market_structure):
     if not _telegram_enabled():
         return
 
-    title = _notification_title_for_changes(changes)
-
-    change_summary = _summarize_changes_for_push(changes)
-    trade_summary = ""
-    if isinstance(trade_guidance, dict):
-        trade_summary = trade_guidance.get("summary") or ""
-    permission_text = ""
-    if isinstance(execution_permission, dict):
-        permission_text = str(execution_permission.get("text") or "").strip()
-    has_permission_diff = isinstance(changes, dict) and "execution_permission" in changes
-
-    lines = [
-        title,
-        change_summary,
-    ]
-    if permission_text and not has_permission_diff:
-        lines.append(permission_text)
-    else:
-        lines.append(f"Verdict: {verdict} ({confidence}%)")
-    if _should_append_trade_summary(permission_text, trade_summary):
-        lines.append(trade_summary)
+    notification = _build_signal_notification(changes, rr_signal, market_structure)
 
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
-        "text": "\n".join(line for line in lines if line),
+        "text": "\n".join(
+            line for line in [notification.get("title"), notification.get("body")] if line
+        ),
         "disable_web_page_preview": True,
     }
     if TELEGRAM_THREAD_ID:
@@ -468,7 +506,7 @@ def _send_telegram_notification(changes, verdict, confidence, trade_guidance, de
         return
 
 
-def _send_web_push_notifications(changes, verdict, confidence, trade_guidance, decision_status, execution_permission):
+def _send_web_push_notifications(changes, rr_signal, market_structure):
     if webpush is None or not VAPID_PUBLIC_KEY or not VAPID_PRIVATE_KEY:
         return
 
@@ -476,32 +514,12 @@ def _send_web_push_notifications(changes, verdict, confidence, trade_guidance, d
     if not subscriptions:
         return
 
-    title = _notification_title_for_changes(changes)
-
-    change_summary = _summarize_changes_for_push(changes)
-    trade_summary = ""
-    if isinstance(trade_guidance, dict):
-        trade_summary = trade_guidance.get("summary") or ""
-    permission_text = ""
-    if isinstance(execution_permission, dict):
-        permission_text = str(execution_permission.get("text") or "").strip()
-    has_permission_diff = isinstance(changes, dict) and "execution_permission" in changes
-    body_parts = [change_summary]
-    if permission_text and not has_permission_diff:
-        body_parts.append(permission_text)
-    else:
-        body_parts.append(f"Verdict: {verdict} ({confidence}%)")
-    if _should_append_trade_summary(permission_text, trade_summary):
-        body_parts.append(trade_summary)
-    body = " | ".join(part for part in body_parts if part)
+    notification = _build_signal_notification(changes, rr_signal, market_structure)
     payload = {
-        "title": title,
-        "body": body,
-        "verdict": verdict,
-        "confidence": confidence,
-        "trade_guidance": trade_guidance,
-        "decision_status": decision_status,
-        "execution_permission": execution_permission,
+        "title": notification.get("title"),
+        "body": notification.get("body"),
+        "rr_signal": rr_signal,
+        "market_structure": market_structure,
         "url": "/",
         "ts": int(time.time()),
     }
@@ -1842,7 +1860,6 @@ def _indicator_monitor_loop():
                         rr_signal_direction = str(rr_signal_payload.get("direction") or "")
                         verdict = str(payload.get("verdict") or "")
                         confidence_bucket = _confidence_bucket(payload.get("confidence"))
-                        decision_confirmed = bool(decision_payload.get("confirmed"))
                         previous_trade_playbook_stage = str(alert_state.get("last_trade_playbook_stage", ""))
                         previous_warning_ladder = str(alert_state.get("last_warning_ladder", ""))
                         previous_event_regime = str(alert_state.get("last_event_regime", ""))
@@ -1919,7 +1936,7 @@ def _indicator_monitor_loop():
                             "rr_signal_grade" in notification_changes
                             and bool(rr_signal_grade)
                             and rr_signal_grade != previous_rr_signal_grade
-                            and rr_signal_grade in {"A+ (Quant)", "A (High Accuracy)", "B (Qualified)"}
+                            and rr_signal_direction in {"Bullish", "Bearish"}
                         )
                         rr_signal_direction_changed = (
                             "rr_signal_direction" in notification_changes
@@ -1937,20 +1954,9 @@ def _indicator_monitor_loop():
                             and exit_urgency == "high"
                         )
                         should_alert = bool(
-                            playbook_changed
-                            or warning_changed
-                            or event_regime_changed
-                            or breakout_bias_changed
-                            or rr_signal_status_changed
+                            market_structure_changed
                             or rr_signal_grade_changed
                             or rr_signal_direction_changed
-                            or entry_readiness_changed
-                            or exit_urgency_changed
-                            or
-                            market_structure_changed
-                            or verdict_changed
-                            or confidence_changed
-                            or (execution_permission_changed and decision_confirmed)
                         )
                         signal_class = ""
                         rr_ready_event = bool(
@@ -1960,22 +1966,8 @@ def _indicator_monitor_loop():
                         )
                         if market_structure_changed:
                             signal_class = "price_action"
-                        elif execution_permission_changed and decision_confirmed:
+                        elif rr_signal_grade_changed or rr_signal_direction_changed:
                             signal_class = "execution"
-                        elif rr_signal_status_changed or rr_signal_grade_changed or rr_signal_direction_changed:
-                            signal_class = "execution"
-                        elif playbook_changed:
-                            signal_class = "playbook"
-                        elif warning_changed or event_regime_changed or breakout_bias_changed:
-                            signal_class = "context"
-                        elif (
-                            market_structure_changed
-                            or verdict_changed
-                            or confidence_changed
-                            or entry_readiness_changed
-                            or exit_urgency_changed
-                        ):
-                            signal_class = "diagnostics"
 
                         cooldown_suppressed = False
 
@@ -1986,11 +1978,6 @@ def _indicator_monitor_loop():
                             decision_payload,
                         ):
                             should_alert = False
-                        if should_alert and permission_status == "exit_recommended":
-                            should_alert = NOTIFY_EXIT_READS
-                        if should_alert and rr_ready_event and not _rr200_delivery_allowed_for_payload(payload, now_ts):
-                            should_alert = False
-                            cooldown_suppressed = True
                         if should_alert:
                             last_trade_playbook_stage = str(alert_state.get("last_trade_playbook_stage", ""))
                             last_execution_permission = str(alert_state.get("last_execution_permission", ""))
@@ -2085,8 +2072,13 @@ def _indicator_monitor_loop():
                             now_ts,
                         )
 
-                        alert_title = _notification_title_for_changes(notification_changes)
-                        alert_message = _summarize_changes_for_push(notification_changes)
+                        alert_notification = _build_signal_notification(
+                            notification_changes,
+                            rr_signal_payload,
+                            market_structure,
+                        )
+                        alert_title = alert_notification.get("title") or "XAUUSD Direction / Grade Changed"
+                        alert_message = alert_notification.get("body") or ""
 
                         if _monitor_state["clients"] > 0:
                             socketio.emit(
@@ -2107,19 +2099,13 @@ def _indicator_monitor_loop():
 
                         _send_web_push_notifications(
                             changes=notification_changes,
-                            verdict=payload.get("verdict"),
-                            confidence=payload.get("confidence"),
-                            trade_guidance=payload.get("TradeGuidance"),
-                            decision_status=payload.get("DecisionStatus"),
-                            execution_permission=payload.get("ExecutionPermission"),
+                            rr_signal=rr_signal_payload,
+                            market_structure=market_structure,
                         )
                         _send_telegram_notification(
                             changes=notification_changes,
-                            verdict=payload.get("verdict"),
-                            confidence=payload.get("confidence"),
-                            trade_guidance=payload.get("TradeGuidance"),
-                            decision_status=payload.get("DecisionStatus"),
-                            execution_permission=payload.get("ExecutionPermission"),
+                            rr_signal=rr_signal_payload,
+                            market_structure=market_structure,
                         )
                         if rr_ready_event:
                             _record_rr200_delivery(payload, now_ts)
