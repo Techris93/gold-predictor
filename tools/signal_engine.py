@@ -41,6 +41,11 @@ DEFAULT_STRATEGY_PARAMS = {
     "rsi_extreme_weight": 1.5,
     "rsi_warning_weight": 0.6,
     "rsi_warning_band": 10,
+    "rsi_divergence_weight": 0.9,
+    "macd_early_momentum_weight": 0.55,
+    "macd_hist_slope_scale": 0.06,
+    "volume_spike_trigger_weight": 0.5,
+    "volume_spike_zscore_threshold": 1.8,
     "verdict_margin_threshold": 1.2,
     "confidence_margin_multiplier": 8.0,
     "confidence_evidence_multiplier": 1.4,
@@ -1668,6 +1673,14 @@ def compute_prediction_from_ta(ta_data):
     alignment_label = mtf.get("alignment_label", "Mixed / Low Alignment")
     pa_struct = (ta_data.get("price_action") or {}).get("structure", "Consolidating")
     pa_pattern = (ta_data.get("price_action") or {}).get("latest_candle_pattern", "None")
+    momentum_features = ta_data.get("momentum_features", {}) if isinstance(ta_data.get("momentum_features"), dict) else {}
+    macd_hist = _safe_float(momentum_features.get("macdHistogram"), 0.0)
+    macd_hist_slope = _safe_float(momentum_features.get("macdHistogramSlope"), 0.0)
+    rsi_bullish_divergence = bool(int(_safe_float(momentum_features.get("rsiBullishDivergence"), 0.0)))
+    rsi_bearish_divergence = bool(int(_safe_float(momentum_features.get("rsiBearishDivergence"), 0.0)))
+    rsi_divergence_strength = _safe_float(momentum_features.get("rsiDivergenceStrength"), 0.0)
+    volume_zscore = _safe_float(momentum_features.get("volumeZScore"), 0.0)
+    volume_spike = bool(int(_safe_float(momentum_features.get("volumeSpike"), 0.0)))
     feature_hits = extract_price_action_feature_hits(pa_struct, pa_pattern)
     structure_context = ta_data.get("structure_context", {}) if isinstance(ta_data.get("structure_context"), dict) else {}
     market_regime_scores = ta_data.get("market_regime_scores", {}) if isinstance(ta_data.get("market_regime_scores"), dict) else {}
@@ -1697,6 +1710,10 @@ def compute_prediction_from_ta(ta_data):
     rsi_extreme_weight = float(strategy_params.get("rsi_extreme_weight", 1.5))
     rsi_warning_weight = float(strategy_params.get("rsi_warning_weight", 0.6))
     rsi_warning_band = float(strategy_params.get("rsi_warning_band", 10))
+    rsi_divergence_weight = float(strategy_params.get("rsi_divergence_weight", 0.9))
+    macd_early_momentum_weight = float(strategy_params.get("macd_early_momentum_weight", 0.55))
+    macd_hist_slope_scale = float(strategy_params.get("macd_hist_slope_scale", 0.06))
+    volume_spike_trigger_weight = float(strategy_params.get("volume_spike_trigger_weight", 0.5))
     verdict_margin_threshold = float(strategy_params.get("verdict_margin_threshold", 1.2))
     confidence_margin_multiplier = float(strategy_params.get("confidence_margin_multiplier", 8.0))
     confidence_evidence_multiplier = float(strategy_params.get("confidence_evidence_multiplier", 1.4))
@@ -1879,6 +1896,37 @@ def compute_prediction_from_ta(ta_data):
     elif rsi > bearish_rsi_warning:
         bear_trigger += rsi_warning_weight
 
+    if rsi_bullish_divergence and not rsi_bearish_divergence:
+        bull_trigger += rsi_divergence_weight
+        if rsi_divergence_strength > 0.0:
+            bull_trigger += min(0.35, rsi_divergence_strength * 0.1)
+    elif rsi_bearish_divergence and not rsi_bullish_divergence:
+        bear_trigger += rsi_divergence_weight
+        if rsi_divergence_strength < 0.0:
+            bear_trigger += min(0.35, abs(rsi_divergence_strength) * 0.1)
+
+    if abs(macd_hist_slope) >= 0.003:
+        slope_strength = _clamp(abs(macd_hist_slope) / max(macd_hist_slope_scale, 1e-4), 0.0, 1.4)
+        if macd_hist_slope > 0.0:
+            bull_setup += macd_early_momentum_weight * slope_strength
+            if macd_hist > 0.0:
+                bull_trigger += macd_early_momentum_weight * 0.25
+        else:
+            bear_setup += macd_early_momentum_weight * slope_strength
+            if macd_hist < 0.0:
+                bear_trigger += macd_early_momentum_weight * 0.25
+
+    if volume_spike or volume_zscore >= 1.4:
+        volume_impulse = max(1.0, min(2.0, 1.0 + max(0.0, volume_zscore - 1.4) * 0.35))
+        if opening_range_break > 0 or sweep_reclaim_signal > 0 or "Bullish" in pa_struct:
+            bull_trigger += volume_spike_trigger_weight * volume_impulse
+        elif opening_range_break < 0 or sweep_reclaim_signal < 0 or "Bearish" in pa_struct:
+            bear_trigger += volume_spike_trigger_weight * volume_impulse
+        elif trend == "Bullish" and alignment_score > 0:
+            bull_setup += volume_spike_trigger_weight * 0.55 * min(volume_impulse, 1.6)
+        elif trend == "Bearish" and alignment_score < 0:
+            bear_setup += volume_spike_trigger_weight * 0.55 * min(volume_impulse, 1.6)
+
     if sr_reaction == "Bullish Support Rejection" or sr_reaction == "Bullish Breakout Through Resistance":
         bull_trigger += sr_reaction_weight
     elif sr_reaction == "Bearish Resistance Rejection" or sr_reaction == "Bearish Breakdown Through Support":
@@ -2041,6 +2089,8 @@ def compute_prediction_from_ta(ta_data):
         conflict_count += 1
     elif regime_label == "transition" and _safe_float(regime_probs.get("breakout_transition"), 0.0) < 0.34:
         conflict_count += 1
+    if rsi_bullish_divergence and rsi_bearish_divergence:
+        conflict_count += 1
 
     stability_score = 100.0
     stability_score -= conflict_count * stability_conflict_penalty
@@ -2086,6 +2136,8 @@ def compute_prediction_from_ta(ta_data):
         1.0,
     ) * 100.0
     volume_quality = 75.0 if "Strong" in volume else 55.0 if "Bias" in volume else 40.0
+    if volume_spike:
+        volume_quality = max(volume_quality, 72.0)
     tradeability_score = (
         regime_quality * regime_quality_weight
         + alignment_quality * alignment_quality_weight
@@ -2792,6 +2844,63 @@ def _ensure_volume_column(frame):
     return frame
 
 
+def _annotate_rsi_divergence(frame, rsi_col="RSI_14", pivot_max_spacing=72):
+    lows = pd.to_numeric(frame.get("Low"), errors="coerce").to_numpy(dtype=float)
+    highs = pd.to_numeric(frame.get("High"), errors="coerce").to_numpy(dtype=float)
+    rsi_values = pd.to_numeric(frame.get(rsi_col), errors="coerce").to_numpy(dtype=float)
+
+    bullish_strength = np.zeros(len(frame), dtype=float)
+    bearish_strength = np.zeros(len(frame), dtype=float)
+    low_pivots = []
+    high_pivots = []
+
+    for i in range(2, len(frame)):
+        pivot_idx = i - 1
+
+        if np.isfinite(lows[i - 2]) and np.isfinite(lows[pivot_idx]) and np.isfinite(lows[i]):
+            if lows[i - 2] > lows[pivot_idx] and lows[i] > lows[pivot_idx]:
+                low_pivots.append((pivot_idx, lows[pivot_idx], rsi_values[pivot_idx]))
+                if len(low_pivots) >= 2:
+                    prev_idx, prev_low, prev_rsi = low_pivots[-2]
+                    curr_idx, curr_low, curr_rsi = low_pivots[-1]
+                    if (
+                        curr_idx - prev_idx <= max(8, int(pivot_max_spacing))
+                        and np.isfinite(prev_rsi)
+                        and np.isfinite(curr_rsi)
+                        and curr_low < prev_low
+                        and curr_rsi > (prev_rsi + 1.5)
+                    ):
+                        price_drop_pct = (prev_low - curr_low) / max(abs(prev_low), 1e-8)
+                        rsi_lift = (curr_rsi - prev_rsi) / 10.0
+                        bullish_strength[i] = max(0.0, min(3.0, (price_drop_pct * 100.0) + rsi_lift))
+
+        if np.isfinite(highs[i - 2]) and np.isfinite(highs[pivot_idx]) and np.isfinite(highs[i]):
+            if highs[i - 2] < highs[pivot_idx] and highs[i] < highs[pivot_idx]:
+                high_pivots.append((pivot_idx, highs[pivot_idx], rsi_values[pivot_idx]))
+                if len(high_pivots) >= 2:
+                    prev_idx, prev_high, prev_rsi = high_pivots[-2]
+                    curr_idx, curr_high, curr_rsi = high_pivots[-1]
+                    if (
+                        curr_idx - prev_idx <= max(8, int(pivot_max_spacing))
+                        and np.isfinite(prev_rsi)
+                        and np.isfinite(curr_rsi)
+                        and curr_high > prev_high
+                        and curr_rsi < (prev_rsi - 1.5)
+                    ):
+                        price_rise_pct = (curr_high - prev_high) / max(abs(prev_high), 1e-8)
+                        rsi_drop = (prev_rsi - curr_rsi) / 10.0
+                        bearish_strength[i] = max(0.0, min(3.0, (price_rise_pct * 100.0) + rsi_drop))
+
+    bullish_series = pd.Series(bullish_strength, index=frame.index)
+    bearish_series = pd.Series(bearish_strength, index=frame.index)
+    frame["RSI_BULLISH_DIVERGENCE"] = (bullish_series.rolling(4, min_periods=1).max() > 0.0).astype(int)
+    frame["RSI_BEARISH_DIVERGENCE"] = (bearish_series.rolling(4, min_periods=1).max() > 0.0).astype(int)
+    frame["RSI_DIVERGENCE_STRENGTH"] = (
+        bullish_series.rolling(3, min_periods=1).mean() - bearish_series.rolling(3, min_periods=1).mean()
+    ).fillna(0.0)
+    return frame
+
+
 def prepare_historical_features(df, params=None):
     strategy_params = normalize_strategy_params(params)
     frame = df.copy().sort_index()
@@ -2823,6 +2932,19 @@ def prepare_historical_features(df, params=None):
     frame["CMF_14"] = ta.volume.ChaikinMoneyFlowIndicator(
         frame["High"], frame["Low"], frame["Close"], frame["Volume"], window=cmf_window
     ).chaikin_money_flow()
+
+    macd = ta.trend.MACD(frame["Close"], window_slow=26, window_fast=12, window_sign=9)
+    frame["MACD_LINE"] = macd.macd()
+    frame["MACD_SIGNAL"] = macd.macd_signal()
+    frame["MACD_HIST"] = macd.macd_diff()
+    frame["MACD_HIST_SLOPE"] = frame["MACD_HIST"].diff().rolling(3, min_periods=1).mean().fillna(0.0)
+
+    volume_spike_threshold = float(strategy_params.get("volume_spike_zscore_threshold", 1.8))
+    volume_mean = frame["Volume"].rolling(20, min_periods=5).mean()
+    volume_std = frame["Volume"].rolling(20, min_periods=5).std().replace(0, np.nan)
+    frame["VOLUME_ZSCORE"] = ((frame["Volume"] - volume_mean) / volume_std).replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    frame["VOLUME_SPIKE"] = (frame["VOLUME_ZSCORE"] >= volume_spike_threshold).astype(int)
+    frame = _annotate_rsi_divergence(frame, rsi_col="RSI_14")
 
     frame["EMA_TREND"] = _trend_series_from_close(frame["Close"], ema_short, ema_long)
 
@@ -2961,6 +3083,17 @@ def build_ta_payload_from_row(
             "cmf_14": round(float(row.get("CMF_14", 0.0)), 4),
             "obv_trend": "Rising" if row.get("OBV", 0.0) > row.get("OBV_PREV", row.get("OBV", 0.0)) else "Falling",
             "overall_volume_signal": row.get("VOLUME_SIGNAL", "Neutral"),
+        },
+        "momentum_features": {
+            "macdLine": round(_safe_float(row.get("MACD_LINE"), 0.0), 6),
+            "macdSignal": round(_safe_float(row.get("MACD_SIGNAL"), 0.0), 6),
+            "macdHistogram": round(_safe_float(row.get("MACD_HIST"), 0.0), 6),
+            "macdHistogramSlope": round(_safe_float(row.get("MACD_HIST_SLOPE"), 0.0), 6),
+            "rsiBullishDivergence": int(_safe_float(row.get("RSI_BULLISH_DIVERGENCE"), 0.0)),
+            "rsiBearishDivergence": int(_safe_float(row.get("RSI_BEARISH_DIVERGENCE"), 0.0)),
+            "rsiDivergenceStrength": round(_safe_float(row.get("RSI_DIVERGENCE_STRENGTH"), 0.0), 4),
+            "volumeZScore": round(_safe_float(row.get("VOLUME_ZSCORE"), 0.0), 4),
+            "volumeSpike": int(_safe_float(row.get("VOLUME_SPIKE"), 0.0)),
         },
         "session_context": {
             "label": bar_session_context.get("label", "Off"),

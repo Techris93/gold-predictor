@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
 import math
 import os
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlencode
+from urllib.request import urlopen
 
 from dotenv import load_dotenv
 
@@ -18,6 +21,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
 
 TD_API_KEY = os.getenv("TWELVE_DATA_API_KEY", "").strip()
+FRED_API_KEY = os.getenv("FRED_API_KEY", "").strip()
 TD_SYMBOL = os.getenv("TWELVE_DATA_SYMBOL", "XAU/USD").strip() or "XAU/USD"
 MAX_OUTPUTSIZE = 5000
 TD_OUTPUT_TIMEZONE = "UTC"
@@ -31,6 +35,8 @@ _CROSS_ASSET_SYMBOLS = {
     "spx": ["SPY", "ES"],
     "usdjpy": ["USD/JPY"],
     "us10y": ["US10Y", "TNX"],
+    "vix": ["VIX", "^VIX", "CBOE:VIX"],
+    "real_yield": ["DFII10"],
 }
 
 
@@ -214,14 +220,83 @@ def _fetch_symbol_snapshot(client: TDClient, candidates: list[str], interval: st
     return {"available": False}
 
 
+def _fetch_fred_series_snapshot(series_id: str, *, fallback_symbol: str = "") -> dict:
+    if not FRED_API_KEY:
+        return {"available": False}
+
+    try:
+        query = urlencode(
+            {
+                "series_id": series_id,
+                "api_key": FRED_API_KEY,
+                "file_type": "json",
+                "sort_order": "asc",
+                "limit": 64,
+            }
+        )
+        url = f"https://api.stlouisfed.org/fred/series/observations?{query}"
+        with urlopen(url, timeout=6) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+
+        observations = payload.get("observations") if isinstance(payload, dict) else None
+        if not isinstance(observations, list):
+            return {"available": False}
+
+        values = []
+        for obs in observations:
+            if not isinstance(obs, dict):
+                continue
+            raw = str(obs.get("value", "")).strip()
+            if raw in {"", ".", "NaN", "nan"}:
+                continue
+            try:
+                values.append(float(raw))
+            except Exception:
+                continue
+
+        if len(values) < 2:
+            return {"available": False}
+
+        latest = float(values[-1])
+        prev_1 = float(values[-2])
+        prev_5 = float(values[-6]) if len(values) >= 6 else prev_1
+
+        pct_1h = ((latest - prev_1) / max(abs(prev_1), 1e-8)) * 100.0
+        pct_4h = ((latest - prev_5) / max(abs(prev_5), 1e-8)) * 100.0
+
+        trend = "flat"
+        if pct_1h > 0.20:
+            trend = "up"
+        elif pct_1h < -0.20:
+            trend = "down"
+
+        return {
+            "available": True,
+            "symbol": fallback_symbol or series_id,
+            "latest": round(latest, 4),
+            "pct_1h": round(pct_1h, 4),
+            "pct_4h": round(pct_4h, 4),
+            "trend": trend,
+            "source": "fred",
+        }
+    except Exception:
+        return {"available": False}
+
+
 def fetch_cross_asset_context() -> dict:
     client = get_td_client()
-    if not client:
-        return {"assets": {}, "available": False}
 
     assets = {}
     for name, candidates in _CROSS_ASSET_SYMBOLS.items():
-        assets[name] = _fetch_symbol_snapshot(client, candidates)
+        snapshot = {"available": False}
+        if client:
+            snapshot = _fetch_symbol_snapshot(client, candidates)
+        if not snapshot.get("available") and name == "real_yield":
+            # Real-yield series may be unavailable via market feed; use FRED when configured.
+            snapshot = _fetch_fred_series_snapshot("DFII10", fallback_symbol="FRED:DFII10")
+        elif not snapshot.get("available") and name == "vix":
+            snapshot = _fetch_fred_series_snapshot("VIXCLS", fallback_symbol="FRED:VIXCLS")
+        assets[name] = snapshot
 
     return {
         "available": any(isinstance(item, dict) and item.get("available") for item in assets.values()),

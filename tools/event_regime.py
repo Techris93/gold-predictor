@@ -306,6 +306,18 @@ def summarize_cross_asset_context(cross_asset_context: dict | None) -> dict:
         elif _safe_float(yields.get("pct_1h")) > 0.1:
             bearish_score += 1.0
 
+    real_yield = _asset("real_yield")
+    if real_yield.get("available"):
+        real_yield_change = _safe_float(real_yield.get("pct_1h"))
+        if real_yield_change <= -0.25:
+            bullish_score += 1.6
+        elif real_yield_change <= -0.08:
+            bullish_score += 0.8
+        elif real_yield_change >= 0.25:
+            bearish_score += 1.6
+        elif real_yield_change >= 0.08:
+            bearish_score += 0.8
+
     silver = _asset("silver")
     if silver.get("available"):
         if _safe_float(silver.get("pct_1h")) > 0.15:
@@ -326,6 +338,13 @@ def summarize_cross_asset_context(cross_asset_context: dict | None) -> dict:
             bullish_score += 0.8
         elif _safe_float(spx.get("pct_1h")) > 0.25:
             bearish_score += 0.4
+
+    vix = _asset("vix")
+    if vix.get("available"):
+        if _safe_float(vix.get("pct_1h")) > 0.6:
+            bullish_score += 0.8
+        elif _safe_float(vix.get("pct_1h")) < -0.6:
+            bearish_score += 0.6
 
     usdjpy = _asset("usdjpy")
     if usdjpy.get("available"):
@@ -400,6 +419,18 @@ def compute_event_regime_snapshot(
     dist_week_low = get_value("DIST_PRIOR_WEEK_LOW_PCT")
 
     cross_asset_summary = summarize_cross_asset_context(cross_asset_context)
+    cross_assets = (cross_asset_context or {}).get("assets") or {}
+    real_yield_asset = cross_assets.get("real_yield") if isinstance(cross_assets.get("real_yield"), dict) else {}
+    vix_asset = cross_assets.get("vix") if isinstance(cross_assets.get("vix"), dict) else {}
+    real_yield_available = bool(real_yield_asset.get("available"))
+    vix_available = bool(vix_asset.get("available"))
+
+    macd_hist = _safe_float(get_value("MACD_HIST"), 0.0)
+    macd_hist_slope = _safe_float(get_value("MACD_HIST_SLOPE"), 0.0)
+    rsi_bullish_divergence = bool(int(_safe_float(get_value("RSI_BULLISH_DIVERGENCE"), 0.0)))
+    rsi_bearish_divergence = bool(int(_safe_float(get_value("RSI_BEARISH_DIVERGENCE"), 0.0)))
+    volume_zscore = _safe_float(get_value("VOLUME_ZSCORE"), 0.0)
+    volume_spike = bool(int(_safe_float(get_value("VOLUME_SPIKE"), 0.0)))
     event_risk_dict = event_risk if isinstance(event_risk, dict) else {}
     # Prefer live event-risk context for runtime responses; row-derived values can be stale
     # when the latest market candle is behind wall clock.
@@ -476,6 +507,16 @@ def compute_event_regime_snapshot(
     realized_vol_score = 8.0 if realized_vol_percentile >= 75.0 else (4.0 if realized_vol_percentile >= 60.0 else 0.0)
     atr_percentile_score = 6.0 if atr_percentile >= 70.0 else (3.0 if atr_percentile >= 55.0 else 0.0)
     follow_through_score = 8.0 if trend_follow_through >= 1.15 else (4.0 if trend_follow_through >= 0.98 else 0.0)
+    momentum_signal_score = 0.0
+    if abs(macd_hist_slope) >= 0.004:
+        momentum_signal_score += 2.5
+    if volume_spike:
+        momentum_signal_score += 4.0
+    elif volume_zscore >= 1.2:
+        momentum_signal_score += 2.0
+    if rsi_bullish_divergence or rsi_bearish_divergence:
+        momentum_signal_score += 4.0
+
     vwap_dislocation_score = 5.0 if abs(dist_session_vwap) >= 0.18 else (2.5 if abs(dist_session_vwap) >= 0.08 else 0.0)
     opening_range_score = 7.0 if opening_range_break != 0 else 0.0
     sweep_reclaim_score = 7.0 if sweep_reclaim_signal != 0 else 0.0
@@ -524,6 +565,9 @@ def compute_event_regime_snapshot(
             cross_asset_confluence,
             opening_range_break != 0,
             sweep_reclaim_signal != 0,
+            abs(macd_hist_slope) >= 0.004,
+            rsi_bullish_divergence or rsi_bearish_divergence,
+            volume_spike,
         ]
         if flag
     )
@@ -542,6 +586,8 @@ def compute_event_regime_snapshot(
             off_session_noise_penalty += 2.0
         if abs(dist_session_vwap) < 0.18:
             off_session_noise_penalty += 1.0
+        if volume_spike:
+            off_session_noise_penalty = max(0.0, off_session_noise_penalty - 2.0)
 
     big_move_score = _clamp(
         compression_score
@@ -554,6 +600,7 @@ def compute_event_regime_snapshot(
         + realized_vol_score
         + atr_percentile_score
         + follow_through_score
+        + momentum_signal_score
         + vwap_dislocation_score
         + opening_range_score
         + sweep_reclaim_score
@@ -610,6 +657,27 @@ def compute_event_regime_snapshot(
         bullish_bias += 0.75
     elif sweep_reclaim_signal < 0:
         bearish_bias += 0.75
+    if macd_hist_slope > 0.0:
+        bullish_bias += 0.45
+        if macd_hist > 0.0:
+            bullish_bias += 0.2
+    elif macd_hist_slope < 0.0:
+        bearish_bias += 0.45
+        if macd_hist < 0.0:
+            bearish_bias += 0.2
+    if rsi_bullish_divergence and not rsi_bearish_divergence:
+        bullish_bias += 0.9
+    elif rsi_bearish_divergence and not rsi_bullish_divergence:
+        bearish_bias += 0.9
+    if volume_spike:
+        if opening_range_break > 0:
+            bullish_bias += 0.45
+        elif opening_range_break < 0:
+            bearish_bias += 0.45
+        elif trend == "Bullish" and "Bullish" in alignment_label:
+            bullish_bias += 0.25
+        elif trend == "Bearish" and "Bearish" in alignment_label:
+            bearish_bias += 0.25
 
     if momentum_stack and trend == "Bullish" and "Bullish" in alignment_label:
         bullish_bias += 0.45
@@ -679,6 +747,12 @@ def compute_event_regime_snapshot(
         adaptive_threshold_discount += 4.0
     if cross_asset_confluence:
         adaptive_threshold_discount += 3.0
+    if abs(macd_hist_slope) >= 0.004:
+        adaptive_threshold_discount += 1.5
+    if rsi_bullish_divergence or rsi_bearish_divergence:
+        adaptive_threshold_discount += 2.0
+    if volume_spike:
+        adaptive_threshold_discount += 2.5
     if setup_cluster_count >= 5:
         adaptive_threshold_discount += 6.0
     elif setup_cluster_count >= 3:
@@ -790,6 +864,10 @@ def compute_event_regime_snapshot(
             fakeout_risk_score += 1.2
         if micro_return_burst < 1.0:
             fakeout_risk_score += 0.8
+    if volume_spike and abs(macd_hist_slope) >= 0.004:
+        fakeout_risk_score -= 0.8
+    if (rsi_bullish_divergence and breakout_bias == "Bullish") or (rsi_bearish_divergence and breakout_bias == "Bearish"):
+        fakeout_risk_score -= 0.8
     fakeout_risk_score = _clamp(fakeout_risk_score, 0.0, 6.0)
     event_shock_probability = _clamp(
         (0.40 if event_active else 0.0)
@@ -901,6 +979,10 @@ def compute_event_regime_snapshot(
             "cross_asset_confirmation": cross_asset_summary["bias"] == stable_breakout_bias and stable_breakout_bias != "Neutral",
             "momentum_stack": momentum_stack,
             "compression_setup": compression_setup,
+            "macd_momentum_shift": abs(macd_hist_slope) >= 0.004,
+            "rsi_bullish_divergence": rsi_bullish_divergence,
+            "rsi_bearish_divergence": rsi_bearish_divergence,
+            "volume_spike": volume_spike,
             "setup_cluster": setup_cluster_count >= 3,
             "directional_confluence": directional_confluence_count >= 3,
             "fakeout_risk": fakeout_risk_score >= 3.0,
@@ -925,6 +1007,7 @@ def compute_event_regime_snapshot(
             "session_score": round(session_score, 2),
             "calendar_score": round(calendar_score, 2),
             "cross_asset_score": round(cross_asset_score, 2),
+            "momentum_signal_score": round(momentum_signal_score, 2),
             "burst_score": round(burst_score, 2),
             "decay_penalty": round(decay_penalty, 2),
             "cluster_bonus": round(cluster_bonus, 2),
@@ -937,5 +1020,10 @@ def compute_event_regime_snapshot(
             "effective_watch_threshold": round(effective_watch_threshold, 2),
             "effective_high_breakout_threshold": round(effective_high_breakout_threshold, 2),
             "effective_directional_threshold": round(effective_directional_threshold, 2),
+            "macd_hist": round(macd_hist, 6),
+            "macd_hist_slope": round(macd_hist_slope, 6),
+            "volume_zscore": round(volume_zscore, 4),
+            "real_yield_available": bool(real_yield_available),
+            "vix_available": bool(vix_available),
         },
     }
