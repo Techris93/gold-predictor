@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from dataclasses import dataclass
@@ -27,6 +28,10 @@ import requests
 
 
 FOMC_CALENDAR_URL = "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
+FRED_RELEASES_API_URL = "https://api.stlouisfed.org/fred/releases"
+FRED_RELEASE_DATES_API_URL = "https://api.stlouisfed.org/fred/release/dates"
+FRED_API_KEY = os.getenv("FRED_API_KEY", "").strip()
+FRED_API_TIMEOUT_SECONDS = max(5, int(os.getenv("FRED_API_TIMEOUT_SECONDS", "30")))
 ET = ZoneInfo("America/New_York")
 CT = ZoneInfo("America/Chicago")
 
@@ -40,6 +45,7 @@ class WindowConfig:
     name: str
     source_name: str
     fred_release_id: int
+    default_release_time_et: str
     start_pad_minutes: int
     end_pad_minutes: int
     reason_template: str
@@ -50,10 +56,11 @@ BLS_WINDOWS = [
         name="NFP / Employment Situation",
         source_name="Employment Situation",
         fred_release_id=50,
+        default_release_time_et="08:30",
         start_pad_minutes=30,
         end_pad_minutes=75,
         reason_template=(
-            "Employment Situation release date from the St. Louis Fed FRED release calendar "
+            "Employment Situation release date from the St. Louis Fed FRED release schedule "
             "for {date_label}; FRED notes dates are published by the source."
         ),
     ),
@@ -61,10 +68,11 @@ BLS_WINDOWS = [
         name="CPI",
         source_name="Consumer Price Index",
         fred_release_id=10,
+        default_release_time_et="08:30",
         start_pad_minutes=30,
         end_pad_minutes=75,
         reason_template=(
-            "Consumer Price Index release date from the St. Louis Fed FRED release calendar "
+            "Consumer Price Index release date from the St. Louis Fed FRED release schedule "
             "for {date_label}; FRED notes dates are published by the source."
         ),
     ),
@@ -72,10 +80,11 @@ BLS_WINDOWS = [
         name="PPI",
         source_name="Producer Price Index",
         fred_release_id=46,
+        default_release_time_et="08:30",
         start_pad_minutes=30,
         end_pad_minutes=75,
         reason_template=(
-            "Producer Price Index release date from the St. Louis Fed FRED release calendar "
+            "Producer Price Index release date from the St. Louis Fed FRED release schedule "
             "for {date_label}; FRED notes dates are published by the source."
         ),
     ),
@@ -86,6 +95,7 @@ BLS_WINDOWS = [
 class MacroReleaseConfig:
     name: str
     match_terms: tuple[str, ...]
+    default_release_time_et: str
     start_pad_minutes: int
     end_pad_minutes: int
     reason_template: str
@@ -95,50 +105,55 @@ NEAR_RELEASE_WINDOWS = [
     MacroReleaseConfig(
         name="Initial Jobless Claims",
         match_terms=("unemployment insurance weekly claims",),
+        default_release_time_et="08:30",
         start_pad_minutes=20,
         end_pad_minutes=60,
         reason_template=(
-            "Release date from the St. Louis Fed FRED all-releases calendar for {date_label} "
+            "Release date from the St. Louis Fed FRED release schedule for {date_label} "
             "({source_label})."
         ),
     ),
     MacroReleaseConfig(
         name="ADP Employment",
         match_terms=("adp", "employment"),
+        default_release_time_et="08:15",
         start_pad_minutes=20,
         end_pad_minutes=60,
         reason_template=(
-            "Release date from the St. Louis Fed FRED all-releases calendar for {date_label} "
+            "Release date from the St. Louis Fed FRED release schedule for {date_label} "
             "({source_label})."
         ),
     ),
     MacroReleaseConfig(
         name="Retail Sales",
         match_terms=("retail sales",),
+        default_release_time_et="08:30",
         start_pad_minutes=30,
         end_pad_minutes=75,
         reason_template=(
-            "Release date from the St. Louis Fed FRED all-releases calendar for {date_label} "
+            "Release date from the St. Louis Fed FRED release schedule for {date_label} "
             "({source_label})."
         ),
     ),
     MacroReleaseConfig(
         name="Personal Income and Outlays",
         match_terms=("personal income and outlays",),
+        default_release_time_et="08:30",
         start_pad_minutes=30,
         end_pad_minutes=75,
         reason_template=(
-            "Release date from the St. Louis Fed FRED all-releases calendar for {date_label} "
+            "Release date from the St. Louis Fed FRED release schedule for {date_label} "
             "({source_label})."
         ),
     ),
     MacroReleaseConfig(
         name="Gross Domestic Product",
         match_terms=("gross domestic product",),
+        default_release_time_et="08:30",
         start_pad_minutes=30,
         end_pad_minutes=75,
         reason_template=(
-            "Release date from the St. Louis Fed FRED all-releases calendar for {date_label} "
+            "Release date from the St. Louis Fed FRED release schedule for {date_label} "
             "({source_label})."
         ),
     ),
@@ -192,6 +207,95 @@ def _fred_release_url(release_id: int, year: int) -> str:
     return f"https://fred.stlouisfed.org/releases/calendar?rid={release_id}&y={year}"
 
 
+def _fred_api_get_json(url: str, params: dict) -> dict:
+    if not FRED_API_KEY:
+        raise RuntimeError("FRED_API_KEY is not configured.")
+    payload = dict(params)
+    payload["api_key"] = FRED_API_KEY
+    payload["file_type"] = "json"
+    response = requests.get(url, params=payload, timeout=FRED_API_TIMEOUT_SECONDS)
+    response.raise_for_status()
+    data = response.json()
+    return data if isinstance(data, dict) else {}
+
+
+def _release_datetime_from_date(date_label: str, release_time_label: str) -> datetime:
+    release_day = datetime.strptime(str(date_label), "%Y-%m-%d")
+    hour = 8
+    minute = 30
+    try:
+        parsed_time = datetime.strptime(str(release_time_label), "%H:%M")
+        hour = int(parsed_time.hour)
+        minute = int(parsed_time.minute)
+    except Exception:
+        pass
+    return datetime(release_day.year, release_day.month, release_day.day, hour, minute, tzinfo=ET)
+
+
+def _fetch_release_datetimes_via_api(release_id: int, target_year: int, default_release_time_et: str) -> list[datetime]:
+    payload = _fred_api_get_json(
+        FRED_RELEASE_DATES_API_URL,
+        {
+            "release_id": int(release_id),
+            "include_release_dates_with_no_data": "true",
+            "sort_order": "asc",
+            "limit": 10000,
+        },
+    )
+    items = payload.get("release_dates") if isinstance(payload, dict) else None
+    if not isinstance(items, list):
+        return []
+
+    release_datetimes: list[datetime] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        date_value = item.get("date")
+        if not date_value:
+            continue
+        try:
+            release_dt = _release_datetime_from_date(str(date_value), default_release_time_et)
+        except Exception:
+            continue
+        if release_dt.year == int(target_year):
+            release_datetimes.append(release_dt)
+
+    return release_datetimes
+
+
+def _fetch_release_datetimes(
+    release_id: int,
+    release_name: str,
+    target_year: int,
+    default_release_time_et: str,
+) -> list[datetime]:
+    if FRED_API_KEY:
+        try:
+            release_datetimes = _fetch_release_datetimes_via_api(
+                release_id=release_id,
+                target_year=target_year,
+                default_release_time_et=default_release_time_et,
+            )
+            if release_datetimes:
+                return release_datetimes
+        except Exception as exc:
+            print(
+                (
+                    "Warning: failed to read release dates from FRED API for "
+                    f"{release_name} ({target_year}); falling back to release calendar page. Error: {exc}"
+                ),
+                file=sys.stderr,
+            )
+
+    response = requests.get(_fred_release_url(release_id, target_year), timeout=30)
+    response.raise_for_status()
+    return _extract_fred_release_datetimes(
+        raw_html=response.text,
+        release_name=release_name,
+        target_year=target_year,
+    )
+
+
 def _extract_fred_release_datetimes(raw_html: str, release_name: str, target_year: int) -> list[datetime]:
     lines = _strip_html(raw_html)
     year_marker = str(target_year)
@@ -237,6 +341,42 @@ def _extract_fred_release_datetimes(raw_html: str, release_name: str, target_yea
 
 
 def _load_fred_release_options(year: int) -> list[tuple[int, str]]:
+    if FRED_API_KEY:
+        try:
+            payload = _fred_api_get_json(
+                FRED_RELEASES_API_URL,
+                {
+                    "limit": 1000,
+                    "offset": 0,
+                    "order_by": "release_id",
+                    "sort_order": "asc",
+                },
+            )
+            entries = payload.get("releases") if isinstance(payload, dict) else None
+            if isinstance(entries, list):
+                options_from_api: list[tuple[int, str]] = []
+                for item in entries:
+                    if not isinstance(item, dict):
+                        continue
+                    rid = item.get("id")
+                    name = " ".join(str(item.get("name") or "").replace("\xa0", " ").split())
+                    if not name:
+                        continue
+                    try:
+                        options_from_api.append((int(rid), name))
+                    except Exception:
+                        continue
+                if options_from_api:
+                    return options_from_api
+        except Exception as exc:
+            print(
+                (
+                    "Warning: failed to load release list from FRED API; "
+                    f"falling back to releases page parser. Error: {exc}"
+                ),
+                file=sys.stderr,
+            )
+
     response = requests.get(ALL_RELEASES_CALENDAR_URL.format(year=year), timeout=30)
     response.raise_for_status()
     options: list[tuple[int, str]] = []
@@ -258,12 +398,11 @@ def fetch_bls_windows(now_et: datetime, horizon_days: int) -> list[dict[str, str
 
     for config in BLS_WINDOWS:
         for year in years:
-            response = requests.get(_fred_release_url(config.fred_release_id, year), timeout=30)
-            response.raise_for_status()
-            release_datetimes = _extract_fred_release_datetimes(
-                raw_html=response.text,
+            release_datetimes = _fetch_release_datetimes(
+                release_id=config.fred_release_id,
                 release_name=config.source_name,
                 target_year=year,
+                default_release_time_et=config.default_release_time_et,
             )
             for release_dt in release_datetimes:
                 if release_dt < now_et or release_dt > end_cutoff:
@@ -294,12 +433,11 @@ def fetch_near_macro_windows(now_et: datetime, horizon_days: int) -> list[dict[s
         ]
         for rid, source_name in matched_options:
             for year in years:
-                response = requests.get(_fred_release_url(rid, year), timeout=30)
-                response.raise_for_status()
-                release_datetimes = _extract_fred_release_datetimes(
-                    raw_html=response.text,
+                release_datetimes = _fetch_release_datetimes(
+                    release_id=rid,
                     release_name=source_name,
                     target_year=year,
+                    default_release_time_et=config.default_release_time_et,
                 )
                 for release_dt in release_datetimes:
                     if release_dt < now_et or release_dt > end_cutoff:
