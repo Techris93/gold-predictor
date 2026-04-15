@@ -320,6 +320,44 @@ def _format_market_structure_change(changes, market_structure):
     return current_structure or "N/A"
 
 
+def _format_bar_session_microstructure(ta_data):
+    ta_data = ta_data if isinstance(ta_data, dict) else {}
+    session = ta_data.get("session_context") if isinstance(ta_data.get("session_context"), dict) else {}
+    bar_session = session.get("bar_session") if isinstance(session.get("bar_session"), dict) else {}
+    current_session = session.get("current_session") if isinstance(session.get("current_session"), dict) else {}
+    structure = ta_data.get("structure_context") if isinstance(ta_data.get("structure_context"), dict) else {}
+
+    bar_label = str(session.get("label") or bar_session.get("label") or "Off")
+    bar_time = str(session.get("barTimeDisplayUtc") or bar_session.get("timeDisplayUtc") or "N/A")
+    current_label = str(session.get("currentLabel") or current_session.get("label") or "Off")
+    current_time = str(
+        session.get("currentTimeDisplayUtc")
+        or current_session.get("timeDisplayUtc")
+        or datetime.now(timezone.utc).strftime("%H:%M UTC")
+    )
+
+    try:
+        vwap_delta = float(structure.get("distSessionVwapPct") or 0.0)
+    except Exception:
+        vwap_delta = 0.0
+    try:
+        orb = int(round(float(structure.get("openingRangeBreak") or 0.0)))
+    except Exception:
+        orb = 0
+    try:
+        sweep = int(round(float(structure.get("sweepReclaimSignal") or 0.0)))
+    except Exception:
+        sweep = 0
+
+    orb_text = "ORB Bullish" if orb > 0 else ("ORB Bearish" if orb < 0 else "ORB Neutral")
+    sweep_text = "Sweep Bullish" if sweep > 0 else ("Sweep Bearish" if sweep < 0 else "No Sweep")
+
+    return (
+        f"Bar {bar_label} {bar_time} · Now {current_label} {current_time} "
+        f"· VWAP {vwap_delta:.2f}% · {orb_text} · {sweep_text}"
+    )
+
+
 def _is_rr_signal_actionable(rr_signal):
     rr_signal = rr_signal if isinstance(rr_signal, dict) else {}
     status = str(rr_signal.get("status") or "").strip()
@@ -332,7 +370,7 @@ def _is_rr_signal_actionable(rr_signal):
     )
 
 
-def _build_signal_notification(changes, rr_signal, market_structure):
+def _build_signal_notification(changes, rr_signal, market_structure, ta_data=None):
     changed_keys = set((changes or {}).keys())
     title = (
         "XAUUSD Market Structure Changed"
@@ -348,6 +386,7 @@ def _build_signal_notification(changes, rr_signal, market_structure):
     if rr_direction_grade != "Neutral · N/A" or rr_target_probability != "N/A · N/A":
         body_lines.append(f"Direction / Grade: {rr_direction_grade}")
         body_lines.append(f"Target Bucket Probability: {rr_target_probability}")
+    body_lines.append(f"Bar Session / Microstructure: {_format_bar_session_microstructure(ta_data)}")
 
     if not body_lines:
         body_lines.append(f"Market Structure: {_format_market_structure_change(changes, market_structure)}")
@@ -499,11 +538,11 @@ def _has_background_alert_channels():
     return _has_push_subscribers() or _telegram_enabled()
 
 
-def _send_telegram_notification(changes, rr_signal, market_structure):
+def _send_telegram_notification(changes, rr_signal, market_structure, ta_data=None):
     if not _telegram_enabled():
         return
 
-    notification = _build_signal_notification(changes, rr_signal, market_structure)
+    notification = _build_signal_notification(changes, rr_signal, market_structure, ta_data=ta_data)
 
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
@@ -527,7 +566,7 @@ def _send_telegram_notification(changes, rr_signal, market_structure):
         return
 
 
-def _send_web_push_notifications(changes, rr_signal, market_structure):
+def _send_web_push_notifications(changes, rr_signal, market_structure, ta_data=None):
     if webpush is None or not VAPID_PUBLIC_KEY or not VAPID_PRIVATE_KEY:
         return
 
@@ -535,7 +574,7 @@ def _send_web_push_notifications(changes, rr_signal, market_structure):
     if not subscriptions:
         return
 
-    notification = _build_signal_notification(changes, rr_signal, market_structure)
+    notification = _build_signal_notification(changes, rr_signal, market_structure, ta_data=ta_data)
     payload = {
         "title": notification.get("title"),
         "body": notification.get("body"),
@@ -1644,13 +1683,6 @@ def _load_rr200_counter(now_ts):
 
 
 def _rr200_should_deliver(counter, now_ts):
-    today = counter.get("today") if isinstance(counter, dict) else {}
-    today_total = int((today or {}).get("total", 0) or 0)
-    last_delivery_ts = int(counter.get("last_delivery_ts", 0) or 0)
-    if today_total >= RR200_MAX_SIGNALS_PER_DAY:
-        return False
-    if RR200_MIN_SIGNAL_SPACING_SECONDS > 0 and (now_ts - last_delivery_ts) < RR200_MIN_SIGNAL_SPACING_SECONDS:
-        return False
     return True
 
 
@@ -1662,13 +1694,7 @@ def _rr200_delivery_allowed_for_payload(payload, now_ts):
     if grade not in {"A+ (Quant)", "A (High Accuracy)", "B (Qualified)"}:
         return False
     counter = _load_rr200_counter(now_ts)
-    if not _rr200_should_deliver(counter, now_ts):
-        return False
-    today = counter.get("today") if isinstance(counter.get("today"), dict) else {}
-    today_total = int(today.get("total", 0) or 0)
-    if grade in {"A+ (Quant)", "A (High Accuracy)"}:
-        return True
-    return today_total < 2
+    return _rr200_should_deliver(counter, now_ts)
 
 
 def _record_rr200_delivery(payload, now_ts):
@@ -1682,8 +1708,6 @@ def _record_rr200_delivery(payload, now_ts):
         return
 
     counter = _load_rr200_counter(now_ts)
-    if not _rr200_should_deliver(counter, now_ts):
-        return
     today = counter.get("today") if isinstance(counter.get("today"), dict) else {}
     tiers = today.get("tiers") if isinstance(today.get("tiers"), dict) else {}
     tiers[grade] = int(tiers.get(grade, 0) or 0) + 1
@@ -1819,7 +1843,6 @@ def _build_prediction_response():
 def _indicator_monitor_loop():
     """Push websocket notifications whenever tracked indicator values change."""
     last_snapshot = None
-    last_emit_ts = 0
 
     while True:
         try:
@@ -1841,7 +1864,6 @@ def _indicator_monitor_loop():
                     if (
                         notification_changes
                         and _is_material_change(notification_changes)
-                        and (now_ts - last_emit_ts >= NOTIFY_MIN_INTERVAL_SECONDS)
                     ):
                         alert_state = _load_json_file(
                             ALERT_STATE_FILE,
@@ -1923,14 +1945,6 @@ def _indicator_monitor_loop():
                                 event_regime,
                             )
                         )
-                        boundary_wobble = _is_warning_boundary_wobble(
-                            previous_warning_ladder,
-                            warning_ladder,
-                            previous_event_regime,
-                            event_regime,
-                            trade_playbook_stage,
-                            permission_status,
-                        )
                         breakout_bias_changed = (
                             "breakout_bias" in notification_changes
                             and bool(breakout_bias)
@@ -1940,10 +1954,6 @@ def _indicator_monitor_loop():
                                 and (breakout_bias in {"Bullish", "Bearish"} or previous_breakout_bias in {"Bullish", "Bearish"})
                             )
                         )
-                        if boundary_wobble:
-                            warning_changed = False
-                            event_regime_changed = False
-                            breakout_bias_changed = False
                         market_structure_changed = (
                             "market_structure" in notification_changes
                             and bool(market_structure)
@@ -2001,100 +2011,8 @@ def _indicator_monitor_loop():
                         elif rr_signal_grade_changed or rr_signal_direction_changed:
                             signal_class = "execution"
 
-                        cooldown_suppressed = False
-
-                        if should_alert and _is_forming_setup_wobble(
-                            notification_changes,
-                            trade_playbook_payload,
-                            execution_permission_payload,
-                            decision_payload,
-                        ):
-                            should_alert = False
-                        if should_alert:
-                            last_trade_playbook_stage = str(alert_state.get("last_trade_playbook_stage", ""))
-                            last_execution_permission = str(alert_state.get("last_execution_permission", ""))
-                            last_market_structure = str(alert_state.get("last_market_structure", ""))
-                            last_warning_ladder = str(alert_state.get("last_warning_ladder", ""))
-                            last_event_regime = str(alert_state.get("last_event_regime", ""))
-                            last_breakout_bias = str(alert_state.get("last_breakout_bias", ""))
-                            last_verdict = str(alert_state.get("last_verdict", ""))
-                            last_confidence_bucket = str(alert_state.get("last_confidence_bucket", ""))
-                            last_entry_readiness = str(alert_state.get("last_entry_readiness", ""))
-                            last_exit_urgency = str(alert_state.get("last_exit_urgency", ""))
-                            last_rr_signal_status = str(alert_state.get("last_rr_signal_status", ""))
-                            last_rr_signal_grade = str(alert_state.get("last_rr_signal_grade", ""))
-                            last_rr_signal_direction = str(alert_state.get("last_rr_signal_direction", ""))
-                            last_alert_ts = int(alert_state.get("last_alert_ts", 0) or 0)
-                            last_playbook_alert_ts = int(alert_state.get("last_playbook_alert_ts", 0) or 0)
-                            last_context_alert_ts = int(alert_state.get("last_context_alert_ts", 0) or 0)
-                            last_execution_alert_ts = int(alert_state.get("last_execution_alert_ts", 0) or 0)
-                            last_diagnostics_alert_ts = int(alert_state.get("last_diagnostics_alert_ts", 0) or 0)
-                            last_price_action_alert_ts = int(alert_state.get("last_price_action_alert_ts", 0) or 0)
-                            last_boundary_wobble_ts = int(alert_state.get("last_boundary_wobble_ts", 0) or 0)
-                            duplicate_playbook = playbook_changed and trade_playbook_stage == last_trade_playbook_stage
-                            duplicate_warning = warning_changed and warning_ladder == last_warning_ladder
-                            duplicate_event_regime = event_regime_changed and event_regime == last_event_regime
-                            duplicate_breakout_bias = breakout_bias_changed and breakout_bias == last_breakout_bias
-                            duplicate_execution = execution_permission_changed and execution_permission == last_execution_permission
-                            duplicate_structure = market_structure_changed and market_structure == last_market_structure
-                            duplicate_verdict = verdict_changed and verdict == last_verdict
-                            duplicate_confidence = confidence_changed and confidence_bucket == last_confidence_bucket
-                            duplicate_entry_readiness = entry_readiness_changed and entry_readiness == last_entry_readiness
-                            duplicate_exit_urgency = exit_urgency_changed and exit_urgency == last_exit_urgency
-                            duplicate_rr_signal_status = rr_signal_status_changed and rr_signal_status == last_rr_signal_status
-                            duplicate_rr_signal_grade = rr_signal_grade_changed and rr_signal_grade == last_rr_signal_grade
-                            duplicate_rr_signal_direction = rr_signal_direction_changed and rr_signal_direction == last_rr_signal_direction
-                            if (
-                                duplicate_playbook
-                                or duplicate_warning
-                                or duplicate_event_regime
-                                or duplicate_breakout_bias
-                                or duplicate_execution
-                                or duplicate_structure
-                                or duplicate_verdict
-                                or duplicate_confidence
-                                or duplicate_entry_readiness
-                                or duplicate_exit_urgency
-                                or duplicate_rr_signal_status
-                                or duplicate_rr_signal_grade
-                                or duplicate_rr_signal_direction
-                            ) and (now_ts - last_alert_ts) < ALERT_COOLDOWN_SECONDS:
-                                cooldown_suppressed = True
-                                should_alert = False
-                            if should_alert and signal_class == "playbook" and (now_ts - last_playbook_alert_ts) < ALERT_CLASS_COOLDOWN_SECONDS:
-                                cooldown_suppressed = True
-                                should_alert = False
-                            if should_alert and signal_class == "context" and (now_ts - last_context_alert_ts) < ALERT_CONTEXT_COOLDOWN_SECONDS:
-                                cooldown_suppressed = True
-                                should_alert = False
-                            if should_alert and signal_class == "execution" and (now_ts - last_execution_alert_ts) < ALERT_CLASS_COOLDOWN_SECONDS:
-                                cooldown_suppressed = True
-                                should_alert = False
-                            if should_alert and signal_class == "diagnostics" and (now_ts - last_diagnostics_alert_ts) < ALERT_CONTEXT_COOLDOWN_SECONDS:
-                                cooldown_suppressed = True
-                                should_alert = False
-                            if should_alert and signal_class == "price_action" and (now_ts - last_price_action_alert_ts) < PRICE_ACTION_ALERT_COOLDOWN_SECONDS:
-                                cooldown_suppressed = True
-                                should_alert = False
-                            if (
-                                should_alert
-                                and boundary_wobble
-                                and not market_structure_changed
-                                and (now_ts - last_boundary_wobble_ts) < BOUNDARY_WOBBLE_COOLDOWN_SECONDS
-                            ):
-                                should_alert = False
-                        if (
-                            should_alert
-                            and boundary_wobble
-                            and not market_structure_changed
-                        ):
-                            should_alert = False
                         if not should_alert:
-                            if boundary_wobble:
-                                alert_state["last_boundary_wobble_ts"] = now_ts
-                                _save_json_file(ALERT_STATE_FILE, alert_state)
-                            if not cooldown_suppressed:
-                                last_snapshot = current_snapshot
+                            last_snapshot = current_snapshot
                             continue
 
                         _record_live_signal_outcome(
@@ -2108,6 +2026,7 @@ def _indicator_monitor_loop():
                             notification_changes,
                             rr_signal_payload,
                             market_structure,
+                            ta_data=payload.get("TechnicalAnalysis"),
                         )
                         alert_title = alert_notification.get("title") or "XAUUSD Direction / Grade Changed"
                         alert_message = alert_notification.get("body") or ""
@@ -2133,11 +2052,13 @@ def _indicator_monitor_loop():
                             changes=notification_changes,
                             rr_signal=rr_signal_payload,
                             market_structure=market_structure,
+                            ta_data=payload.get("TechnicalAnalysis"),
                         )
                         _send_telegram_notification(
                             changes=notification_changes,
                             rr_signal=rr_signal_payload,
                             market_structure=market_structure,
+                            ta_data=payload.get("TechnicalAnalysis"),
                         )
                         if rr_ready_event:
                             _record_rr200_delivery(payload, now_ts)
@@ -2173,12 +2094,9 @@ def _indicator_monitor_loop():
                                 "last_price_action_alert_ts": (
                                     now_ts if signal_class == "price_action" else int(alert_state.get("last_price_action_alert_ts", 0) or 0)
                                 ),
-                                "last_boundary_wobble_ts": (
-                                    now_ts if boundary_wobble else int(alert_state.get("last_boundary_wobble_ts", 0) or 0)
-                                ),
+                                "last_boundary_wobble_ts": int(alert_state.get("last_boundary_wobble_ts", 0) or 0),
                             },
                         )
-                        last_emit_ts = now_ts
                 last_snapshot = current_snapshot
         except Exception:
             # Keep monitor alive if any external API call fails.
