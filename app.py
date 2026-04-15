@@ -381,12 +381,11 @@ def _build_signal_notification(changes, rr_signal, market_structure, ta_data=Non
     if "market_structure" in changed_keys:
         body_lines.append(f"Market Structure: {_format_market_structure_change(changes, market_structure)}")
 
-    if _is_rr_signal_actionable(rr_signal):
-        rr_direction_grade = _format_rr_direction_grade(rr_signal)
-        rr_target_probability = _format_rr_target_bucket_probability(rr_signal)
-        if rr_direction_grade != "Neutral · N/A" or rr_target_probability != "N/A · N/A":
-            body_lines.append(f"Direction / Grade: {rr_direction_grade}")
-            body_lines.append(f"Target Bucket Probability: {rr_target_probability}")
+    rr_direction_grade = _format_rr_direction_grade(rr_signal)
+    rr_target_probability = _format_rr_target_bucket_probability(rr_signal)
+    if rr_direction_grade != "Neutral · N/A" or rr_target_probability != "N/A · N/A":
+        body_lines.append(f"Direction / Grade: {rr_direction_grade}")
+        body_lines.append(f"Target Bucket Probability: {rr_target_probability}")
     body_lines.append(f"Bar Session / Microstructure: {_format_bar_session_microstructure(ta_data)}")
 
     if not body_lines:
@@ -579,7 +578,7 @@ def _send_web_push_notifications(changes, rr_signal, market_structure, ta_data=N
     payload = {
         "title": notification.get("title"),
         "body": notification.get("body"),
-        "rr_signal": rr_signal if _is_rr_signal_actionable(rr_signal) else {},
+        "rr_signal": rr_signal,
         "market_structure": market_structure,
         "url": "/",
         "ts": int(time.time()),
