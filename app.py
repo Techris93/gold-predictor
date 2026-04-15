@@ -107,6 +107,9 @@ CHANGE_SUMMARY_ORDER = [
     "rr_signal_grade",
     "rr_signal_direction",
     "market_structure",
+    "micro_vwap_delta_pct",
+    "micro_orb_state",
+    "micro_sweep_state",
     "verdict",
     "confidence_bucket",
     "execution_permission",
@@ -213,6 +216,9 @@ def _summarize_changes_for_push(changes):
         "rr_signal_grade": "Quant Grade",
         "rr_signal_direction": "RR Direction",
         "market_structure": "Market Structure",
+        "micro_vwap_delta_pct": "VWAP Delta",
+        "micro_orb_state": "ORB",
+        "micro_sweep_state": "Sweep",
         "verdict": "Verdict",
         "confidence_bucket": "AI Confidence",
         "execution_permission": "Execution Permission",
@@ -242,6 +248,10 @@ def _notification_title_for_changes(changes):
     has_rr_status = "rr_signal_status" in changed_keys
     has_rr_grade = "rr_signal_grade" in changed_keys
     has_rr_direction = "rr_signal_direction" in changed_keys
+    has_micro_vwap = "micro_vwap_delta_pct" in changed_keys
+    has_micro_orb = "micro_orb_state" in changed_keys
+    has_micro_sweep = "micro_sweep_state" in changed_keys
+    has_microstructure = has_micro_vwap or has_micro_orb or has_micro_sweep
     has_verdict = "verdict" in changed_keys
     has_confidence = "confidence_bucket" in changed_keys
     has_permission = "execution_permission" in changed_keys
@@ -250,6 +260,8 @@ def _notification_title_for_changes(changes):
 
     if has_rr_status or has_rr_grade or has_rr_direction:
         return "XAUUSD RR200 Signal Changed"
+    if has_microstructure and not has_structure and not has_permission:
+        return "XAUUSD Microstructure Changed"
     if has_playbook and has_warning and not has_structure and not has_permission:
         return "XAUUSD Trade Setup Changed"
     if has_playbook and (has_breakout_bias or has_entry_readiness or has_exit_urgency) and not has_structure and not has_permission:
@@ -276,12 +288,25 @@ def _notification_title_for_changes(changes):
         return "XAUUSD Structure / Execution Changed"
     if has_playbook or has_verdict or has_confidence or has_warning or has_event_regime or has_breakout_bias or has_entry_readiness or has_exit_urgency or has_rr_status or has_rr_grade or has_rr_direction:
         return "XAUUSD State Changed"
+    if has_microstructure:
+        return "XAUUSD Microstructure Changed"
     return "XAUUSD Execution Permission Changed"
+
+
+def _effective_rr_direction(rr_signal):
+    rr_signal = rr_signal if isinstance(rr_signal, dict) else {}
+    direction = str(rr_signal.get("direction") or "Neutral").strip() or "Neutral"
+    if direction in {"Bullish", "Bearish"}:
+        return direction
+    candidate_direction = str(rr_signal.get("candidateDirection") or "").strip()
+    if candidate_direction in {"Bullish", "Bearish"}:
+        return candidate_direction
+    return direction
 
 
 def _format_rr_direction_grade(rr_signal):
     rr_signal = rr_signal if isinstance(rr_signal, dict) else {}
-    direction = str(rr_signal.get("direction") or "Neutral").strip() or "Neutral"
+    direction = _effective_rr_direction(rr_signal)
     grade = str(rr_signal.get("grade") or "N/A").strip() or "N/A"
     return f"{direction} · {grade}"
 
@@ -318,6 +343,46 @@ def _format_market_structure_change(changes, market_structure):
         if previous:
             return previous
     return current_structure or "N/A"
+
+
+def _orb_state_label(value):
+    try:
+        numeric = int(round(float(value)))
+    except Exception:
+        numeric = 0
+    return "Bullish" if numeric > 0 else ("Bearish" if numeric < 0 else "Neutral")
+
+
+def _sweep_state_label(value):
+    try:
+        numeric = int(round(float(value)))
+    except Exception:
+        numeric = 0
+    return "Bullish" if numeric > 0 else ("Bearish" if numeric < 0 else "None")
+
+
+def _format_microstructure_change(changes):
+    changes = changes if isinstance(changes, dict) else {}
+    parts = []
+    vwap_delta = changes.get("micro_vwap_delta_pct")
+    if isinstance(vwap_delta, dict):
+        prev = vwap_delta.get("previous")
+        cur = vwap_delta.get("current")
+        if isinstance(prev, (int, float)) and isinstance(cur, (int, float)):
+            parts.append(f"VWAP {float(prev):.2f}% -> {float(cur):.2f}%")
+    orb_delta = changes.get("micro_orb_state")
+    if isinstance(orb_delta, dict):
+        prev_orb = _orb_state_label(orb_delta.get("previous"))
+        cur_orb = _orb_state_label(orb_delta.get("current"))
+        if prev_orb != cur_orb:
+            parts.append(f"ORB {prev_orb} -> {cur_orb}")
+    sweep_delta = changes.get("micro_sweep_state")
+    if isinstance(sweep_delta, dict):
+        prev_sweep = _sweep_state_label(sweep_delta.get("previous"))
+        cur_sweep = _sweep_state_label(sweep_delta.get("current"))
+        if prev_sweep != cur_sweep:
+            parts.append(f"Sweep {prev_sweep} -> {cur_sweep}")
+    return " · ".join(parts)
 
 
 def _format_bar_session_microstructure(ta_data):
@@ -372,11 +437,7 @@ def _is_rr_signal_actionable(rr_signal):
 
 def _build_signal_notification(changes, rr_signal, market_structure, ta_data=None):
     changed_keys = set((changes or {}).keys())
-    title = (
-        "XAUUSD Market Structure Changed"
-        if "market_structure" in changed_keys
-        else ("XAUUSD Adaptive RR Signal" if "rr_signal_status" in changed_keys else "XAUUSD Direction / Grade Changed")
-    )
+    title = _notification_title_for_changes(changes)
     body_lines = []
     if "market_structure" in changed_keys:
         body_lines.append(f"Market Structure: {_format_market_structure_change(changes, market_structure)}")
@@ -386,6 +447,9 @@ def _build_signal_notification(changes, rr_signal, market_structure, ta_data=Non
     if rr_direction_grade != "Neutral · N/A" or rr_target_probability != "N/A · N/A":
         body_lines.append(f"Direction / Grade: {rr_direction_grade}")
         body_lines.append(f"Target Bucket Probability: {rr_target_probability}")
+    micro_change = _format_microstructure_change(changes)
+    if micro_change:
+        body_lines.append(f"Microstructure Change: {micro_change}")
     body_lines.append(f"Bar Session / Microstructure: {_format_bar_session_microstructure(ta_data)}")
 
     if not body_lines:
@@ -628,6 +692,9 @@ def _is_material_change(changes):
         "trade_sell_setup",
         "trade_buy_setup",
         "trade_exit_warning",
+        "micro_vwap_delta_pct",
+        "micro_orb_state",
+        "micro_sweep_state",
     }
     numeric_thresholds = {
         "rsi_14": 0.6,
@@ -1482,6 +1549,19 @@ def _extract_indicator_snapshot(payload):
     regime_state = payload.get("RegimeState", {}) if isinstance(payload, dict) else {}
     trade_playbook = payload.get("TradePlaybook", {}) if isinstance(payload, dict) else {}
     rr_signal = payload.get("RR200Signal", {}) if isinstance(payload, dict) else {}
+    structure_context = ta_data.get("structure_context", {}) if isinstance(ta_data, dict) else {}
+    try:
+        micro_vwap_delta = round(float(structure_context.get("distSessionVwapPct") or 0.0), 3)
+    except Exception:
+        micro_vwap_delta = 0.0
+    try:
+        micro_orb_state = int(round(float(structure_context.get("openingRangeBreak") or 0.0)))
+    except Exception:
+        micro_orb_state = 0
+    try:
+        micro_sweep_state = int(round(float(structure_context.get("sweepReclaimSignal") or 0.0)))
+    except Exception:
+        micro_sweep_state = 0
     return {
         "trade_playbook_stage": (trade_playbook.get("stage") if isinstance(trade_playbook, dict) else None),
         "warning_ladder": (
@@ -1507,7 +1587,10 @@ def _extract_indicator_snapshot(payload):
         "exit_urgency": (trade_playbook.get("exitUrgency") if isinstance(trade_playbook, dict) else None),
         "rr_signal_status": (rr_signal.get("status") if isinstance(rr_signal, dict) else None),
         "rr_signal_grade": (rr_signal.get("grade") if isinstance(rr_signal, dict) else None),
-        "rr_signal_direction": (rr_signal.get("direction") if isinstance(rr_signal, dict) else None),
+        "rr_signal_direction": _effective_rr_direction(rr_signal),
+        "micro_vwap_delta_pct": micro_vwap_delta,
+        "micro_orb_state": micro_orb_state,
+        "micro_sweep_state": micro_sweep_state,
     }
 
 
@@ -1905,7 +1988,7 @@ def _indicator_monitor_loop():
                         rr_signal_payload = payload.get("RR200Signal") or {}
                         rr_signal_status = str(rr_signal_payload.get("status") or "")
                         rr_signal_grade = str(rr_signal_payload.get("grade") or "")
-                        rr_signal_direction = str(rr_signal_payload.get("direction") or "")
+                        rr_signal_direction = _effective_rr_direction(rr_signal_payload)
                         rr_signal_actionable = _is_rr_signal_actionable(rr_signal_payload)
                         verdict = str(payload.get("verdict") or "")
                         confidence_bucket = _confidence_bucket(payload.get("confidence"))
@@ -1958,6 +2041,11 @@ def _indicator_monitor_loop():
                             "market_structure" in notification_changes
                             and bool(market_structure)
                         )
+                        microstructure_changed = bool(
+                            "micro_vwap_delta_pct" in notification_changes
+                            or "micro_orb_state" in notification_changes
+                            or "micro_sweep_state" in notification_changes
+                        )
                         verdict_changed = "verdict" in notification_changes and bool(verdict)
                         confidence_changed = (
                             "confidence_bucket" in notification_changes
@@ -1996,6 +2084,7 @@ def _indicator_monitor_loop():
                         )
                         should_alert = bool(
                             market_structure_changed
+                            or microstructure_changed
                             or rr_signal_status_changed
                             or rr_signal_grade_changed
                             or rr_signal_direction_changed
@@ -2006,7 +2095,7 @@ def _indicator_monitor_loop():
                             and rr_signal_status == "ready"
                             and rr_signal_grade in {"A+ (Quant)", "A (High Accuracy)", "B (Qualified)"}
                         )
-                        if market_structure_changed:
+                        if market_structure_changed or microstructure_changed:
                             signal_class = "price_action"
                         elif rr_signal_grade_changed or rr_signal_direction_changed:
                             signal_class = "execution"
