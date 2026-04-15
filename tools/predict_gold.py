@@ -117,6 +117,14 @@ LAST_CROSS_ASSET_TS = 0
 MTF_TREND_CACHE = {}
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 EVENT_RISK_CONFIG_PATH = os.path.join(BASE_DIR, "config", "event_risk_windows.json")
+EVENT_COUNTDOWN_LOOKAHEAD_MINUTES = max(
+    0,
+    int(os.getenv("EVENT_COUNTDOWN_LOOKAHEAD_MINUTES", str(7 * 24 * 60))),
+)
+EVENT_NEAR_LOOKAHEAD_MINUTES = max(
+    0,
+    int(os.getenv("EVENT_NEAR_LOOKAHEAD_MINUTES", str(72 * 60))),
+)
 TECHNICAL_ANALYSIS_CACHE_SECONDS = max(2, int(os.getenv("TECHNICAL_ANALYSIS_CACHE_SECONDS", "8")))
 MTF_CACHE_SECONDS = max(8, int(os.getenv("MTF_CACHE_SECONDS", "20")))
 CROSS_ASSET_CACHE_SECONDS = max(15, int(os.getenv("CROSS_ASSET_CACHE_SECONDS", "45")))
@@ -346,12 +354,44 @@ def _event_risk_context(now_ts):
         upcoming.sort(key=lambda item: item[0])
         next_event = upcoming[0][1]
 
+    sorted_release_candidates = sorted(release_candidates, key=lambda item: item[0]) if release_candidates else []
+
     next_release_event = None
     minutes_to_next_release = None
-    if release_candidates:
-        release_candidates.sort(key=lambda item: item[0])
-        next_release_ts, next_release_event = release_candidates[0]
+    if sorted_release_candidates:
+        next_release_ts, next_release_event = sorted_release_candidates[0]
         minutes_to_next_release = max((next_release_ts - now_ts) / 60.0, 0.0)
+
+    near_releases = []
+    if EVENT_NEAR_LOOKAHEAD_MINUTES > 0:
+        for release_ts, release_window in sorted_release_candidates:
+            delta_minutes = max((release_ts - now_ts) / 60.0, 0.0)
+            if delta_minutes > EVENT_NEAR_LOOKAHEAD_MINUTES:
+                break
+            near_releases.append(
+                {
+                    "name": str((release_window or {}).get("name") or "").strip(),
+                    "minutes": round(delta_minutes, 1),
+                    "start": (release_window or {}).get("start"),
+                    "release": (release_window or {}).get("release") or (release_window or {}).get("release_time"),
+                }
+            )
+            if len(near_releases) >= 3:
+                break
+
+    # Large countdown values are rarely actionable intraday and usually indicate a sparse
+    # event calendar relative to the dashboard horizon.
+    calendar_sparse = False
+    if (
+        minutes_to_next_release is not None
+        and EVENT_COUNTDOWN_LOOKAHEAD_MINUTES > 0
+        and minutes_to_next_release > EVENT_COUNTDOWN_LOOKAHEAD_MINUTES
+    ):
+        calendar_sparse = True
+        minutes_to_next_release = None
+        next_release_event = None
+        if not active:
+            next_event = None
 
     return {
         "active": bool(active),
@@ -359,6 +399,8 @@ def _event_risk_context(now_ts):
         "next_event": next_event,
         "next_release_event": next_release_event,
         "minutes_to_next_release": (round(minutes_to_next_release, 1) if minutes_to_next_release is not None else None),
+        "near_releases": near_releases,
+        "calendar_sparse": calendar_sparse,
         "now_utc": datetime.now(timezone.utc).isoformat(),
     }
 

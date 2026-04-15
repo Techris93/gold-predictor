@@ -236,10 +236,14 @@ def _build_session_context_from_datetime(session_dt):
     normalized_dt = _coerce_utc_datetime(session_dt) or datetime.now(timezone.utc)
     hour = int(normalized_dt.hour)
     minute = int(normalized_dt.minute)
-    is_overlap = 12 <= hour < 16
-    is_london = 7 <= hour < 12
+    is_sydney = hour >= 21 or hour < 6
+    is_asia = 0 <= hour < 9
+    is_frankfurt = 6 <= hour < 8
+    is_london = 7 <= hour < 16
     is_new_york = 12 <= hour < 21
-    is_asia = 0 <= hour < 7
+    is_overlap = is_london and is_new_york
+    is_frankfurt_london_overlap = is_frankfurt and is_london
+    is_sydney_asia_overlap = is_sydney and is_asia
     is_london_open = 7 <= hour < 9
     is_new_york_open = 12 <= hour < 14
     is_comex_open = 13 <= hour < 18
@@ -250,6 +254,15 @@ def _build_session_context_from_datetime(session_dt):
     if is_overlap:
         label = "London / New York Overlap"
         quality = 0.92
+    elif is_frankfurt_london_overlap:
+        label = "Frankfurt / London Overlap"
+        quality = 0.88
+    elif is_sydney_asia_overlap:
+        label = "Sydney / Asia Overlap"
+        quality = 0.68
+    elif is_frankfurt:
+        label = "Frankfurt"
+        quality = 0.74
     elif is_london:
         label = "London"
         quality = 0.84
@@ -258,7 +271,10 @@ def _build_session_context_from_datetime(session_dt):
         quality = 0.8
     elif is_asia:
         label = "Asia"
-        quality = 0.58
+        quality = 0.62
+    elif is_sydney:
+        label = "Sydney"
+        quality = 0.56
 
     if is_london_open or is_new_york_open:
         quality = min(0.96, quality + 0.06)
@@ -270,6 +286,9 @@ def _build_session_context_from_datetime(session_dt):
         "hour": hour,
         "minute": minute,
         "quality": round(quality, 4),
+        "isSydneyOpen": is_sydney,
+        "isAsiaOpen": is_asia,
+        "isFrankfurtOpen": is_frankfurt,
         "isLondonOpen": is_london_open,
         "isNewYorkOpen": is_new_york_open,
         "isComexOpen": is_comex_open,
@@ -3109,6 +3128,9 @@ def build_ta_payload_from_row(
             "hour": int(bar_session_context.get("hour", 0)),
             "minute": int(bar_session_context.get("minute", 0)),
             "quality": round(_safe_float(bar_session_context.get("quality"), 0.46), 4),
+            "isSydneyOpen": bool(bar_session_context.get("isSydneyOpen", False)),
+            "isAsiaOpen": bool(bar_session_context.get("isAsiaOpen", False)),
+            "isFrankfurtOpen": bool(bar_session_context.get("isFrankfurtOpen", False)),
             "isLondonOpen": bool(bar_session_context.get("isLondonOpen", False)),
             "isNewYorkOpen": bool(bar_session_context.get("isNewYorkOpen", False)),
             "isComexOpen": bool(bar_session_context.get("isComexOpen", False)),

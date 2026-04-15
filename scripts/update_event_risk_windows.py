@@ -82,6 +82,71 @@ BLS_WINDOWS = [
 ]
 
 
+@dataclass(frozen=True)
+class MacroReleaseConfig:
+    name: str
+    match_terms: tuple[str, ...]
+    start_pad_minutes: int
+    end_pad_minutes: int
+    reason_template: str
+
+
+NEAR_RELEASE_WINDOWS = [
+    MacroReleaseConfig(
+        name="Initial Jobless Claims",
+        match_terms=("unemployment insurance weekly claims",),
+        start_pad_minutes=20,
+        end_pad_minutes=60,
+        reason_template=(
+            "Release date from the St. Louis Fed FRED all-releases calendar for {date_label} "
+            "({source_label})."
+        ),
+    ),
+    MacroReleaseConfig(
+        name="ADP Employment",
+        match_terms=("adp", "employment"),
+        start_pad_minutes=20,
+        end_pad_minutes=60,
+        reason_template=(
+            "Release date from the St. Louis Fed FRED all-releases calendar for {date_label} "
+            "({source_label})."
+        ),
+    ),
+    MacroReleaseConfig(
+        name="Retail Sales",
+        match_terms=("retail sales",),
+        start_pad_minutes=30,
+        end_pad_minutes=75,
+        reason_template=(
+            "Release date from the St. Louis Fed FRED all-releases calendar for {date_label} "
+            "({source_label})."
+        ),
+    ),
+    MacroReleaseConfig(
+        name="Personal Income and Outlays",
+        match_terms=("personal income and outlays",),
+        start_pad_minutes=30,
+        end_pad_minutes=75,
+        reason_template=(
+            "Release date from the St. Louis Fed FRED all-releases calendar for {date_label} "
+            "({source_label})."
+        ),
+    ),
+    MacroReleaseConfig(
+        name="Gross Domestic Product",
+        match_terms=("gross domestic product",),
+        start_pad_minutes=30,
+        end_pad_minutes=75,
+        reason_template=(
+            "Release date from the St. Louis Fed FRED all-releases calendar for {date_label} "
+            "({source_label})."
+        ),
+    ),
+]
+
+ALL_RELEASES_CALENDAR_URL = "https://fred.stlouisfed.org/releases/calendar?y={year}"
+
+
 def _strip_html(raw_html: str) -> list[str]:
     text = re.sub(r"(?is)<script.*?>.*?</script>", "\n", raw_html)
     text = re.sub(r"(?is)<style.*?>.*?</style>", "\n", text)
@@ -100,6 +165,23 @@ def _format_window(start_et: datetime, config: WindowConfig, reason: str) -> dic
     end_utc = (start_et + timedelta(minutes=config.end_pad_minutes)).astimezone(timezone.utc)
     return {
         "name": config.name,
+        "start": start_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "end": end_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "reason": reason,
+    }
+
+
+def _format_custom_window(
+    start_et: datetime,
+    name: str,
+    start_pad_minutes: int,
+    end_pad_minutes: int,
+    reason: str,
+) -> dict[str, str]:
+    start_utc = (start_et - timedelta(minutes=start_pad_minutes)).astimezone(timezone.utc)
+    end_utc = (start_et + timedelta(minutes=end_pad_minutes)).astimezone(timezone.utc)
+    return {
+        "name": name,
         "start": start_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "end": end_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "reason": reason,
@@ -125,15 +207,21 @@ def _extract_fred_release_datetimes(raw_html: str, release_name: str, target_yea
     release_datetimes: list[datetime] = []
     for idx, line in enumerate(lines):
         date_match = date_pattern.match(line)
-        if not date_match or idx + 1 >= len(lines):
+        if not date_match:
             continue
 
-        time_match = time_pattern.match(lines[idx + 1])
+        cursor = idx + 1
+        while cursor < len(lines) and str(lines[cursor]).lower() == "updated":
+            cursor += 1
+        if cursor >= len(lines):
+            continue
+
+        time_match = time_pattern.match(lines[cursor])
         if not time_match:
             continue
 
-        release_line = lines[idx + 2] if idx + 2 < len(lines) else ""
-        if release_name not in release_line:
+        release_line = lines[cursor + 1] if cursor + 1 < len(lines) else ""
+        if release_name.lower() not in release_line.lower():
             continue
 
         month_name = date_match.group(2)
@@ -146,6 +234,21 @@ def _extract_fred_release_datetimes(raw_html: str, release_name: str, target_yea
         release_datetimes.append(release_dt_ct.astimezone(ET))
 
     return release_datetimes
+
+
+def _load_fred_release_options(year: int) -> list[tuple[int, str]]:
+    response = requests.get(ALL_RELEASES_CALENDAR_URL.format(year=year), timeout=30)
+    response.raise_for_status()
+    options: list[tuple[int, str]] = []
+    for rid_raw, name_raw in re.findall(r'<option\s+value="(\d+)"[^>]*>([^<]+)</option>', response.text, flags=re.IGNORECASE):
+        try:
+            rid = int(rid_raw)
+        except ValueError:
+            continue
+        cleaned_name = " ".join(unescape(name_raw).replace("\xa0", " ").split())
+        if cleaned_name:
+            options.append((rid, cleaned_name))
+    return options
 
 
 def fetch_bls_windows(now_et: datetime, horizon_days: int) -> list[dict[str, str]]:
@@ -172,6 +275,51 @@ def fetch_bls_windows(now_et: datetime, horizon_days: int) -> list[dict[str, str
                         reason=config.reason_template.format(date_label=release_dt.strftime("%B %-d, %Y")),
                     )
                 )
+
+    return windows
+
+
+def fetch_near_macro_windows(now_et: datetime, horizon_days: int) -> list[dict[str, str]]:
+    end_cutoff = now_et + timedelta(days=horizon_days)
+    years = range(now_et.year, end_cutoff.year + 1)
+    windows: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    release_options = _load_fred_release_options(now_et.year)
+    for config in NEAR_RELEASE_WINDOWS:
+        matched_options = [
+            (rid, source_name)
+            for rid, source_name in release_options
+            if all(term in source_name.lower() for term in config.match_terms)
+        ]
+        for rid, source_name in matched_options:
+            for year in years:
+                response = requests.get(_fred_release_url(rid, year), timeout=30)
+                response.raise_for_status()
+                release_datetimes = _extract_fred_release_datetimes(
+                    raw_html=response.text,
+                    release_name=source_name,
+                    target_year=year,
+                )
+                for release_dt in release_datetimes:
+                    if release_dt < now_et or release_dt > end_cutoff:
+                        continue
+                    dedupe_key = (config.name, release_dt.isoformat())
+                    if dedupe_key in seen:
+                        continue
+                    seen.add(dedupe_key)
+                    windows.append(
+                        _format_custom_window(
+                            start_et=release_dt,
+                            name=config.name,
+                            start_pad_minutes=config.start_pad_minutes,
+                            end_pad_minutes=config.end_pad_minutes,
+                            reason=config.reason_template.format(
+                                date_label=release_dt.strftime("%B %-d, %Y"),
+                                source_label=source_name,
+                            ),
+                        )
+                    )
 
     return windows
 
@@ -300,7 +448,20 @@ def build_windows(horizon_days: int, output_path: Path) -> dict[str, list[dict[s
         )
         print(warning, file=sys.stderr)
 
+    try:
+        windows.extend(fetch_near_macro_windows(now_et=now_et, horizon_days=horizon_days))
+    except Exception as exc:
+        warning = (
+            "Warning: failed to refresh near macro windows from the FRED all-releases calendar; "
+            f"continuing without additional near windows. Error: {exc}"
+        )
+        print(warning, file=sys.stderr)
+
     windows.extend(fetch_fomc_windows(now_et=now_et, horizon_days=horizon_days))
+    deduped = {}
+    for item in windows:
+        deduped[(item.get("name"), item.get("start"), item.get("end"))] = item
+    windows = list(deduped.values())
     windows.sort(key=lambda item: item["start"])
     return {"windows": windows}
 

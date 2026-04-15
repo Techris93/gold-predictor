@@ -435,11 +435,17 @@ def compute_event_regime_snapshot(
     # Prefer live event-risk context for runtime responses; row-derived values can be stale
     # when the latest market candle is behind wall clock.
     event_active = bool(event_risk_dict.get("active")) or bool(int(_safe_float(get_value("EVENT_ACTIVE"), 0.0)))
-    minutes_to_next_event = event_risk_dict.get("minutes_to_next_release")
-    if minutes_to_next_event is None:
+    if "minutes_to_next_release" in event_risk_dict:
+        minutes_to_next_event = event_risk_dict.get("minutes_to_next_release")
+    else:
         minutes_to_next_event = get_value("MINUTES_TO_NEXT_EVENT")
     next_event = event_risk_dict.get("next_release_event") or event_risk_dict.get("next_event") or {}
-    if minutes_to_next_event is None and isinstance(next_event, dict) and next_event.get("start"):
+    if (
+        minutes_to_next_event is None
+        and not bool(event_risk_dict.get("calendar_sparse"))
+        and isinstance(next_event, dict)
+        and next_event.get("start")
+    ):
         try:
             anchor_ts = event_risk_dict.get("now_utc")
             if anchor_ts:
@@ -463,6 +469,33 @@ def compute_event_regime_snapshot(
                 minutes_to_next_event = None
     if event_active and minutes_to_next_event is None:
         minutes_to_next_event = 0.0
+
+    next_event_name = ""
+    if isinstance(next_event, dict):
+        next_event_name = str(next_event.get("name") or "").strip()
+
+    near_events = []
+    raw_near_events = event_risk_dict.get("near_releases")
+    if isinstance(raw_near_events, list):
+        for item in raw_near_events[:3]:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip()
+            if not name:
+                continue
+            minutes_raw = item.get("minutes")
+            minutes_val = None
+            if minutes_raw is not None:
+                minutes_val = round(_safe_float(minutes_raw, 0.0), 1)
+            near_events.append({"name": name, "minutes": minutes_val})
+
+    if not near_events and next_event_name and minutes_to_next_event is not None:
+        near_events.append(
+            {
+                "name": next_event_name,
+                "minutes": round(_safe_float(minutes_to_next_event, 0.0), 1),
+            }
+        )
 
     compression_score = 0.0
     if compression_ratio <= 0.55:
@@ -963,6 +996,8 @@ def compute_event_regime_snapshot(
         "cross_asset_bias": cross_asset_summary["bias"],
         "cross_asset_available": cross_asset_summary["available_count"],
         "minutes_to_next_event": round(_safe_float(minutes_to_next_event), 1) if minutes_to_next_event is not None else None,
+        "next_event_name": next_event_name,
+        "near_events": near_events,
         "event_active": event_active,
         "feature_hits": {
             "compression": compression_ratio <= 0.75,

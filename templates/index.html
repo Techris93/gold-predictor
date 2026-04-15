@@ -1801,10 +1801,19 @@
               : null;
         if (!date || Number.isNaN(date.getTime())) return "Off";
         const hour = date.getUTCHours();
-        if (hour >= 12 && hour < 16) return "London / New York Overlap";
-        if (hour >= 7 && hour < 12) return "London";
-        if (hour >= 12 && hour < 21) return "New York";
-        if (hour >= 0 && hour < 7) return "Asia";
+        const isSydney = hour >= 21 || hour < 6;
+        const isAsia = hour >= 0 && hour < 9;
+        const isFrankfurt = hour >= 6 && hour < 8;
+        const isLondon = hour >= 7 && hour < 16;
+        const isNewYork = hour >= 12 && hour < 21;
+        if (isLondon && isNewYork) return "London / New York Overlap";
+        if (isFrankfurt && isLondon) return "Frankfurt / London Overlap";
+        if (isSydney && isAsia) return "Sydney / Asia Overlap";
+        if (isFrankfurt) return "Frankfurt";
+        if (isLondon) return "London";
+        if (isNewYork) return "New York";
+        if (isAsia) return "Asia";
+        if (isSydney) return "Sydney";
         return "Off";
       }
 
@@ -2170,12 +2179,33 @@
         regimeLadderEl.innerText = warningLadderText;
         regimeLadderEl.className = `metric-value ${warningLadderText === "Directional Expansion Likely" || warningLadderText === "Active Momentum Event" ? "value-bullish" : warningLadderText === "High Breakout Risk" ? "value-bearish" : ""}`;
         const crossAssetText = regimeState.cross_asset_bias || "Neutral";
-        const minutesText =
-          regimeState.minutes_to_next_event === null ||
-          regimeState.minutes_to_next_event === undefined
-            ? "n/a"
-            : `${Number(regimeState.minutes_to_next_event).toFixed(0)}m`;
-        regimeContextEl.innerText = `Range ${regimeState.expected_range_expansion || "---"} · Cross-asset ${crossAssetText} · Next event ${minutesText}`;
+        const nextEventName = String(regimeState.next_event_name || "").trim();
+        const nearEvents = Array.isArray(regimeState.near_events)
+          ? regimeState.near_events
+          : [];
+        const minutesRaw = Number(regimeState.minutes_to_next_event);
+        const hasUsableMinutes =
+          Number.isFinite(minutesRaw) && minutesRaw >= 0 && minutesRaw <= 10080;
+        const minutesText = hasUsableMinutes
+          ? `${minutesRaw.toFixed(0)}m`
+          : "n/a";
+        const nextEventText = nextEventName
+          ? `${nextEventName} ${minutesText}`
+          : minutesText;
+        const nearEventsText = nearEvents
+          .slice(0, 2)
+          .map((item) => {
+            const name = String(item?.name || "").trim();
+            const mins = Number(item?.minutes);
+            if (!name) return "";
+            if (Number.isFinite(mins) && mins >= 0) {
+              return `${name} ${mins.toFixed(0)}m`;
+            }
+            return name;
+          })
+          .filter(Boolean)
+          .join(" · ");
+        regimeContextEl.innerText = `Range ${regimeState.expected_range_expansion || "---"} · Cross-asset ${crossAssetText} · Next event ${nextEventText}${nearEventsText ? ` · Near ${nearEventsText}` : ""}`;
         const sessionContextEl = document.getElementById("rs-session");
         if (sessionContextEl) {
           const session = ta.session_context || {};
@@ -2196,9 +2226,10 @@
             barSession.timeDisplayUtc ||
             session.barTimeDisplayUtc ||
             formatUtcTimeShort(barTimestampUtc);
-          const nowUtc = new Date();
-          const currentLabel = getUtcSessionLabel(nowUtc);
-          const currentTimeText = formatUtcTimeShort(nowUtc);
+          const currentLabel =
+            session.currentLabel || getUtcSessionLabel(new Date());
+          const currentTimeText =
+            session.currentTimeDisplayUtc || formatUtcTimeShort(new Date());
           const vwapDelta = Number(structureContext.distSessionVwapPct || 0);
           const orb = Number(structureContext.openingRangeBreak || 0);
           const orbText =
