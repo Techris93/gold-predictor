@@ -1,6 +1,7 @@
 from flask import Flask, jsonify, render_template, request, send_from_directory
 from flask_socketio import SocketIO
 import json
+import math
 import os
 import re
 import threading
@@ -107,7 +108,8 @@ CHANGE_SUMMARY_ORDER = [
     "rr_signal_grade",
     "rr_signal_direction",
     "market_structure",
-    "micro_vwap_delta_pct",
+    "micro_vwap_band",
+    "micro_vwap_bias",
     "micro_orb_state",
     "micro_sweep_state",
     "verdict",
@@ -216,7 +218,8 @@ def _summarize_changes_for_push(changes):
         "rr_signal_grade": "Quant Grade",
         "rr_signal_direction": "RR Direction",
         "market_structure": "Market Structure",
-        "micro_vwap_delta_pct": "VWAP Delta",
+        "micro_vwap_band": "VWAP Band",
+        "micro_vwap_bias": "VWAP Bias",
         "micro_orb_state": "ORB",
         "micro_sweep_state": "Sweep",
         "verdict": "Verdict",
@@ -248,7 +251,7 @@ def _notification_title_for_changes(changes):
     has_rr_status = "rr_signal_status" in changed_keys
     has_rr_grade = "rr_signal_grade" in changed_keys
     has_rr_direction = "rr_signal_direction" in changed_keys
-    has_micro_vwap = "micro_vwap_delta_pct" in changed_keys
+    has_micro_vwap = "micro_vwap_band" in changed_keys or "micro_vwap_bias" in changed_keys
     has_micro_orb = "micro_orb_state" in changed_keys
     has_micro_sweep = "micro_sweep_state" in changed_keys
     has_microstructure = has_micro_vwap or has_micro_orb or has_micro_sweep
@@ -361,15 +364,52 @@ def _sweep_state_label(value):
     return "Bullish" if numeric > 0 else ("Bearish" if numeric < 0 else "None")
 
 
+def _vwap_band_label(value):
+    try:
+        numeric = float(value)
+    except Exception:
+        numeric = 0.0
+    band_floor = math.floor(numeric * 10.0) / 10.0
+    band_ceil = band_floor + 0.1
+    return f"{band_floor:+.1f}% to {band_ceil:+.1f}%"
+
+
+def _vwap_bias_label(value):
+    try:
+        numeric = float(value)
+    except Exception:
+        numeric = 0.0
+    if numeric >= 0.30:
+        return "Bullish"
+    if numeric >= 0.10:
+        return "Mild Bullish"
+    if numeric > -0.10:
+        return "Neutral"
+    if numeric > -0.30:
+        return "Mild Bearish"
+    return "Bearish"
+
+
 def _format_microstructure_change(changes):
     changes = changes if isinstance(changes, dict) else {}
     parts = []
-    vwap_delta = changes.get("micro_vwap_delta_pct")
-    if isinstance(vwap_delta, dict):
-        prev = vwap_delta.get("previous")
-        cur = vwap_delta.get("current")
-        if isinstance(prev, (int, float)) and isinstance(cur, (int, float)):
-            parts.append(f"VWAP {float(prev):.2f}% -> {float(cur):.2f}%")
+    vwap_band_delta = changes.get("micro_vwap_band")
+    vwap_bias_delta = changes.get("micro_vwap_bias")
+    vwap_value_delta = changes.get("micro_vwap_delta_pct")
+    if isinstance(vwap_band_delta, dict) or isinstance(vwap_bias_delta, dict):
+        prev_band = str((vwap_band_delta or {}).get("previous") or "")
+        cur_band = str((vwap_band_delta or {}).get("current") or "")
+        prev_bias = str((vwap_bias_delta or {}).get("previous") or "")
+        cur_bias = str((vwap_bias_delta or {}).get("current") or "")
+        prev_val = (vwap_value_delta or {}).get("previous") if isinstance(vwap_value_delta, dict) else None
+        cur_val = (vwap_value_delta or {}).get("current") if isinstance(vwap_value_delta, dict) else None
+        value_suffix = ""
+        if isinstance(prev_val, (int, float)) and isinstance(cur_val, (int, float)):
+            value_suffix = f" ({float(prev_val):.2f}% -> {float(cur_val):.2f}%)"
+        if prev_band and cur_band and prev_band != cur_band:
+            parts.append(f"VWAP band {prev_band} -> {cur_band}{value_suffix}")
+        elif prev_bias and cur_bias and prev_bias != cur_bias:
+            parts.append(f"VWAP bias {prev_bias} -> {cur_bias}{value_suffix}")
     orb_delta = changes.get("micro_orb_state")
     if isinstance(orb_delta, dict):
         prev_orb = _orb_state_label(orb_delta.get("previous"))
@@ -692,7 +732,8 @@ def _is_material_change(changes):
         "trade_sell_setup",
         "trade_buy_setup",
         "trade_exit_warning",
-        "micro_vwap_delta_pct",
+        "micro_vwap_band",
+        "micro_vwap_bias",
         "micro_orb_state",
         "micro_sweep_state",
     }
@@ -702,6 +743,7 @@ def _is_material_change(changes):
         "ema_50": 0.25,
         "adx_14": 0.4,
         "atr_percent": 0.02,
+        "micro_vwap_delta_pct": 0.10,
     }
 
     for key, delta in changes.items():
@@ -1589,6 +1631,8 @@ def _extract_indicator_snapshot(payload):
         "rr_signal_grade": (rr_signal.get("grade") if isinstance(rr_signal, dict) else None),
         "rr_signal_direction": _effective_rr_direction(rr_signal),
         "micro_vwap_delta_pct": micro_vwap_delta,
+        "micro_vwap_band": _vwap_band_label(micro_vwap_delta),
+        "micro_vwap_bias": _vwap_bias_label(micro_vwap_delta),
         "micro_orb_state": micro_orb_state,
         "micro_sweep_state": micro_sweep_state,
     }
@@ -2042,7 +2086,8 @@ def _indicator_monitor_loop():
                             and bool(market_structure)
                         )
                         microstructure_changed = bool(
-                            "micro_vwap_delta_pct" in notification_changes
+                            "micro_vwap_band" in notification_changes
+                            or "micro_vwap_bias" in notification_changes
                             or "micro_orb_state" in notification_changes
                             or "micro_sweep_state" in notification_changes
                         )
