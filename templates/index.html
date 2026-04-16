@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta
       name="viewport"
-      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
     />
     <title>XAUUSD Predictor</title>
     <!-- PWA manifest (enables iOS add-to-home-screen notifications) -->
@@ -64,6 +64,7 @@
         --neutral: #b5becd;
         --text-main: #eff3fb;
         --text-muted: #8f99ad;
+        --safe-bottom: env(safe-area-inset-bottom, 0px);
       }
 
       * {
@@ -88,14 +89,16 @@
           var(--bg-color);
         color: var(--text-main);
         min-height: 100vh;
+        min-height: 100svh;
+        min-height: 100dvh;
         overflow-x: hidden;
-        padding: 16px 16px calc(20px + env(safe-area-inset-bottom, 0px));
+        padding: 16px 16px calc(24px + var(--safe-bottom));
       }
 
       .app-shell {
         max-width: 860px;
         margin: 0 auto;
-        padding-bottom: calc(30px + env(safe-area-inset-bottom, 0px));
+        padding-bottom: calc(42px + var(--safe-bottom));
       }
 
       .app-header {
@@ -493,6 +496,7 @@
 
       .refresh-btn {
         margin-top: 12px;
+        margin-bottom: 8px;
         width: 100%;
         display: flex;
         align-items: center;
@@ -527,9 +531,13 @@
         display: flex;
         align-items: center;
         justify-content: center;
+        height: 100vh;
+        height: 100svh;
+        height: 100dvh;
         min-height: 100vh;
+        min-height: 100svh;
         min-height: 100dvh;
-        padding: 24px;
+        padding: 24px 24px calc(24px + var(--safe-bottom));
         background: var(--bg-color);
         transition: opacity 0.3s ease;
       }
@@ -638,6 +646,14 @@
       }
 
       @media (max-width: 720px) {
+        body {
+          padding-bottom: calc(30px + var(--safe-bottom));
+        }
+
+        .app-shell {
+          padding-bottom: calc(110px + var(--safe-bottom));
+        }
+
         .info-grid {
           grid-template-columns: 1fr;
         }
@@ -654,6 +670,15 @@
           font-size: 1rem;
           min-height: 54px;
           padding: 13px 16px;
+        }
+
+        .push-feed {
+          position: static;
+          right: auto;
+          bottom: auto;
+          width: 100%;
+          margin-top: 10px;
+          padding-bottom: calc(8px + var(--safe-bottom));
         }
       }
     </style>
