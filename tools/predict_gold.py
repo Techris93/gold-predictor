@@ -104,9 +104,32 @@ def _load_json_config(relative_path, fallback):
     return fallback.copy()
 
 
-ACTIVE_STRATEGY_PARAMS = normalize_strategy_params(
-    _load_json_config("config/strategy_params.json", DEFAULT_STRATEGY_PARAMS)
-)
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+STRATEGY_PARAMS_PATH = os.path.join(BASE_DIR, "config", "strategy_params.json")
+_ACTIVE_STRATEGY_PARAMS_CACHE = {
+    "mtime": None,
+    "params": normalize_strategy_params(DEFAULT_STRATEGY_PARAMS.copy()),
+}
+
+
+def get_active_strategy_params():
+    try:
+        mtime = os.path.getmtime(STRATEGY_PARAMS_PATH)
+    except OSError:
+        mtime = None
+
+    cached = _ACTIVE_STRATEGY_PARAMS_CACHE
+    if cached.get("mtime") == mtime and isinstance(cached.get("params"), dict):
+        return dict(cached["params"])
+
+    params = normalize_strategy_params(
+        _load_json_config("config/strategy_params.json", DEFAULT_STRATEGY_PARAMS)
+    )
+    cached["mtime"] = mtime
+    cached["params"] = params
+    return dict(params)
+
+
 LAST_SUCCESSFUL_TA = None
 LAST_SUCCESSFUL_FRAME = None
 LAST_TA_REFRESH_TS = 0
@@ -115,7 +138,6 @@ LAST_LIVE_PRICE_TS = 0
 LAST_CROSS_ASSET_CONTEXT = None
 LAST_CROSS_ASSET_TS = 0
 MTF_TREND_CACHE = {}
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 EVENT_RISK_CONFIG_PATH = os.path.join(BASE_DIR, "config", "event_risk_windows.json")
 EVENT_COUNTDOWN_LOOKAHEAD_MINUTES = max(
     0,
@@ -129,7 +151,84 @@ TECHNICAL_ANALYSIS_CACHE_SECONDS = max(2, int(os.getenv("TECHNICAL_ANALYSIS_CACH
 MTF_CACHE_SECONDS = max(8, int(os.getenv("MTF_CACHE_SECONDS", "20")))
 CROSS_ASSET_CACHE_SECONDS = max(15, int(os.getenv("CROSS_ASSET_CACHE_SECONDS", "45")))
 LIVE_PRICE_CACHE_SECONDS = max(1, int(os.getenv("LIVE_PRICE_CACHE_SECONDS", "3")))
+LIVE_PRICE_HARD_STALE_SECONDS = max(30, int(os.getenv("LIVE_PRICE_HARD_STALE_SECONDS", "90")))
 TECHNICAL_BASE_INTERVAL = str(os.getenv("TECHNICAL_BASE_INTERVAL", "15min") or "15min").strip().lower()
+INTERVAL_SECONDS = {
+    "15m": 15 * 60,
+    "15min": 15 * 60,
+    "1h": 60 * 60,
+    "4h": 4 * 60 * 60,
+    "1day": 24 * 60 * 60,
+    "1week": 7 * 24 * 60 * 60,
+}
+
+
+def _interval_seconds(interval):
+    return int(INTERVAL_SECONDS.get(str(interval or "").strip().lower(), 60 * 60))
+
+
+def _frame_age_seconds(df, now_ts):
+    if not isinstance(df, pd.DataFrame) or df.empty or not isinstance(df.index, pd.DatetimeIndex):
+        return None
+    try:
+        last_index = df.index[-1]
+        if pd.isna(last_index):
+            return None
+        last_dt = last_index.to_pydatetime()
+        if last_dt.tzinfo is None:
+            last_dt = last_dt.replace(tzinfo=timezone.utc)
+        else:
+            last_dt = last_dt.astimezone(timezone.utc)
+        return max(0, int(now_ts - int(last_dt.timestamp())))
+    except Exception:
+        return None
+
+
+def _merge_data_warning(existing, extra):
+    current = str(existing or "").strip()
+    addition = str(extra or "").strip()
+    if not addition:
+        return current or None
+    if not current:
+        return addition
+    if addition in current:
+        return current
+    return f"{current} {addition}"
+
+
+def _attach_freshness_metadata(result, df, now_ts):
+    if not isinstance(result, dict):
+        return result
+
+    bar_age_seconds = _frame_age_seconds(df, now_ts)
+    freshness_limit_seconds = max(_interval_seconds(TECHNICAL_BASE_INTERVAL) + 120, int(_interval_seconds(TECHNICAL_BASE_INTERVAL) * 1.35))
+    result["bar_age_seconds"] = bar_age_seconds
+    result["freshness_limit_seconds"] = freshness_limit_seconds
+
+    if bar_age_seconds is None or bar_age_seconds > freshness_limit_seconds:
+        result["stale_data"] = True
+        result["data_warning"] = _merge_data_warning(
+            result.get("data_warning"),
+            f"Latest {TECHNICAL_BASE_INTERVAL.upper()} bar is {bar_age_seconds if bar_age_seconds is not None else 'unknown'}s old.",
+        )
+        if "Real-Time" in str(result.get("data_source") or ""):
+            result["data_source"] = "Twelve Data (Delayed Series)"
+
+    live_tick_age_seconds = result.get("live_price_tick_age_seconds")
+    if (
+        result.get("live_price_applied")
+        and isinstance(live_tick_age_seconds, int)
+        and live_tick_age_seconds > LIVE_PRICE_HARD_STALE_SECONDS
+    ):
+        result["stale_data"] = True
+        result["data_warning"] = _merge_data_warning(
+            result.get("data_warning"),
+            f"Live price tick is {int(live_tick_age_seconds)}s old.",
+        )
+        if "Real-Time" in str(result.get("data_source") or ""):
+            result["data_source"] = "Twelve Data (Delayed Tick)"
+
+    return result
 
 
 def _calc_trend_from_close(close_series):
@@ -137,8 +236,9 @@ def _calc_trend_from_close(close_series):
     if close_series is None or len(close_series) < 55:
         return "Neutral"
 
-    ema_short = int(ACTIVE_STRATEGY_PARAMS.get("ema_short", 20))
-    ema_long = int(ACTIVE_STRATEGY_PARAMS.get("ema_long", 50))
+    strategy_params = get_active_strategy_params()
+    ema_short = int(strategy_params.get("ema_short", 20))
+    ema_long = int(strategy_params.get("ema_long", 50))
     ema_20 = ta.trend.EMAIndicator(close_series, window=ema_short).ema_indicator()
     ema_50 = ta.trend.EMAIndicator(close_series, window=ema_long).ema_indicator()
     latest_close = close_series.iloc[-1]
@@ -223,7 +323,11 @@ def _get_live_price_tick(td_symbol, allow_cached=True):
         LAST_LIVE_PRICE_TS = now_ts
         return float(live_price)
 
-    if isinstance(LAST_LIVE_PRICE, (int, float)) and float(LAST_LIVE_PRICE) > 0:
+    if (
+        isinstance(LAST_LIVE_PRICE, (int, float))
+        and float(LAST_LIVE_PRICE) > 0
+        and (now_ts - LAST_LIVE_PRICE_TS) <= LIVE_PRICE_HARD_STALE_SECONDS
+    ):
         return float(LAST_LIVE_PRICE)
     return None
 
@@ -251,7 +355,8 @@ def _apply_live_price_tick(df, live_price):
 
 def _fetch_mtf_trends(td_symbol, h1_trend=None):
     """Fetches multi-timeframe trends strictly from Twelve Data."""
-    mtf_intervals = ACTIVE_STRATEGY_PARAMS.get("mtf_intervals", ["15min", "1h", "4h"])
+    strategy_params = get_active_strategy_params()
+    mtf_intervals = strategy_params.get("mtf_intervals", ["15min", "1h", "4h"])
     m15_interval = mtf_intervals[0] if len(mtf_intervals) > 0 else "15min"
     h1_interval = mtf_intervals[1] if len(mtf_intervals) > 1 else "1h"
     h4_interval = mtf_intervals[2] if len(mtf_intervals) > 2 else "4h"
@@ -464,7 +569,17 @@ def _support_resistance_snapshot(df, latest, prev):
         "reaction": reaction,
     }
 
-def _build_technical_analysis_from_frame(df, td_symbol, now_ts, data_source, served_from_cache=False, stale_data=False, data_warning=None, cache_age_seconds=0):
+def _build_technical_analysis_from_frame(
+    df,
+    td_symbol,
+    now_ts,
+    data_source,
+    served_from_cache=False,
+    stale_data=False,
+    data_warning=None,
+    cache_age_seconds=0,
+    live_price_applied=False,
+):
     if not isinstance(df, pd.DataFrame) or df.empty:
         raise ValueError("Price data frame is empty.")
 
@@ -478,12 +593,13 @@ def _build_technical_analysis_from_frame(df, td_symbol, now_ts, data_source, ser
     if df.empty:
         raise ValueError("Price data is malformed after cleanup.")
 
-    ema_short = int(ACTIVE_STRATEGY_PARAMS.get("ema_short", 20))
-    ema_long = int(ACTIVE_STRATEGY_PARAMS.get("ema_long", 50))
-    rsi_window = int(ACTIVE_STRATEGY_PARAMS.get("rsi_window", 14))
-    atr_window = int(ACTIVE_STRATEGY_PARAMS.get("atr_window", 14))
-    adx_window = int(ACTIVE_STRATEGY_PARAMS.get("adx_window", 14))
-    cmf_window = int(ACTIVE_STRATEGY_PARAMS.get("cmf_window", 14))
+    active_strategy_params = get_active_strategy_params()
+    ema_short = int(active_strategy_params.get("ema_short", 20))
+    ema_long = int(active_strategy_params.get("ema_long", 50))
+    rsi_window = int(active_strategy_params.get("rsi_window", 14))
+    atr_window = int(active_strategy_params.get("atr_window", 14))
+    adx_window = int(active_strategy_params.get("adx_window", 14))
+    cmf_window = int(active_strategy_params.get("cmf_window", 14))
 
     df['EMA_20'] = ta.trend.EMAIndicator(df['Close'], window=ema_short).ema_indicator()
     df['EMA_50'] = ta.trend.EMAIndicator(df['Close'], window=ema_long).ema_indicator()
@@ -513,9 +629,9 @@ def _build_technical_analysis_from_frame(df, td_symbol, now_ts, data_source, ser
     atr_14 = float(latest['ATR_14']) if not pd.isna(latest['ATR_14']) else 0.0
     atr_pct = (atr_14 / latest['Close'] * 100) if latest['Close'] else 0.0
 
-    adx_trending_threshold = float(ACTIVE_STRATEGY_PARAMS.get("adx_trending_threshold", 22))
-    adx_weak_trend_threshold = float(ACTIVE_STRATEGY_PARAMS.get("adx_weak_trend_threshold", 18))
-    atr_trending_pct_threshold = float(ACTIVE_STRATEGY_PARAMS.get("atr_trending_percent_threshold", 0.25))
+    adx_trending_threshold = float(active_strategy_params.get("adx_trending_threshold", 22))
+    adx_weak_trend_threshold = float(active_strategy_params.get("adx_weak_trend_threshold", 18))
+    atr_trending_pct_threshold = float(active_strategy_params.get("atr_trending_percent_threshold", 0.25))
 
     market_regime = "Range-Bound"
     if adx_14 >= adx_trending_threshold and atr_pct >= atr_trending_pct_threshold:
@@ -528,16 +644,16 @@ def _build_technical_analysis_from_frame(df, td_symbol, now_ts, data_source, ser
     df.loc[(df["Close"] < df["EMA_20"]) & (df["EMA_20"] < df["EMA_50"]), "EMA_TREND"] = "Bearish"
     pa_structure, candle_pattern = classify_price_action(df, len(df) - 1)
 
-    rsi_overbought = float(ACTIVE_STRATEGY_PARAMS.get("rsi_overbought", 70))
-    rsi_oversold = float(ACTIVE_STRATEGY_PARAMS.get("rsi_oversold", 20))
+    rsi_overbought = float(active_strategy_params.get("rsi_overbought", 70))
+    rsi_oversold = float(active_strategy_params.get("rsi_oversold", 20))
     rsi_signal = "Neutral"
     if latest['RSI_14'] > rsi_overbought:
         rsi_signal = "Overbought (Bearish bias)"
     elif latest['RSI_14'] < rsi_oversold:
         rsi_signal = "Oversold (Bullish bias)"
 
-    cmf_strong_buy_threshold = float(ACTIVE_STRATEGY_PARAMS.get("cmf_strong_buy_threshold", 0.10))
-    cmf_strong_sell_threshold = float(ACTIVE_STRATEGY_PARAMS.get("cmf_strong_sell_threshold", -0.10))
+    cmf_strong_buy_threshold = float(active_strategy_params.get("cmf_strong_buy_threshold", 0.10))
+    cmf_strong_sell_threshold = float(active_strategy_params.get("cmf_strong_sell_threshold", -0.10))
     volume_signal = "Neutral"
     obv_rising = latest['OBV'] > prev['OBV']
     if latest['CMF_14'] > cmf_strong_buy_threshold and obv_rising:
@@ -597,12 +713,12 @@ def _build_technical_analysis_from_frame(df, td_symbol, now_ts, data_source, ser
             "overall_volume_signal": volume_signal if has_volume else "N/A (Volume data not available for Spot Gold)"
         },
         "data_points_analyzed": len(df),
-        "active_strategy_params": ACTIVE_STRATEGY_PARAMS.copy(),
+        "active_strategy_params": active_strategy_params.copy(),
     }
     if data_warning:
         result["data_warning"] = data_warning
 
-    strategy_params = normalize_strategy_params(ACTIVE_STRATEGY_PARAMS)
+    strategy_params = normalize_strategy_params(active_strategy_params)
     enriched = prepare_historical_features(df, strategy_params)
     latest = enriched.iloc[-1]
     prev = enriched.iloc[-2] if len(enriched) > 1 else latest
@@ -624,8 +740,9 @@ def _build_technical_analysis_from_frame(df, td_symbol, now_ts, data_source, ser
     result["cache_age_seconds"] = max(0, int(cache_age_seconds))
     result["data_points_analyzed"] = len(df)
     result["cross_asset_context"] = cross_asset_context
+    result["live_price_applied"] = bool(live_price_applied)
     result["live_price_tick_age_seconds"] = (max(0, now_ts - LAST_LIVE_PRICE_TS) if LAST_LIVE_PRICE_TS else None)
-    return result
+    return _attach_freshness_metadata(result, df, now_ts)
 
 
 def get_technical_analysis():
@@ -648,11 +765,16 @@ def get_technical_analysis():
                     live_frame,
                     td_symbol=td_symbol,
                     now_ts=now_ts,
-                    data_source="Twelve Data (Live Price + Cached Series Fallback)",
+                    data_source=(
+                        "Twelve Data (Live Price + Cached Series Fallback)"
+                        if live_price is not None
+                        else "Twelve Data (Cached Series Fallback)"
+                    ),
                     served_from_cache=True,
                     stale_data=True,
                     data_warning=error_message,
                     cache_age_seconds=cache_age_seconds,
+                    live_price_applied=live_price is not None,
                 )
             except Exception:
                 pass
@@ -679,10 +801,15 @@ def get_technical_analysis():
                 live_frame,
                 td_symbol=td_symbol,
                 now_ts=now_ts,
-                data_source="Twelve Data (Live Price + Cached Series)",
+                data_source=(
+                    "Twelve Data (Live Price + Cached Series)"
+                    if live_price is not None
+                    else "Twelve Data (Cached Series)"
+                ),
                 served_from_cache=True,
                 stale_data=False,
                 cache_age_seconds=max(0, now_ts - LAST_TA_REFRESH_TS),
+                live_price_applied=live_price is not None,
             )
             LAST_SUCCESSFUL_TA = dict(cached_result)
             return cached_result
@@ -696,6 +823,7 @@ def get_technical_analysis():
     try:
         df = pd.DataFrame()
         last_td_error = None
+        live_price = None
         for _ in range(2):
             try:
                 ts = td_client.time_series(
@@ -722,10 +850,15 @@ def get_technical_analysis():
             df,
             td_symbol=td_symbol,
             now_ts=now_ts,
-            data_source="Twelve Data (Real-Time)",
+            data_source=(
+                "Twelve Data (Real-Time)"
+                if live_price is not None
+                else "Twelve Data (Series Snapshot)"
+            ),
             served_from_cache=False,
             stale_data=False,
             cache_age_seconds=0,
+            live_price_applied=live_price is not None,
         )
         LAST_SUCCESSFUL_FRAME = df.copy()
         LAST_SUCCESSFUL_TA = dict(result)
