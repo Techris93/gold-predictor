@@ -237,13 +237,16 @@ def _build_session_context_from_datetime(session_dt):
     hour = int(normalized_dt.hour)
     minute = int(normalized_dt.minute)
     is_sydney = hour >= 21 or hour < 6
-    is_asia = 0 <= hour < 9
-    is_frankfurt = 6 <= hour < 8
+    is_tokyo = 0 <= hour < 9
+    is_asia = is_tokyo
+    is_frankfurt = 6 <= hour < 15
     is_london = 7 <= hour < 16
     is_new_york = 12 <= hour < 21
     is_overlap = is_london and is_new_york
+    is_tokyo_london_overlap = is_tokyo and is_london
+    is_tokyo_frankfurt_london_overlap = is_tokyo and is_frankfurt and is_london
     is_frankfurt_london_overlap = is_frankfurt and is_london
-    is_sydney_asia_overlap = is_sydney and is_asia
+    is_sydney_tokyo_overlap = is_sydney and is_tokyo
     is_london_open = 7 <= hour < 9
     is_new_york_open = 12 <= hour < 14
     is_comex_open = 13 <= hour < 18
@@ -251,26 +254,32 @@ def _build_session_context_from_datetime(session_dt):
 
     label = "Off"
     quality = 0.46
-    if is_overlap:
+    if is_tokyo_frankfurt_london_overlap:
+        label = "Tokyo / Frankfurt / London Overlap"
+        quality = 0.95
+    elif is_overlap:
         label = "London / New York Overlap"
         quality = 0.92
+    elif is_tokyo_london_overlap:
+        label = "Tokyo / London Overlap"
+        quality = 0.9
     elif is_frankfurt_london_overlap:
         label = "Frankfurt / London Overlap"
-        quality = 0.88
-    elif is_sydney_asia_overlap:
-        label = "Sydney / Asia Overlap"
+        quality = 0.89
+    elif is_sydney_tokyo_overlap:
+        label = "Sydney / Tokyo Overlap"
         quality = 0.68
     elif is_frankfurt:
         label = "Frankfurt"
-        quality = 0.74
+        quality = 0.78
     elif is_london:
         label = "London"
         quality = 0.84
     elif is_new_york:
         label = "New York"
         quality = 0.8
-    elif is_asia:
-        label = "Asia"
+    elif is_tokyo:
+        label = "Tokyo"
         quality = 0.62
     elif is_sydney:
         label = "Sydney"
@@ -287,6 +296,7 @@ def _build_session_context_from_datetime(session_dt):
         "minute": minute,
         "quality": round(quality, 4),
         "isSydneyOpen": is_sydney,
+        "isTokyoOpen": is_tokyo,
         "isAsiaOpen": is_asia,
         "isFrankfurtOpen": is_frankfurt,
         "isLondonOpen": is_london_open,

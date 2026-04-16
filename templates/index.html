@@ -65,6 +65,7 @@
         --text-main: #eff3fb;
         --text-muted: #8f99ad;
         --safe-bottom: env(safe-area-inset-bottom, 0px);
+        --app-height: 100dvh;
       }
 
       * {
@@ -91,6 +92,7 @@
         min-height: 100vh;
         min-height: 100svh;
         min-height: 100dvh;
+        min-height: var(--app-height);
         overflow-x: hidden;
         padding: 16px 16px calc(24px + var(--safe-bottom));
       }
@@ -534,9 +536,11 @@
         height: 100vh;
         height: 100svh;
         height: 100dvh;
+        height: var(--app-height);
         min-height: 100vh;
         min-height: 100svh;
         min-height: 100dvh;
+        min-height: var(--app-height);
         padding: 24px 24px calc(24px + var(--safe-bottom));
         background: var(--bg-color);
         transition: opacity 0.3s ease;
@@ -651,7 +655,7 @@
         }
 
         .app-shell {
-          padding-bottom: calc(110px + var(--safe-bottom));
+          padding-bottom: calc(120px + var(--safe-bottom));
         }
 
         .info-grid {
@@ -1182,6 +1186,47 @@
     <script>
       let indicatorSocket = null;
       let serviceWorkerRegistration = null;
+      let initialPredictionLoaded = false;
+      let predictionRequestInFlight = false;
+      let pendingIndicatorPayload = null;
+      let viewportSyncBound = false;
+
+      function syncViewportHeight() {
+        const visualHeight =
+          window.visualViewport && Number.isFinite(window.visualViewport.height)
+            ? window.visualViewport.height
+            : window.innerHeight;
+        const nextHeight = Math.max(320, Math.round(Number(visualHeight) || 0));
+        if (nextHeight > 0) {
+          document.documentElement.style.setProperty(
+            "--app-height",
+            `${nextHeight}px`,
+          );
+        }
+      }
+
+      function bindViewportHeightSync() {
+        if (viewportSyncBound) return;
+        viewportSyncBound = true;
+        syncViewportHeight();
+        window.addEventListener("resize", syncViewportHeight, {
+          passive: true,
+        });
+        window.addEventListener("orientationchange", syncViewportHeight, {
+          passive: true,
+        });
+        window.addEventListener("pageshow", syncViewportHeight, {
+          passive: true,
+        });
+        if (window.visualViewport) {
+          window.visualViewport.addEventListener("resize", syncViewportHeight, {
+            passive: true,
+          });
+          window.visualViewport.addEventListener("scroll", syncViewportHeight, {
+            passive: true,
+          });
+        }
+      }
 
       function syncAlertsButton() {
         const btn = document.getElementById("enable-alerts-btn");
@@ -1313,12 +1358,58 @@
       let priceFlashTimer = null;
       let suppressNextUiChangeNotification = false;
 
+      function _flushQueuedIndicatorPayload() {
+        if (predictionRequestInFlight || !pendingIndicatorPayload) return;
+        const queuedPayload = pendingIndicatorPayload;
+        pendingIndicatorPayload = null;
+        _applyIndicatorPayload(queuedPayload);
+      }
+
+      function _applyIndicatorPayload(payload) {
+        const title = payload?.title || "XAUUSD Direction / Grade Changed";
+        const body =
+          typeof payload?.message === "string" && payload.message.trim()
+            ? payload.message
+            : summarizeChanges(payload?.changes || {});
+
+        showPushToast(title, body);
+
+        if ("Notification" in window && Notification.permission === "granted") {
+          new Notification(title, {
+            body,
+          });
+        }
+
+        if (hideLoaderTimer) {
+          clearTimeout(hideLoaderTimer);
+          hideLoaderTimer = null;
+        }
+        const loader = document.getElementById("loading-screen");
+        if (loader) {
+          loader.classList.add("hide");
+        }
+
+        const nextData =
+          payload?.data && typeof payload.data === "object"
+            ? payload.data
+            : null;
+        if (nextData && nextData.status === "success") {
+          suppressNextUiChangeNotification = true;
+          updateUI(nextData);
+        } else {
+          suppressNextUiChangeNotification = true;
+          fetchPrediction();
+        }
+      }
+
       async function fetchPrediction() {
         const loader = document.getElementById("loading-screen");
         if (hideLoaderTimer) {
           clearTimeout(hideLoaderTimer);
           hideLoaderTimer = null;
         }
+        predictionRequestInFlight = true;
+        syncViewportHeight();
         loader.classList.remove("hide");
 
         try {
@@ -1337,10 +1428,14 @@
           console.error("Error:", error);
           showInlineError("Check your internet connection or API key.");
         } finally {
+          initialPredictionLoaded = true;
+          predictionRequestInFlight = false;
+          syncViewportHeight();
           // Force loader to hide even if JS crashed
           hideLoaderTimer = setTimeout(() => {
             loader.classList.add("hide");
             hideLoaderTimer = null;
+            _flushQueuedIndicatorPayload();
           }, 250);
         }
       }
@@ -1509,7 +1604,7 @@
         indicatorSocket = io({
           transports: ["websocket", "polling"],
           reconnection: true,
-          reconnectionAttempts: Infinity,
+          reconnectionAttempts: 50,
           reconnectionDelay: 1000,
           reconnectionDelayMax: 5000,
           timeout: 20000,
@@ -1532,34 +1627,11 @@
         });
 
         indicatorSocket.on("indicator_change", (payload) => {
-          const title = payload?.title || "XAUUSD Direction / Grade Changed";
-          const body =
-            typeof payload?.message === "string" && payload.message.trim()
-              ? payload.message
-              : summarizeChanges(payload?.changes || {});
-
-          showPushToast(title, body);
-
-          if (
-            "Notification" in window &&
-            Notification.permission === "granted"
-          ) {
-            new Notification(title, {
-              body,
-            });
+          if (!initialPredictionLoaded || predictionRequestInFlight) {
+            pendingIndicatorPayload = payload;
+            return;
           }
-
-          const nextData =
-            payload?.data && typeof payload.data === "object"
-              ? payload.data
-              : null;
-          if (nextData && nextData.status === "success") {
-            suppressNextUiChangeNotification = true;
-            updateUI(nextData);
-          } else {
-            suppressNextUiChangeNotification = true;
-            fetchPrediction();
-          }
+          _applyIndicatorPayload(payload);
         });
       }
 
@@ -1827,17 +1899,21 @@
         if (!date || Number.isNaN(date.getTime())) return "Off";
         const hour = date.getUTCHours();
         const isSydney = hour >= 21 || hour < 6;
-        const isAsia = hour >= 0 && hour < 9;
-        const isFrankfurt = hour >= 6 && hour < 8;
+        const isTokyo = hour >= 0 && hour < 9;
+        const isAsia = isTokyo;
+        const isFrankfurt = hour >= 6 && hour < 15;
         const isLondon = hour >= 7 && hour < 16;
         const isNewYork = hour >= 12 && hour < 21;
+        if (isTokyo && isFrankfurt && isLondon)
+          return "Tokyo / Frankfurt / London Overlap";
         if (isLondon && isNewYork) return "London / New York Overlap";
+        if (isTokyo && isLondon) return "Tokyo / London Overlap";
         if (isFrankfurt && isLondon) return "Frankfurt / London Overlap";
-        if (isSydney && isAsia) return "Sydney / Asia Overlap";
+        if (isSydney && isTokyo) return "Sydney / Tokyo Overlap";
         if (isFrankfurt) return "Frankfurt";
         if (isLondon) return "London";
         if (isNewYork) return "New York";
-        if (isAsia) return "Asia";
+        if (isTokyo) return "Tokyo";
         if (isSydney) return "Sydney";
         return "Off";
       }
@@ -2533,6 +2609,7 @@
 
       // Fetch on load
       window.addEventListener("DOMContentLoaded", () => {
+        bindViewportHeightSync();
         initAutoresearchToggle();
         setAutoresearchExpanded(false);
         initDecisionChecklistToggle();
