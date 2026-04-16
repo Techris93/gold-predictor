@@ -1458,6 +1458,7 @@
       let predictionRequestInFlight = false;
       let pendingIndicatorPayload = null;
       let viewportSyncBound = false;
+      const ALERTS_ENABLED_STORAGE_KEY = "gold_predictor_push_enabled";
 
       function syncViewportHeight() {
         const visualHeight =
@@ -1496,13 +1497,68 @@
         }
       }
 
-      function syncAlertsButton() {
+      function markPushAlertsEnabled(enabled) {
+        try {
+          if (enabled) {
+            window.localStorage.setItem(ALERTS_ENABLED_STORAGE_KEY, "1");
+          } else {
+            window.localStorage.removeItem(ALERTS_ENABLED_STORAGE_KEY);
+          }
+        } catch (_) {}
+      }
+
+      function hasPersistedPushEnable() {
+        try {
+          return window.localStorage.getItem(ALERTS_ENABLED_STORAGE_KEY) === "1";
+        } catch (_) {
+          return false;
+        }
+      }
+
+      async function hasActivePushSubscription() {
+        if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+          return false;
+        }
+        try {
+          const reg =
+            serviceWorkerRegistration ||
+            (await navigator.serviceWorker.getRegistration("/sw.js")) ||
+            (await navigator.serviceWorker.ready);
+          if (!reg || !reg.pushManager) return false;
+          const sub = await reg.pushManager.getSubscription();
+          return Boolean(sub);
+        } catch (_) {
+          return false;
+        }
+      }
+
+      async function syncAlertsButton() {
         const btn = document.getElementById("enable-alerts-btn");
         if (!btn) return;
         const supported = "Notification" in window;
-        btn.hidden = !(
-          supported && Notification.permission === "default"
-        );
+        if (!supported) {
+          btn.hidden = true;
+          return;
+        }
+
+        if (Notification.permission !== "default") {
+          btn.hidden = true;
+          return;
+        }
+
+        if (hasPersistedPushEnable()) {
+          btn.hidden = true;
+          return;
+        }
+
+        const hasSubscription = await hasActivePushSubscription();
+        if (hasSubscription) {
+          markPushAlertsEnabled(true);
+          btn.hidden = true;
+          return;
+        }
+
+        btn.hidden = false;
       }
 
       function safeText(value, fallback = "---") {
@@ -1666,14 +1722,18 @@
           });
 
           if (saveResp.ok) {
+            markPushAlertsEnabled(true);
             updateBackgroundPushState("Background push: enabled", true);
+            syncAlertsButton();
           } else {
+            markPushAlertsEnabled(false);
             updateBackgroundPushState(
               "Background push: subscribe failed",
               false,
             );
           }
         } catch (_) {
+          markPushAlertsEnabled(false);
           updateBackgroundPushState("Background push: subscribe failed", false);
         }
       }
@@ -1683,7 +1743,6 @@
         if (!("Notification" in window)) return;
         Notification.requestPermission()
           .then((perm) => {
-            syncAlertsButton();
             if (perm === "granted") {
               showPushToast(
                 "Alerts enabled",
@@ -1691,7 +1750,9 @@
               );
               subscribeBackgroundPush();
             } else {
+              markPushAlertsEnabled(false);
               updateBackgroundPushState("Background push: blocked", false);
+              syncAlertsButton();
             }
           })
           .catch(() => {});
