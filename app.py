@@ -211,7 +211,7 @@ def _filter_notification_changes(changes):
 def _summarize_changes_for_push(changes):
     labels = {
         "trade_playbook_stage": "Trade Playbook",
-        "warning_ladder": "Big Move Risk",
+        "warning_ladder": "Warning Ladder",
         "event_regime": "Event Regime",
         "breakout_bias": "Breakout Bias",
         "rr_signal_status": "RR200 Signal",
@@ -390,6 +390,14 @@ def _vwap_bias_label(value):
     return "Bearish"
 
 
+def _format_vwap_microstructure_text(value):
+    try:
+        numeric = float(value)
+    except Exception:
+        numeric = 0.0
+    return f"VWAP {numeric:.2f}% {_vwap_bias_label(numeric)}"
+
+
 def _format_microstructure_change(changes):
     changes = changes if isinstance(changes, dict) else {}
     parts = []
@@ -454,12 +462,13 @@ def _format_bar_session_microstructure(ta_data):
     except Exception:
         sweep = 0
 
-    orb_text = "ORB Bullish" if orb > 0 else ("ORB Bearish" if orb < 0 else "ORB Neutral")
+    vwap_text = _format_vwap_microstructure_text(vwap_delta)
+    orb_text = f"ORB {_orb_state_label(orb)}"
     sweep_text = "Sweep Bullish" if sweep > 0 else ("Sweep Bearish" if sweep < 0 else "No Sweep")
 
     return (
         f"Bar {bar_label} {bar_time} · Now {current_label} {current_time} "
-        f"· VWAP {vwap_delta:.2f}% · {orb_text} · {sweep_text}"
+        f"· {vwap_text} · {orb_text} · {sweep_text}"
     )
 
 
@@ -909,13 +918,13 @@ def _evaluate_decision_status(verdict, confidence, ta_data, trade_guidance):
             blocked_reasons.append(f"the market regime is {regime.lower()}")
         blocked_reason = " and ".join(blocked_reasons) if blocked_reasons else None
         if action_state == "SETUP_LONG":
-            text = "Long setup forming. Bias is constructive, but trigger confirmation is still pending."
+            text = "Long setup forming. Bullish bias is developing, but trigger confirmation is still pending."
             status = "wait"
         elif action_state == "LONG_ACTIVE":
             text = "Safer to look for a buy. Long state is confirmed with acceptable tradeability."
             status = "buy"
         elif action_state == "SETUP_SHORT":
-            text = "Short setup forming. Bias is constructive, but trigger confirmation is still pending."
+            text = "Short setup forming. Bearish bias is developing, but trigger confirmation is still pending."
             status = "wait"
         elif action_state == "SHORT_ACTIVE":
             text = "Safer to look for a sell. Short state is confirmed with acceptable tradeability."
@@ -1038,13 +1047,21 @@ def _evaluate_execution_permission(decision_status, market_state):
     text = "No trade. Conditions are not clean enough yet."
     status = "no_trade"
 
-    if action_state in {"LONG_ACTIVE", "SHORT_ACTIVE"} and decision_kind in {"buy", "sell"}:
+    directional_entry_confirmed = (
+        (action_state == "LONG_ACTIVE" and decision_kind == "buy")
+        or (action_state == "SHORT_ACTIVE" and decision_kind == "sell")
+    )
+
+    if directional_entry_confirmed:
         text = (
             "Entry Allowed: buy conditions are confirmed."
             if action_state == "LONG_ACTIVE"
             else "Entry Allowed: sell conditions are confirmed."
         )
         status = "entry_allowed"
+    elif action_state in {"LONG_ACTIVE", "SHORT_ACTIVE"} and decision_kind in {"buy", "sell"}:
+        text = "No trade. Execution state and checklist direction are not aligned yet."
+        status = "no_trade"
     elif action_state in {"SETUP_LONG", "SETUP_SHORT"}:
         text = "Watchlist Only: setup is forming, but execution is not confirmed yet."
         status = "watchlist_only"
@@ -2130,6 +2147,14 @@ def _indicator_monitor_loop():
                         should_alert = bool(
                             market_structure_changed
                             or microstructure_changed
+                            or warning_changed
+                            or event_regime_changed
+                            or breakout_bias_changed
+                            or verdict_changed
+                            or confidence_changed
+                            or execution_permission_changed
+                            or entry_readiness_changed
+                            or exit_urgency_changed
                             or rr_signal_status_changed
                             or rr_signal_grade_changed
                             or rr_signal_direction_changed

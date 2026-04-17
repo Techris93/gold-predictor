@@ -3,9 +3,24 @@ from __future__ import annotations
 import math
 from datetime import timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
+
+LONDON_TZ = ZoneInfo("Europe/London")
+NEW_YORK_TZ = ZoneInfo("America/New_York")
+VWAP_BIAS_THRESHOLD_PCT = 0.10
+VWAP_DISLOCATION_MINOR_PCT = 0.10
+VWAP_DISLOCATION_MAJOR_PCT = 0.30
+SWEEP_MIN_EXCURSION_ATR_RATIO = 0.06
+SWEEP_MIN_EXCURSION_CLOSE_RATIO = 0.00008
+SWEEP_MIN_RECLAIM_ATR_RATIO = 0.03
+SWEEP_MIN_RECLAIM_CLOSE_RATIO = 0.00005
+SWEEP_MIN_CLOSE_LOCATION = 0.55
+SWEEP_MAX_CLOSE_LOCATION = 0.45
+SWEEP_MIN_BODY_RATIO = 0.12
+SWEEP_HOLD_BARS = 2
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -182,23 +197,36 @@ def annotate_event_regime_features(frame: pd.DataFrame, event_windows: list[dict
         annotated["SESSION_REOPEN"] = (session_gap_hours.fillna(0) > 12).astype(int).values
 
         session_day = idx.tz_convert(timezone.utc).date
+        utc_hour = idx.hour
+        utc_minute = idx.minute
+        london_local = idx.tz_convert(LONDON_TZ)
+        new_york_local = idx.tz_convert(NEW_YORK_TZ)
         temp = pd.DataFrame(index=annotated.index)
         temp["High"] = annotated["High"]
         temp["Low"] = annotated["Low"]
         temp["session_day"] = session_day
-        temp["hour"] = idx.hour
-        temp["minute"] = idx.minute
+        temp["hour"] = utc_hour
+        temp["minute"] = utc_minute
+        temp["london_local_hour"] = london_local.hour
+        temp["new_york_local_hour"] = new_york_local.hour
 
-        annotated["UTC_HOUR"] = idx.hour
-        annotated["UTC_MINUTE"] = idx.minute
-        overlap_mask = (idx.hour >= 12) & (idx.hour < 16)
-        london_mask = (idx.hour >= 7) & (idx.hour < 12)
-        ny_mask = (idx.hour >= 12) & (idx.hour < 21)
-        asia_mask = (idx.hour >= 0) & (idx.hour < 7)
-        annotated["IS_LONDON_OPEN"] = ((idx.hour >= 7) & (idx.hour < 9)).astype(int)
-        annotated["IS_NEW_YORK_OPEN"] = ((idx.hour >= 12) & (idx.hour < 14)).astype(int)
-        annotated["IS_COMEX_OPEN"] = ((idx.hour >= 13) & (idx.hour < 18)).astype(int)
-        annotated["IS_FIX_WINDOW"] = ((idx.hour == 15) | ((idx.hour == 14) & (idx.minute >= 45))).astype(int)
+        annotated["UTC_HOUR"] = utc_hour
+        annotated["UTC_MINUTE"] = utc_minute
+        overlap_mask = (
+            (london_local.hour >= 8)
+            & (london_local.hour < 17)
+            & (new_york_local.hour >= 8)
+            & (new_york_local.hour < 17)
+        )
+        london_mask = (london_local.hour >= 8) & (london_local.hour < 17)
+        ny_mask = (new_york_local.hour >= 8) & (new_york_local.hour < 17)
+        asia_mask = (utc_hour >= 0) & (utc_hour < 9)
+        annotated["IS_LONDON_OPEN"] = ((london_local.hour >= 8) & (london_local.hour < 10)).astype(int)
+        annotated["IS_NEW_YORK_OPEN"] = ((new_york_local.hour >= 8) & (new_york_local.hour < 10)).astype(int)
+        annotated["IS_COMEX_OPEN"] = ((new_york_local.hour >= 9) & (new_york_local.hour < 14)).astype(int)
+        annotated["IS_FIX_WINDOW"] = (
+            (london_local.hour == 16) | ((london_local.hour == 15) & (london_local.minute >= 45))
+        ).astype(int)
         annotated["IS_LONDON_NY_OVERLAP"] = overlap_mask.astype(int)
         annotated["SESSION_LABEL"] = np.select(
             [overlap_mask, london_mask, ny_mask, asia_mask],
@@ -215,7 +243,7 @@ def annotate_event_regime_features(frame: pd.DataFrame, event_windows: list[dict
         annotated["SESSION_VWAP"] = cumulative_value / cumulative_weight.replace(0, np.nan)
         annotated["DIST_SESSION_VWAP_PCT"] = (
             (annotated["Close"] - annotated["SESSION_VWAP"])
-            / annotated["Close"].replace(0, np.nan)
+            / annotated["SESSION_VWAP"].replace(0, np.nan)
             * 100.0
         )
 
@@ -224,19 +252,19 @@ def annotate_event_regime_features(frame: pd.DataFrame, event_windows: list[dict
         asian_range = (asian_high - asian_low).replace(0, np.nan)
         annotated["ASIAN_RANGE_POSITION"] = ((annotated["Close"] - asian_low) / asian_range).replace([np.inf, -np.inf], np.nan)
 
-        london_or_high = temp["High"].where(temp["hour"] == 7).groupby(temp["session_day"]).transform("max")
-        london_or_low = temp["Low"].where(temp["hour"] == 7).groupby(temp["session_day"]).transform("min")
-        ny_or_high = temp["High"].where(temp["hour"] == 12).groupby(temp["session_day"]).transform("max")
-        ny_or_low = temp["Low"].where(temp["hour"] == 12).groupby(temp["session_day"]).transform("min")
+        london_or_high = temp["High"].where(temp["london_local_hour"] == 8).groupby(temp["session_day"]).transform("max")
+        london_or_low = temp["Low"].where(temp["london_local_hour"] == 8).groupby(temp["session_day"]).transform("min")
+        ny_or_high = temp["High"].where(temp["new_york_local_hour"] == 8).groupby(temp["session_day"]).transform("max")
+        ny_or_low = temp["Low"].where(temp["new_york_local_hour"] == 8).groupby(temp["session_day"]).transform("min")
         annotated["LONDON_OPEN_RANGE_HIGH"] = london_or_high
         annotated["LONDON_OPEN_RANGE_LOW"] = london_or_low
         annotated["NY_OPEN_RANGE_HIGH"] = ny_or_high
         annotated["NY_OPEN_RANGE_LOW"] = ny_or_low
         annotated["OPENING_RANGE_BREAK"] = 0
-        london_break_up = (temp["hour"] >= 8) & london_or_high.notna() & (annotated["Close"] > london_or_high)
-        london_break_down = (temp["hour"] >= 8) & london_or_low.notna() & (annotated["Close"] < london_or_low)
-        ny_break_up = (temp["hour"] >= 13) & ny_or_high.notna() & (annotated["Close"] > ny_or_high)
-        ny_break_down = (temp["hour"] >= 13) & ny_or_low.notna() & (annotated["Close"] < ny_or_low)
+        london_break_up = (temp["london_local_hour"] >= 9) & london_or_high.notna() & (annotated["Close"] > london_or_high)
+        london_break_down = (temp["london_local_hour"] >= 9) & london_or_low.notna() & (annotated["Close"] < london_or_low)
+        ny_break_up = (temp["new_york_local_hour"] >= 9) & ny_or_high.notna() & (annotated["Close"] > ny_or_high)
+        ny_break_down = (temp["new_york_local_hour"] >= 9) & ny_or_low.notna() & (annotated["Close"] < ny_or_low)
         annotated.loc[london_break_up | ny_break_up, "OPENING_RANGE_BREAK"] = 1
         annotated.loc[london_break_down | ny_break_down, "OPENING_RANGE_BREAK"] = -1
 
@@ -267,17 +295,80 @@ def annotate_event_regime_features(frame: pd.DataFrame, event_windows: list[dict
         annotated["DIST_PRIOR_WEEK_LOW_PCT"] = (
             (annotated["Close"] - annotated["PRIOR_WEEK_LOW"]) / annotated["Close"].replace(0, np.nan) * 100.0
         )
+        open_prices = annotated["Open"] if "Open" in annotated.columns else annotated["Close"]
+        candle_range = (annotated["High"] - annotated["Low"]).replace(0, np.nan)
+        close_location = ((annotated["Close"] - annotated["Low"]) / candle_range).clip(0.0, 1.0)
+        body_ratio = ((annotated["Close"] - open_prices).abs() / candle_range).replace([np.inf, -np.inf], np.nan).fillna(0.0)
+        atr_reference = annotated["ATR_14"].where(annotated["ATR_14"] > 0.0, annotated["TRUE_RANGE"]).fillna(candle_range)
+        excursion_buffer = pd.Series(
+            np.maximum(
+                atr_reference.fillna(0.0) * SWEEP_MIN_EXCURSION_ATR_RATIO,
+                annotated["Close"].abs().fillna(0.0) * SWEEP_MIN_EXCURSION_CLOSE_RATIO,
+            ),
+            index=annotated.index,
+        )
+        reclaim_buffer = pd.Series(
+            np.maximum(
+                atr_reference.fillna(0.0) * SWEEP_MIN_RECLAIM_ATR_RATIO,
+                annotated["Close"].abs().fillna(0.0) * SWEEP_MIN_RECLAIM_CLOSE_RATIO,
+            ),
+            index=annotated.index,
+        )
+
         annotated["SWEEP_RECLAIM_SIGNAL"] = 0
-        bullish_sweep = (
-            (annotated["PRIOR_DAY_LOW"].notna() & (annotated["Low"] < annotated["PRIOR_DAY_LOW"]) & (annotated["Close"] > annotated["PRIOR_DAY_LOW"]))
-            | (annotated["PRIOR_WEEK_LOW"].notna() & (annotated["Low"] < annotated["PRIOR_WEEK_LOW"]) & (annotated["Close"] > annotated["PRIOR_WEEK_LOW"]))
+        annotated["SWEEP_RECLAIM_QUALITY"] = 0.0
+
+        bullish_day_excursion = (annotated["PRIOR_DAY_LOW"] - annotated["Low"]).where(annotated["PRIOR_DAY_LOW"].notna(), np.nan)
+        bullish_week_excursion = (annotated["PRIOR_WEEK_LOW"] - annotated["Low"]).where(annotated["PRIOR_WEEK_LOW"].notna(), np.nan)
+        bullish_day_reclaim = (annotated["Close"] - annotated["PRIOR_DAY_LOW"]).where(annotated["PRIOR_DAY_LOW"].notna(), np.nan)
+        bullish_week_reclaim = (annotated["Close"] - annotated["PRIOR_WEEK_LOW"]).where(annotated["PRIOR_WEEK_LOW"].notna(), np.nan)
+        bearish_day_excursion = (annotated["High"] - annotated["PRIOR_DAY_HIGH"]).where(annotated["PRIOR_DAY_HIGH"].notna(), np.nan)
+        bearish_week_excursion = (annotated["High"] - annotated["PRIOR_WEEK_HIGH"]).where(annotated["PRIOR_WEEK_HIGH"].notna(), np.nan)
+        bearish_day_reclaim = (annotated["PRIOR_DAY_HIGH"] - annotated["Close"]).where(annotated["PRIOR_DAY_HIGH"].notna(), np.nan)
+        bearish_week_reclaim = (annotated["PRIOR_WEEK_HIGH"] - annotated["Close"]).where(annotated["PRIOR_WEEK_HIGH"].notna(), np.nan)
+
+        bullish_excursion = pd.concat([bullish_day_excursion, bullish_week_excursion], axis=1).max(axis=1).clip(lower=0.0)
+        bullish_reclaim = pd.concat([bullish_day_reclaim, bullish_week_reclaim], axis=1).max(axis=1).clip(lower=0.0)
+        bearish_excursion = pd.concat([bearish_day_excursion, bearish_week_excursion], axis=1).max(axis=1).clip(lower=0.0)
+        bearish_reclaim = pd.concat([bearish_day_reclaim, bearish_week_reclaim], axis=1).max(axis=1).clip(lower=0.0)
+
+        excursion_scale = excursion_buffer.replace(0.0, np.nan)
+        reclaim_scale = reclaim_buffer.replace(0.0, np.nan)
+        bullish_quality = (
+            (bullish_excursion.div(excursion_scale).clip(lower=0.0, upper=2.0).fillna(0.0) / 2.0) * 0.40
+            + (bullish_reclaim.div(reclaim_scale).clip(lower=0.0, upper=2.0).fillna(0.0) / 2.0) * 0.35
+            + (((close_location - 0.5) / 0.5).clip(lower=0.0, upper=1.0).fillna(0.0)) * 0.15
+            + (((body_ratio - SWEEP_MIN_BODY_RATIO) / max(1e-6, 1.0 - SWEEP_MIN_BODY_RATIO)).clip(lower=0.0, upper=1.0).fillna(0.0)) * 0.10
+        ).clip(lower=0.0, upper=1.0)
+        bearish_quality = (
+            (bearish_excursion.div(excursion_scale).clip(lower=0.0, upper=2.0).fillna(0.0) / 2.0) * 0.40
+            + (bearish_reclaim.div(reclaim_scale).clip(lower=0.0, upper=2.0).fillna(0.0) / 2.0) * 0.35
+            + ((((0.5 - close_location) / 0.5).clip(lower=0.0, upper=1.0)).fillna(0.0)) * 0.15
+            + (((body_ratio - SWEEP_MIN_BODY_RATIO) / max(1e-6, 1.0 - SWEEP_MIN_BODY_RATIO)).clip(lower=0.0, upper=1.0).fillna(0.0)) * 0.10
+        ).clip(lower=0.0, upper=1.0)
+
+        bullish_sweep_raw = (
+            (bullish_excursion >= excursion_buffer)
+            & (bullish_reclaim >= reclaim_buffer)
+            & (close_location >= SWEEP_MIN_CLOSE_LOCATION)
+            & (body_ratio >= SWEEP_MIN_BODY_RATIO)
         )
-        bearish_sweep = (
-            (annotated["PRIOR_DAY_HIGH"].notna() & (annotated["High"] > annotated["PRIOR_DAY_HIGH"]) & (annotated["Close"] < annotated["PRIOR_DAY_HIGH"]))
-            | (annotated["PRIOR_WEEK_HIGH"].notna() & (annotated["High"] > annotated["PRIOR_WEEK_HIGH"]) & (annotated["Close"] < annotated["PRIOR_WEEK_HIGH"]))
+        bearish_sweep_raw = (
+            (bearish_excursion >= excursion_buffer)
+            & (bearish_reclaim >= reclaim_buffer)
+            & (close_location <= SWEEP_MAX_CLOSE_LOCATION)
+            & (body_ratio >= SWEEP_MIN_BODY_RATIO)
         )
-        annotated.loc[bullish_sweep, "SWEEP_RECLAIM_SIGNAL"] = 1
-        annotated.loc[bearish_sweep, "SWEEP_RECLAIM_SIGNAL"] = -1
+        bullish_sweep = bullish_sweep_raw.rolling(SWEEP_HOLD_BARS, min_periods=1).max().fillna(0).astype(bool)
+        bearish_sweep = bearish_sweep_raw.rolling(SWEEP_HOLD_BARS, min_periods=1).max().fillna(0).astype(bool)
+        bullish_quality_hold = bullish_quality.where(bullish_sweep_raw, 0.0).rolling(SWEEP_HOLD_BARS, min_periods=1).max().fillna(0.0)
+        bearish_quality_hold = bearish_quality.where(bearish_sweep_raw, 0.0).rolling(SWEEP_HOLD_BARS, min_periods=1).max().fillna(0.0)
+        bullish_active = bullish_sweep & (bullish_quality_hold >= bearish_quality_hold)
+        bearish_active = bearish_sweep & (bearish_quality_hold > bullish_quality_hold)
+        annotated.loc[bullish_active, "SWEEP_RECLAIM_SIGNAL"] = 1
+        annotated.loc[bearish_active, "SWEEP_RECLAIM_SIGNAL"] = -1
+        annotated.loc[bullish_active, "SWEEP_RECLAIM_QUALITY"] = bullish_quality_hold[bullish_active]
+        annotated.loc[bearish_active, "SWEEP_RECLAIM_QUALITY"] = bearish_quality_hold[bearish_active]
 
     annotated = _annotate_event_calendar_features(annotated, event_windows=event_windows)
     return annotated
@@ -408,6 +499,7 @@ def compute_event_regime_snapshot(
     dist_session_vwap = _safe_float(get_value("DIST_SESSION_VWAP_PCT"), 0.0)
     opening_range_break = int(_safe_float(get_value("OPENING_RANGE_BREAK"), 0.0))
     sweep_reclaim_signal = int(_safe_float(get_value("SWEEP_RECLAIM_SIGNAL"), 0.0))
+    sweep_reclaim_quality = _safe_float(get_value("SWEEP_RECLAIM_QUALITY"), 0.0)
     is_london_open = bool(int(_safe_float(get_value("IS_LONDON_OPEN"), 0.0)))
     is_new_york_open = bool(int(_safe_float(get_value("IS_NEW_YORK_OPEN"), 0.0)))
     is_comex_open = bool(int(_safe_float(get_value("IS_COMEX_OPEN"), 0.0)))
@@ -434,7 +526,10 @@ def compute_event_regime_snapshot(
     event_risk_dict = event_risk if isinstance(event_risk, dict) else {}
     # Prefer live event-risk context for runtime responses; row-derived values can be stale
     # when the latest market candle is behind wall clock.
-    event_active = bool(event_risk_dict.get("active")) or bool(int(_safe_float(get_value("EVENT_ACTIVE"), 0.0)))
+    if "active" in event_risk_dict and event_risk_dict.get("active") is not None:
+        event_active = bool(event_risk_dict.get("active"))
+    else:
+        event_active = bool(int(_safe_float(get_value("EVENT_ACTIVE"), 0.0)))
     if "minutes_to_next_release" in event_risk_dict:
         minutes_to_next_event = event_risk_dict.get("minutes_to_next_release")
     else:
@@ -550,9 +645,14 @@ def compute_event_regime_snapshot(
     if rsi_bullish_divergence or rsi_bearish_divergence:
         momentum_signal_score += 4.0
 
-    vwap_dislocation_score = 5.0 if abs(dist_session_vwap) >= 0.18 else (2.5 if abs(dist_session_vwap) >= 0.08 else 0.0)
+    vwap_dislocation_score = (
+        5.0
+        if abs(dist_session_vwap) >= VWAP_DISLOCATION_MAJOR_PCT
+        else (2.5 if abs(dist_session_vwap) >= VWAP_DISLOCATION_MINOR_PCT else 0.0)
+    )
     opening_range_score = 7.0 if opening_range_break != 0 else 0.0
-    sweep_reclaim_score = 7.0 if sweep_reclaim_signal != 0 else 0.0
+    sweep_signal_strength = min(max(sweep_reclaim_quality, 0.0), 1.0) if sweep_reclaim_signal != 0 else 0.0
+    sweep_reclaim_score = (4.0 + (3.0 * sweep_signal_strength)) if sweep_reclaim_signal != 0 else 0.0
     session_score = 0.0
     if is_overlap:
         session_score = 10.0
@@ -617,8 +717,10 @@ def compute_event_regime_snapshot(
             off_session_noise_penalty += 4.0
         if opening_range_break == 0 and sweep_reclaim_signal == 0 and not cross_asset_confluence:
             off_session_noise_penalty += 2.0
-        if abs(dist_session_vwap) < 0.18:
+        if abs(dist_session_vwap) < VWAP_DISLOCATION_MINOR_PCT:
             off_session_noise_penalty += 1.0
+        elif abs(dist_session_vwap) < VWAP_DISLOCATION_MAJOR_PCT:
+            off_session_noise_penalty += 0.5
         if volume_spike:
             off_session_noise_penalty = max(0.0, off_session_noise_penalty - 2.0)
 
@@ -678,18 +780,18 @@ def compute_event_regime_snapshot(
         bullish_bias += 0.4
     elif gap_pct < 0:
         bearish_bias += 0.4
-    if dist_session_vwap >= 0.08:
+    if dist_session_vwap >= VWAP_BIAS_THRESHOLD_PCT:
         bullish_bias += 0.35
-    elif dist_session_vwap <= -0.08:
+    elif dist_session_vwap <= -VWAP_BIAS_THRESHOLD_PCT:
         bearish_bias += 0.35
     if opening_range_break > 0:
         bullish_bias += 0.85
     elif opening_range_break < 0:
         bearish_bias += 0.85
     if sweep_reclaim_signal > 0:
-        bullish_bias += 0.75
+        bullish_bias += 0.35 + (0.40 * sweep_signal_strength)
     elif sweep_reclaim_signal < 0:
-        bearish_bias += 0.75
+        bearish_bias += 0.35 + (0.40 * sweep_signal_strength)
     if macd_hist_slope > 0.0:
         bullish_bias += 0.45
         if macd_hist > 0.0:
@@ -877,6 +979,8 @@ def compute_event_regime_snapshot(
             event_regime = "range_expansion"
     elif warning_ladder in {"Directional Expansion Likely", "High Breakout Risk"}:
         event_regime = "breakout_watch"
+    elif warning_ladder == "Expansion Watch" and breakout_bias != "Neutral":
+        event_regime = "breakout_watch"
 
     fakeout_risk_score = 0.0
     if warning_ladder in {"Expansion Watch", "High Breakout Risk"}:
@@ -908,7 +1012,7 @@ def compute_event_regime_snapshot(
         + (0.12 if vol_of_vol >= 0.08 else 0.0)
         + (0.10 if session_reopen else 0.0)
         + (0.10 if is_new_york_open or is_comex_open else 0.0)
-        + (0.08 if abs(dist_session_vwap) >= 0.18 else 0.0)
+        + (0.08 if abs(dist_session_vwap) >= VWAP_DISLOCATION_MAJOR_PCT else 0.0)
         + (0.06 if warning_ladder == "Active Momentum Event" else 0.0),
         0.0,
         1.0,
@@ -970,15 +1074,10 @@ def compute_event_regime_snapshot(
             stable_event_regime = "range_expansion"
     elif stable_warning_ladder in {"Directional Expansion Likely", "High Breakout Risk"}:
         stable_event_regime = "breakout_watch"
+    elif stable_warning_ladder == "Expansion Watch" and stable_breakout_bias != "Neutral":
+        stable_event_regime = "breakout_watch"
     else:
         stable_event_regime = "normal"
-
-    if (
-        prev_event_regime == "breakout_watch"
-        and stable_event_regime == "normal"
-        and warning_dwell_bars < max(1, int(min_warning_dwell_bars))
-    ):
-        stable_event_regime = prev_event_regime
 
     return {
         "big_move_risk": round(big_move_score, 2),
@@ -1023,7 +1122,7 @@ def compute_event_regime_snapshot(
             "fakeout_risk": fakeout_risk_score >= 3.0,
             "opening_range_break": opening_range_break != 0,
             "sweep_reclaim": sweep_reclaim_signal != 0,
-            "session_vwap_dislocation": abs(dist_session_vwap) >= 0.08,
+            "session_vwap_dislocation": abs(dist_session_vwap) >= VWAP_DISLOCATION_MINOR_PCT,
             "session_liquidity_window": is_london_open or is_new_york_open or is_comex_open or is_overlap,
         },
         "components": {
@@ -1039,6 +1138,7 @@ def compute_event_regime_snapshot(
             "vwap_dislocation_score": round(vwap_dislocation_score, 2),
             "opening_range_score": round(opening_range_score, 2),
             "sweep_reclaim_score": round(sweep_reclaim_score, 2),
+            "sweep_reclaim_quality": round(sweep_signal_strength, 3),
             "session_score": round(session_score, 2),
             "calendar_score": round(calendar_score, 2),
             "cross_asset_score": round(cross_asset_score, 2),

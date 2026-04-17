@@ -490,6 +490,10 @@
         color: var(--bearish);
       }
 
+      .value-watch {
+        color: #b27300;
+      }
+
       .decision-card {
         margin-top: 14px;
         padding-top: 14px;
@@ -2204,8 +2208,16 @@
           execution_permission: "Execution Permission",
           verdict: "Verdict",
           confidence: "Confidence",
+          confidence_bucket: "Confidence",
           trend: "Trend",
           market_structure: "Market Structure",
+          warning_ladder: "Warning Ladder",
+          event_regime: "Event Regime",
+          breakout_bias: "Breakout Bias",
+          micro_vwap_band: "VWAP Band",
+          micro_vwap_bias: "VWAP Bias",
+          micro_orb_state: "ORB",
+          micro_sweep_state: "Sweep",
           rsi_14: "RSI",
           ema_20: "EMA 20",
           ema_50: "EMA 50",
@@ -2549,6 +2561,33 @@
         });
       }
 
+      const timeZoneClockFormatters = new Map();
+
+      function getTimeZoneClockParts(dateValue, timeZone) {
+        const date =
+          dateValue instanceof Date
+            ? dateValue
+            : dateValue
+              ? new Date(dateValue)
+              : null;
+        if (!date || Number.isNaN(date.getTime())) return null;
+        let formatter = timeZoneClockFormatters.get(timeZone);
+        if (!formatter) {
+          formatter = new Intl.DateTimeFormat("en-GB", {
+            timeZone,
+            hour: "2-digit",
+            minute: "2-digit",
+            hour12: false,
+          });
+          timeZoneClockFormatters.set(timeZone, formatter);
+        }
+        const parts = formatter.formatToParts(date);
+        const hour = Number(parts.find((part) => part.type === "hour")?.value);
+        const minute = Number(parts.find((part) => part.type === "minute")?.value);
+        if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null;
+        return { hour, minute };
+      }
+
       function getUtcSessionLabel(dateValue) {
         const date =
           dateValue instanceof Date
@@ -2558,12 +2597,21 @@
               : null;
         if (!date || Number.isNaN(date.getTime())) return "Off";
         const hour = date.getUTCHours();
+        const frankfurtParts = getTimeZoneClockParts(date, "Europe/Berlin");
+        const londonParts = getTimeZoneClockParts(date, "Europe/London");
+        const newYorkParts = getTimeZoneClockParts(date, "America/New_York");
         const isSydney = hour >= 21 || hour < 6;
         const isTokyo = hour >= 0 && hour < 9;
         const isAsia = isTokyo;
-        const isFrankfurt = hour >= 6 && hour < 15;
-        const isLondon = hour >= 7 && hour < 16;
-        const isNewYork = hour >= 12 && hour < 21;
+        const isFrankfurt = frankfurtParts
+          ? frankfurtParts.hour >= 8 && frankfurtParts.hour < 17
+          : hour >= 6 && hour < 15;
+        const isLondon = londonParts
+          ? londonParts.hour >= 8 && londonParts.hour < 17
+          : hour >= 7 && hour < 16;
+        const isNewYork = newYorkParts
+          ? newYorkParts.hour >= 8 && newYorkParts.hour < 17
+          : hour >= 12 && hour < 21;
         if (isTokyo && isFrankfurt && isLondon)
           return "Tokyo / Frankfurt / London Overlap";
         if (isLondon && isNewYork) return "London / New York Overlap";
@@ -2576,6 +2624,49 @@
         if (isTokyo) return "Tokyo";
         if (isSydney) return "Sydney";
         return "Off";
+      }
+
+      function getRoundedSignalState(value) {
+        const numeric = Number(value);
+        return Number.isFinite(numeric) ? Math.round(numeric) : 0;
+      }
+
+      function getOrbStateLabel(value) {
+        return value > 0 ? "Bullish" : value < 0 ? "Bearish" : "Neutral";
+      }
+
+      function getSweepStateLabel(value) {
+        return value > 0 ? "Bullish" : value < 0 ? "Bearish" : "None";
+      }
+
+      function getVwapBiasLabel(value) {
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric)) return "Neutral";
+        if (numeric >= 0.3) return "Bullish";
+        if (numeric >= 0.1) return "Mild Bullish";
+        if (numeric > -0.1) return "Neutral";
+        if (numeric > -0.3) return "Mild Bearish";
+        return "Bearish";
+      }
+
+      function getMicrostructureTone(vwapDelta, orbState, sweepState) {
+        const vwapBias = getVwapBiasLabel(vwapDelta);
+        const vwapTone =
+          vwapBias === "Bullish" || vwapBias === "Mild Bullish"
+            ? 1
+            : vwapBias === "Bearish" || vwapBias === "Mild Bearish"
+              ? -1
+              : 0;
+        return Math.sign(vwapTone + Math.sign(orbState) + Math.sign(sweepState));
+      }
+
+      function getBigMoveRiskBucket(value) {
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric)) return "Low";
+        if (numeric >= 70) return "Extreme";
+        if (numeric >= 56) return "Elevated";
+        if (numeric >= 40) return "Watch";
+        return "Low";
       }
 
       function formatUtcTimeShort(dateValue) {
@@ -2959,15 +3050,40 @@
         const breakoutBias = regimeState.breakout_bias || "Neutral";
         const eventRegimeText = regimeState.event_regime || "normal";
         const warningLadderText = regimeState.warning_ladder || "Normal";
-        regimeRiskEl.innerText = `${bigMoveRisk.toFixed(2)} / 100`;
-        regimeRiskEl.className = `metric-value ${bigMoveRisk >= 64 ? "value-bearish" : bigMoveRisk >= 48 ? "value-bullish" : ""}`;
+        const bigMoveRiskBucket = getBigMoveRiskBucket(bigMoveRisk);
+        regimeRiskEl.innerText = `${bigMoveRisk.toFixed(2)} / 100 · ${bigMoveRiskBucket}`;
+        regimeRiskEl.className = `metric-value ${bigMoveRiskBucket === "Extreme" ? "value-bearish" : bigMoveRiskBucket === "Elevated" || bigMoveRiskBucket === "Watch" ? "value-watch" : ""}`;
         regimeProbEl.innerText = `${Number(regimeState.expansion_probability_30m || 0).toFixed(1)}% / ${Number(regimeState.expansion_probability_60m || 0).toFixed(1)}%`;
         regimeBiasEl.innerText = breakoutBias;
         regimeBiasEl.className = `metric-value ${breakoutBias === "Bullish" ? "value-bullish" : breakoutBias === "Bearish" ? "value-bearish" : ""}`;
         regimeEventEl.innerText = humanizeWords(eventRegimeText);
-        regimeEventEl.className = `metric-value ${eventRegimeText === "trend_acceleration" ? "value-bullish" : eventRegimeText === "panic_reversal" || eventRegimeText === "event_risk" ? "value-bearish" : ""}`;
+        regimeEventEl.className = `metric-value ${
+          eventRegimeText === "panic_reversal" || eventRegimeText === "event_risk"
+            ? "value-bearish"
+            : ["breakout_watch", "trend_acceleration", "range_expansion"].includes(
+                  eventRegimeText,
+                )
+              ? breakoutBias === "Bullish"
+                ? "value-bullish"
+                : breakoutBias === "Bearish"
+                  ? "value-bearish"
+                  : "value-watch"
+              : ""
+        }`;
         regimeLadderEl.innerText = warningLadderText;
-        regimeLadderEl.className = `metric-value ${warningLadderText === "Directional Expansion Likely" || warningLadderText === "Active Momentum Event" ? "value-bullish" : warningLadderText === "High Breakout Risk" ? "value-bearish" : ""}`;
+        regimeLadderEl.className = `metric-value ${
+          warningLadderText === "High Breakout Risk" ||
+          warningLadderText === "Expansion Watch"
+            ? "value-watch"
+            : warningLadderText === "Directional Expansion Likely" ||
+                warningLadderText === "Active Momentum Event"
+              ? breakoutBias === "Bullish"
+                ? "value-bullish"
+                : breakoutBias === "Bearish"
+                  ? "value-bearish"
+                  : "value-watch"
+              : ""
+        }`;
         const crossAssetText = regimeState.cross_asset_bias || "Neutral";
         const nextEventName = String(regimeState.next_event_name || "").trim();
         const nearEvents = Array.isArray(regimeState.near_events)
@@ -3008,31 +3124,45 @@
             barSession.timestampUtc ||
             session.barTimestampUtc ||
             ta.bar_timestamp_utc;
+          const currentSession =
+            session.current_session && typeof session.current_session === "object"
+              ? session.current_session
+              : {};
           const barLabel =
-            barSession.label ||
             session.label ||
+            barSession.label ||
             getUtcSessionLabel(barTimestampUtc);
           const barTimeText =
-            barSession.timeDisplayUtc ||
             session.barTimeDisplayUtc ||
+            barSession.timeDisplayUtc ||
             formatUtcTimeShort(barTimestampUtc);
           const currentLabel =
-            session.currentLabel || getUtcSessionLabel(new Date());
+            session.currentLabel ||
+            currentSession.label ||
+            getUtcSessionLabel(new Date());
           const currentTimeText =
-            session.currentTimeDisplayUtc || formatUtcTimeShort(new Date());
+            session.currentTimeDisplayUtc ||
+            currentSession.timeDisplayUtc ||
+            formatUtcTimeShort(new Date());
           const vwapDelta = Number(structureContext.distSessionVwapPct || 0);
-          const orb = Number(structureContext.openingRangeBreak || 0);
-          const orbText =
-            orb > 0 ? "ORB Bullish" : orb < 0 ? "ORB Bearish" : "ORB Neutral";
-          const sweep = Number(structureContext.sweepReclaimSignal || 0);
+          const vwapBiasText = getVwapBiasLabel(vwapDelta);
+          const orbState = getRoundedSignalState(
+            structureContext.openingRangeBreak,
+          );
+          const orbText = `ORB ${getOrbStateLabel(orbState)}`;
+          const sweepState = getRoundedSignalState(
+            structureContext.sweepReclaimSignal,
+          );
+          const sweepLabel = getSweepStateLabel(sweepState);
           const sweepText =
-            sweep > 0
-              ? "Sweep Bullish"
-              : sweep < 0
-                ? "Sweep Bearish"
-                : "No Sweep";
-          sessionContextEl.innerText = `Bar ${barLabel} ${barTimeText} · Now ${currentLabel} ${currentTimeText} · VWAP ${vwapDelta.toFixed(2)}% · ${orbText} · ${sweepText}`;
-          sessionContextEl.className = `metric-value compact ${orb > 0 || sweep > 0 ? "value-bullish" : orb < 0 || sweep < 0 ? "value-bearish" : ""}`;
+            sweepState === 0 ? "No Sweep" : `Sweep ${sweepLabel}`;
+          sessionContextEl.innerText = `Bar ${barLabel} ${barTimeText} · Now ${currentLabel} ${currentTimeText} · VWAP ${vwapDelta.toFixed(2)}% ${vwapBiasText} · ${orbText} · ${sweepText}`;
+          const microstructureTone = getMicrostructureTone(
+            vwapDelta,
+            orbState,
+            sweepState,
+          );
+          sessionContextEl.className = `metric-value compact ${microstructureTone > 0 ? "value-bullish" : microstructureTone < 0 ? "value-bearish" : ""}`;
         }
 
         const rrSignal =

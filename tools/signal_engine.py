@@ -2,6 +2,7 @@ import json
 import math
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -9,6 +10,10 @@ import ta
 
 from tools.event_regime import annotate_event_regime_features, compute_event_regime_snapshot
 from tools.price_action import annotate_price_action, extract_price_action_feature_hits
+
+FRANKFURT_TZ = ZoneInfo("Europe/Berlin")
+LONDON_TZ = ZoneInfo("Europe/London")
+NEW_YORK_TZ = ZoneInfo("America/New_York")
 
 
 DEFAULT_STRATEGY_PARAMS = {
@@ -193,6 +198,10 @@ def _safe_float(value, default=0.0):
         return float(default)
 
 
+def _coerce_signal_state(value):
+    return int(round(_safe_float(value, 0.0)))
+
+
 def _clamp(value, low=0.0, high=1.0):
     return max(low, min(high, float(value)))
 
@@ -236,21 +245,29 @@ def _build_session_context_from_datetime(session_dt):
     normalized_dt = _coerce_utc_datetime(session_dt) or datetime.now(timezone.utc)
     hour = int(normalized_dt.hour)
     minute = int(normalized_dt.minute)
+    london_dt = normalized_dt.astimezone(LONDON_TZ)
+    frankfurt_dt = normalized_dt.astimezone(FRANKFURT_TZ)
+    new_york_dt = normalized_dt.astimezone(NEW_YORK_TZ)
+    london_hour = int(london_dt.hour)
+    london_minute = int(london_dt.minute)
+    frankfurt_hour = int(frankfurt_dt.hour)
+    new_york_hour = int(new_york_dt.hour)
+
     is_sydney = hour >= 21 or hour < 6
     is_tokyo = 0 <= hour < 9
     is_asia = is_tokyo
-    is_frankfurt = 6 <= hour < 15
-    is_london = 7 <= hour < 16
-    is_new_york = 12 <= hour < 21
+    is_frankfurt = 8 <= frankfurt_hour < 17
+    is_london = 8 <= london_hour < 17
+    is_new_york = 8 <= new_york_hour < 17
     is_overlap = is_london and is_new_york
     is_tokyo_london_overlap = is_tokyo and is_london
     is_tokyo_frankfurt_london_overlap = is_tokyo and is_frankfurt and is_london
     is_frankfurt_london_overlap = is_frankfurt and is_london
     is_sydney_tokyo_overlap = is_sydney and is_tokyo
-    is_london_open = 7 <= hour < 9
-    is_new_york_open = 12 <= hour < 14
-    is_comex_open = 13 <= hour < 18
-    is_fix_window = hour == 15 or (hour == 14 and minute >= 45)
+    is_london_open = 8 <= london_hour < 10
+    is_new_york_open = 8 <= new_york_hour < 10
+    is_comex_open = 9 <= new_york_hour < 14
+    is_fix_window = london_hour == 16 or (london_hour == 15 and london_minute >= 45)
 
     label = "Off"
     quality = 0.46
@@ -359,8 +376,10 @@ def _build_regime_router(
     realized_vol_percentile = _safe_float(volatility_features.get("realizedVolPercentile"), 50.0) / 100.0
     atr_percentile = _safe_float(volatility_features.get("atrPercentile"), 50.0) / 100.0
     follow_through = _safe_float(volatility_features.get("trendFollowThrough"), 1.0)
-    opening_range_break = int(_safe_float(structure_context.get("openingRangeBreak"), 0.0))
-    sweep_reclaim_signal = int(_safe_float(structure_context.get("sweepReclaimSignal"), 0.0))
+    opening_range_break = _coerce_signal_state(structure_context.get("openingRangeBreak"))
+    sweep_reclaim_signal = _coerce_signal_state(structure_context.get("sweepReclaimSignal"))
+    sweep_reclaim_quality = _safe_float(structure_context.get("sweepReclaimQuality"), 0.0)
+    sweep_signal_strength = min(max(sweep_reclaim_quality, 0.0), 1.0) if sweep_reclaim_signal != 0 else 0.0
     breakout_bias = str(regime_state.get("breakout_bias") or "Neutral")
     cross_asset_bias = str(regime_state.get("cross_asset_bias") or "Neutral")
     warning_ladder = str(regime_state.get("warning_ladder") or "Normal")
@@ -394,7 +413,7 @@ def _build_regime_router(
         + (expansion_60m * 0.18)
         + (expansion_30m * 0.08)
         + (1.0 if opening_range_break != 0 else 0.0) * 0.10
-        + (1.0 if sweep_reclaim_signal != 0 else 0.0) * 0.07
+        + sweep_signal_strength * 0.07
         + (1.0 if warning_ladder in {"High Breakout Risk", "Directional Expansion Likely", "Active Momentum Event"} else 0.0) * 0.09
         + (session_quality * 0.08)
         + (realized_vol_percentile * 0.05)
@@ -405,7 +424,7 @@ def _build_regime_router(
         (chop_probability * 0.35)
         + ((1.0 - expansion_probability) * 0.12)
         + ((1.0 - expansion_60m) * 0.10)
-        + (1.0 if sweep_reclaim_signal != 0 else 0.0) * 0.08
+        + sweep_signal_strength * 0.08
         + (1.0 if "Doji" in str(candle_pattern or "") else 0.0) * 0.08
         + ((1.0 - _alignment_quality_score(alignment_score, ta_data.get("multi_timeframe", {}).get("alignment_label"))) * 0.15)
         + ((1.0 - session_quality) * 0.07)
@@ -467,8 +486,10 @@ def _compute_direction_probabilities(
     router = (regime_router or {}).get("probabilities") or {}
     session = (regime_router or {}).get("session_context") or {}
     session_quality = _safe_float(session.get("quality"), 0.46)
-    opening_range_break = int(_safe_float((structure_context or {}).get("openingRangeBreak"), 0.0))
-    sweep_reclaim_signal = int(_safe_float((structure_context or {}).get("sweepReclaimSignal"), 0.0))
+    opening_range_break = _coerce_signal_state((structure_context or {}).get("openingRangeBreak"))
+    sweep_reclaim_signal = _coerce_signal_state((structure_context or {}).get("sweepReclaimSignal"))
+    sweep_reclaim_quality = _safe_float((structure_context or {}).get("sweepReclaimQuality"), 0.0)
+    sweep_signal_strength = min(max(sweep_reclaim_quality, 0.0), 1.0) if sweep_reclaim_signal != 0 else 0.0
 
     cross_bias_score = _bias_strength(cross_asset_bias)
     breakout_bias_score = _bias_strength(breakout_bias)
@@ -476,7 +497,7 @@ def _compute_direction_probabilities(
     setup_bias = _safe_float(score_diff) * 0.46
     trigger_bias = (_safe_float(bull_trigger) - _safe_float(bear_trigger)) * 0.78
     alignment_bias = (_safe_float(alignment_score) / 3.0) * 1.15
-    range_bias = 0.18 * opening_range_break + 0.22 * sweep_reclaim_signal
+    range_bias = 0.18 * opening_range_break + ((0.10 + (0.12 * sweep_signal_strength)) * sweep_reclaim_signal)
     router_bias = (
         _safe_float(router.get("trend_continuation"), 0.0) * 0.35
         + _safe_float(router.get("breakout_transition"), 0.0) * 0.55
@@ -1406,15 +1427,21 @@ def _stabilize_runtime_regime_state(regime_state, memory, strategy_params):
             stable_bias = prev_bias
     bias_dwell = (bias_dwell + 1) if stable_bias == prev_bias else 1
 
-    stable_event = raw_event_regime
-    if stable_warning == "Normal":
+    if raw_event_regime == "event_risk":
+        stable_event = "event_risk"
+    elif stable_warning == "Normal":
         stable_event = "normal"
-    elif stable_warning in {"Expansion Watch", "High Breakout Risk", "Directional Expansion Likely"}:
+    elif stable_warning == "Expansion Watch":
+        stable_event = "breakout_watch" if stable_bias != "Neutral" else "normal"
+    elif stable_warning in {"High Breakout Risk", "Directional Expansion Likely"}:
         stable_event = "breakout_watch"
-    elif stable_warning == "Active Momentum Event" and stable_event == "normal":
-        stable_event = "range_expansion"
-    if prev_event_regime == "breakout_watch" and stable_event == "normal" and warning_dwell < min_dwell:
-        stable_event = prev_event_regime
+    elif stable_warning == "Active Momentum Event":
+        if raw_event_regime in {"panic_reversal", "trend_acceleration", "range_expansion"}:
+            stable_event = raw_event_regime
+        else:
+            stable_event = "range_expansion" if stable_bias != "Neutral" else "normal"
+    else:
+        stable_event = "normal"
 
     regime_state["raw_warning_ladder"] = raw_warning
     regime_state["raw_event_regime"] = raw_event_regime
@@ -1828,8 +1855,10 @@ def compute_prediction_from_ta(ta_data):
     sr_reaction = str(support_resistance.get("reaction", "None") or "None")
     support_distance_pct = support_resistance.get("support_distance_pct")
     resistance_distance_pct = support_resistance.get("resistance_distance_pct")
-    opening_range_break = int(_safe_float(structure_context.get("openingRangeBreak"), 0.0))
-    sweep_reclaim_signal = int(_safe_float(structure_context.get("sweepReclaimSignal"), 0.0))
+    opening_range_break = _coerce_signal_state(structure_context.get("openingRangeBreak"))
+    sweep_reclaim_signal = _coerce_signal_state(structure_context.get("sweepReclaimSignal"))
+    sweep_reclaim_quality = _safe_float(structure_context.get("sweepReclaimQuality"), 0.0)
+    sweep_signal_strength = min(max(sweep_reclaim_quality, 0.0), 1.0) if sweep_reclaim_signal != 0 else 0.0
     bullish_sweep_reversal_context = (
         sweep_reclaim_signal > 0
         and (
@@ -1892,9 +1921,9 @@ def compute_prediction_from_ta(ta_data):
     elif opening_range_break < 0:
         bear_trigger += 0.8
     if sweep_reclaim_signal > 0:
-        bull_trigger += 0.9
+        bull_trigger += 0.5 + (0.4 * sweep_signal_strength)
     elif sweep_reclaim_signal < 0:
-        bear_trigger += 0.9
+        bear_trigger += 0.5 + (0.4 * sweep_signal_strength)
 
     confirmed_candle_bias = "Neutral"
     if bull_pattern_confirmed and not bear_pattern_confirmed:
@@ -2834,8 +2863,8 @@ def _build_support_resistance_from_row(row):
     support_distance_pct = ((current_price - nearest_support[1]) / current_price * 100.0) if nearest_support else None
     resistance_distance_pct = ((nearest_resistance[1] - current_price) / current_price * 100.0) if nearest_resistance else None
 
-    opening_range_break = int(_safe_float(row.get("OPENING_RANGE_BREAK"), 0.0))
-    sweep_reclaim = int(_safe_float(row.get("SWEEP_RECLAIM_SIGNAL"), 0.0))
+    opening_range_break = _coerce_signal_state(row.get("OPENING_RANGE_BREAK"))
+    sweep_reclaim = _coerce_signal_state(row.get("SWEEP_RECLAIM_SIGNAL"))
     reaction = "None"
     if sweep_reclaim > 0:
         reaction = "Bullish Support Rejection"
@@ -3157,8 +3186,9 @@ def build_ta_payload_from_row(
             "current_session": current_session_context,
         },
         "structure_context": {
-            "openingRangeBreak": int(_safe_float(row.get("OPENING_RANGE_BREAK"), 0.0)),
-            "sweepReclaimSignal": int(_safe_float(row.get("SWEEP_RECLAIM_SIGNAL"), 0.0)),
+            "openingRangeBreak": _coerce_signal_state(row.get("OPENING_RANGE_BREAK")),
+            "sweepReclaimSignal": _coerce_signal_state(row.get("SWEEP_RECLAIM_SIGNAL")),
+            "sweepReclaimQuality": round(_safe_float(row.get("SWEEP_RECLAIM_QUALITY"), 0.0), 4),
             "sessionVwap": round(_safe_float(row.get("SESSION_VWAP"), 0.0), 2),
             "distSessionVwapPct": round(_safe_float(row.get("DIST_SESSION_VWAP_PCT"), 0.0), 4),
             "recentSwingHigh": round(_safe_float(row.get("RECENT_SWING_HIGH_24"), 0.0), 2),
