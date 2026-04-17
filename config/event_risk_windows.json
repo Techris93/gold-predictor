@@ -1,12 +1,6 @@
 {
   "windows": [
     {
-      "name": "Initial Jobless Claims",
-      "start": "2026-04-17T12:10:00Z",
-      "end": "2026-04-17T13:30:00Z",
-      "reason": "Release date from the St. Louis Fed FRED release schedule for April 17, 2026 (State Unemployment Insurance Weekly Claims Report)."
-    },
-    {
       "name": "Retail Sales",
       "start": "2026-04-21T12:00:00Z",
       "end": "2026-04-21T13:45:00Z",
@@ -599,6 +593,12 @@
       "start": "2026-10-09T12:10:00Z",
       "end": "2026-10-09T13:30:00Z",
       "reason": "Release date from the St. Louis Fed FRED release schedule for October 9, 2026 (State Unemployment Insurance Weekly Claims Report)."
+    },
+    {
+      "name": "CPI",
+      "start": "2026-10-14T12:00:00Z",
+      "end": "2026-10-14T13:45:00Z",
+      "reason": "Consumer Price Index release date from the St. Louis Fed FRED release schedule for October 14, 2026; FRED notes dates are published by the source."
     }
   ]
 }
