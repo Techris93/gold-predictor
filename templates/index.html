@@ -1959,6 +1959,36 @@
           .join(" ");
       }
 
+      function formatDirectionalOwnerLabel(source, timeframe) {
+        const normalizedSource = String(source || "h1").trim().toLowerCase();
+        const normalizedTimeframe = String(timeframe || "").trim().toUpperCase();
+        if (normalizedSource === "breakout_stack") {
+          return normalizedTimeframe
+            ? `Breakout Model ${normalizedTimeframe}`
+            : "Breakout Model";
+        }
+        if (normalizedSource === "h1") {
+          return "H1 Trend";
+        }
+        const sourceLabel = humanizeWords(normalizedSource);
+        return normalizedTimeframe
+          ? `${sourceLabel} ${normalizedTimeframe}`
+          : sourceLabel;
+      }
+
+      function formatDirectionOwnerTitle(source, timeframe, entryTimeframe) {
+        const normalizedSource = String(source || "h1").trim().toLowerCase();
+        const directionOwnerLabel = formatDirectionalOwnerLabel(
+          normalizedSource,
+          timeframe,
+        );
+        const entryTf = String(entryTimeframe || "15m").trim().toUpperCase();
+        if (normalizedSource === "breakout_stack") {
+          return `Direction is owned by the ${String(timeframe || "60m").toUpperCase()} breakout probability model while raw H1 remains neutral; ${entryTf} is entry-only.`;
+        }
+        return `Direction is owned by ${directionOwnerLabel}; ${entryTf} is entry-only.`;
+      }
+
       function humanizeChangeValue(key, value) {
         const text = String(value ?? "").trim();
         if (!text) return "None";
@@ -2647,12 +2677,16 @@
           directionModelEl.className = `metric-value compact ${displayedDirection === "Bullish" ? "value-bullish" : displayedDirection === "Bearish" ? "value-bearish" : ""}`;
         }
         if (timeframeGateEl) {
-          const directionSource = humanizeWords(
-            String(marketState.directional_bias_source || "h1"),
+          const directionSource = String(
+            marketState.directional_bias_source || "h1",
           );
           const directionTimeframe = String(
             marketState.direction_timeframe || "1h",
           ).toUpperCase();
+          const directionOwnerLabel = formatDirectionalOwnerLabel(
+            directionSource,
+            directionTimeframe,
+          );
           const entryTriggerTimeframe = String(
             marketState.entry_trigger_timeframe || "15m",
           ).toUpperCase();
@@ -2685,9 +2719,14 @@
             : m15Aligned
               ? "aligned"
               : "waiting";
-          timeframeGateEl.innerText = `${directionSource} ${directionTimeframe} ${marketBiasText} · H1 ${h1Trend} ${h1GateLabel} · H4 ${h4Trend} ${h4GateLabel} · M15 ${entryTriggerTimeframe} ${m15Trend} ${m15GateLabel}`;
+          const h1GatePrefix = h1Override ? "Raw H1" : "H1";
+          timeframeGateEl.innerText = `Owner ${directionOwnerLabel} ${marketBiasText} · ${h1GatePrefix} ${h1Trend} ${h1GateLabel} · H4 ${h4Trend} ${h4GateLabel} · M15 ${entryTriggerTimeframe} ${m15Trend} ${m15GateLabel}`;
           timeframeGateEl.className = `metric-value compact ${h4Opposes || m15Conflict ? "value-bearish" : m15Aligned ? (marketBiasText === "Bullish" ? "value-bullish" : marketBiasText === "Bearish" ? "value-bearish" : "") : ""}`;
-          timeframeGateEl.title = `Direction is owned by ${directionSource} on ${directionTimeframe}; ${entryTriggerTimeframe} is entry-only.`;
+          timeframeGateEl.title = formatDirectionOwnerTitle(
+            directionSource,
+            directionTimeframe,
+            entryTriggerTimeframe,
+          );
         }
 
         const regimeState =
@@ -2823,12 +2862,14 @@
           rrDirectionGradeEl.className = `metric-value ${rrDisplayedDirection === "Bullish" ? "value-bullish" : rrDisplayedDirection === "Bearish" ? "value-bearish" : ""}`;
         }
         if (rrTimeframeFilterEl) {
-          const rrDirectionSource = humanizeWords(
-            String(rrSignal.directionSource || "h1"),
-          );
+          const rrDirectionSource = String(rrSignal.directionSource || "h1");
           const rrDirectionTf = String(
             rrSignal.directionTimeframe || "1h",
           ).toUpperCase();
+          const rrDirectionOwnerLabel = formatDirectionalOwnerLabel(
+            rrDirectionSource,
+            rrDirectionTf,
+          );
           const rrEntryTf = String(
             rrSignal.entryTriggerTimeframe || "15m",
           ).toUpperCase();
@@ -2856,7 +2897,10 @@
               : rrH4Trend === "Neutral"
                 ? "neutral"
                 : "watch";
-          rrTimeframeFilterEl.innerText = `Dir ${rrDirectionSource} ${rrDirectionTf} ${rrDisplayedDirection} · H1 ${rrH1Trend} ${rrH1GateLabel} · H4 ${rrH4Trend} ${rrH4GateLabel} · M15 ${rrEntryTf} ${rrM15Trend} ${rrM15Pass ? "trigger" : "waiting"}`;
+          const rrH1Prefix = rrSignal.h1NeutralOverrideActive
+            ? "Raw H1"
+            : "H1";
+          rrTimeframeFilterEl.innerText = `Dir ${rrDirectionOwnerLabel} ${rrDisplayedDirection} · ${rrH1Prefix} ${rrH1Trend} ${rrH1GateLabel} · H4 ${rrH4Trend} ${rrH4GateLabel} · M15 ${rrEntryTf} ${rrM15Trend} ${rrM15Pass ? "trigger" : "waiting"}`;
           rrTimeframeFilterEl.className = `metric-value compact ${(!rrH4Pass && rrDisplayedDirection !== "Neutral") || (!rrH1Pass && !rrSignal.h1Neutral) ? "value-bearish" : rrM15Pass ? (rrDisplayedDirection === "Bullish" ? "value-bullish" : rrDisplayedDirection === "Bearish" ? "value-bearish" : "") : ""}`;
         }
         if (rrProbabilityEl) {
