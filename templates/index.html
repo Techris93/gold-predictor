@@ -616,7 +616,8 @@
       }
 
       .decision-toggle,
-      .ar-toggle {
+      .ar-toggle,
+      .section-toggle {
         width: 100%;
         display: flex;
         align-items: center;
@@ -632,8 +633,17 @@
         cursor: pointer;
       }
 
+      .section-toggle {
+        margin-top: 0;
+      }
+
+      .decision-card > .decision-toggle {
+        margin-top: 0;
+      }
+
       .decision-toggle-label,
-      .ar-heading {
+      .ar-heading,
+      .section-toggle-label {
         color: var(--accent);
         text-transform: uppercase;
         font-size: 0.78rem;
@@ -642,9 +652,18 @@
       }
 
       .decision-toggle-subtext,
-      .ar-subtext {
+      .ar-subtext,
+      .section-toggle-subtext {
         color: var(--text-muted);
         font-size: 0.88rem;
+      }
+
+      .section-toggle-label {
+        color: var(--text-main);
+        font-family: "Space Grotesk", sans-serif;
+        font-size: 1rem;
+        letter-spacing: 0.06em;
+        line-height: 1.25;
       }
 
       .ar-heading-wrap {
@@ -677,7 +696,8 @@
       }
 
       .ar-toggle[aria-expanded="false"] .ar-chevron,
-      .decision-toggle[aria-expanded="false"] .ar-chevron {
+      .decision-toggle[aria-expanded="false"] .ar-chevron,
+      .section-toggle[aria-expanded="false"] .ar-chevron {
         transform: rotate(-90deg);
       }
 
@@ -1017,82 +1037,150 @@
           </section>
 
           <section class="section-card card-technical">
-            <h2 class="section-title">Technical Indicators</h2>
-            <div class="metric-row">
-              <span class="metric-label">Trend Structure</span>
-              <span class="metric-value" id="ta-trend">---</span>
-            </div>
-            <div class="metric-row">
-              <span class="metric-label">RSI Momentum (14)</span>
-              <span class="metric-value" id="ta-rsi">---</span>
-            </div>
-            <div class="metric-row">
-              <span class="metric-label">EMA 20 / EMA 50</span>
-              <span class="metric-value"
-                ><span id="ta-ema20">---</span> /
-                <span id="ta-ema50">---</span></span
-              >
-            </div>
-            <div class="metric-row">
-              <span class="metric-label">Market Regime</span>
-              <span class="metric-value" id="ta-regime">---</span>
-            </div>
-            <div class="metric-row">
-              <span class="metric-label">Trend Alignment (15m / 1H / 4H)</span>
-              <span class="metric-value" id="ta-alignment">---</span>
-            </div>
-            <div class="metric-row">
-              <span class="metric-label">ADX / ATR%</span>
-              <span class="metric-value"
-                ><span id="ta-adx">---</span> /
-                <span id="ta-atrpct">---</span></span
-              >
-            </div>
-            <div class="metric-row">
-              <span class="metric-label">Active Params</span>
-              <span class="metric-value compact" id="ta-active-params"
-                >---</span
-              >
+            <button
+              type="button"
+              class="section-toggle"
+              id="technical-toggle"
+              aria-expanded="false"
+              aria-controls="technical-panel"
+              data-expanded-label="Open"
+              data-collapsed-label="Hidden"
+            >
+              <span class="ar-heading-wrap">
+                <span class="section-toggle-label">Technical Indicators</span>
+                <span class="section-toggle-subtext"
+                  >Tap to open trend, momentum, and active parameter details</span
+                >
+              </span>
+              <span class="ar-toggle-meta">
+                <span class="ar-toggle-badge js-toggle-badge">Hidden</span>
+                <svg
+                  class="ar-chevron"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="M6 9l6 6 6-6"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  ></path>
+                </svg>
+              </span>
+            </button>
+            <div id="technical-panel" hidden>
+              <div class="metric-row">
+                <span class="metric-label">Trend Structure</span>
+                <span class="metric-value" id="ta-trend">---</span>
+              </div>
+              <div class="metric-row">
+                <span class="metric-label">RSI Momentum (14)</span>
+                <span class="metric-value" id="ta-rsi">---</span>
+              </div>
+              <div class="metric-row">
+                <span class="metric-label">EMA 20 / EMA 50</span>
+                <span class="metric-value"
+                  ><span id="ta-ema20">---</span> /
+                  <span id="ta-ema50">---</span></span
+                >
+              </div>
+              <div class="metric-row">
+                <span class="metric-label">Market Regime</span>
+                <span class="metric-value" id="ta-regime">---</span>
+              </div>
+              <div class="metric-row">
+                <span class="metric-label">Trend Alignment (15m / 1H / 4H)</span>
+                <span class="metric-value" id="ta-alignment">---</span>
+              </div>
+              <div class="metric-row">
+                <span class="metric-label">ADX / ATR%</span>
+                <span class="metric-value"
+                  ><span id="ta-adx">---</span> /
+                  <span id="ta-atrpct">---</span></span
+                >
+              </div>
+              <div class="metric-row">
+                <span class="metric-label">Active Params</span>
+                <span class="metric-value compact" id="ta-active-params"
+                  >---</span
+                >
+              </div>
             </div>
           </section>
 
           <section class="section-card card-market">
-            <h2 class="section-title">Market State</h2>
-            <div class="metric-row">
-              <span class="metric-label">Regime</span>
-              <span class="metric-value" id="ms-regime">---</span>
-            </div>
-            <div class="metric-row">
-              <span class="metric-label">Directional Bias</span>
-              <span class="metric-value" id="ms-bias">---</span>
-            </div>
-            <div class="metric-row">
-              <span class="metric-label">Tradeability</span>
-              <span class="metric-value" id="ms-tradeability">---</span>
-            </div>
-            <div class="metric-row">
-              <span class="metric-label">Action State</span>
-              <span class="metric-value" id="ms-action-state">---</span>
-            </div>
-            <div class="metric-row">
-              <span class="metric-label">Action</span>
-              <span class="metric-value" id="ms-action">---</span>
-            </div>
-            <div class="metric-row">
-              <span class="metric-label">Composite Scores</span>
-              <span class="metric-value compact" id="ms-scores">---</span>
-            </div>
-            <div class="metric-row">
-              <span class="metric-label">Direction Model</span>
-              <span class="metric-value compact" id="ms-direction-model"
-                >---</span
-              >
-            </div>
-            <div class="metric-row">
-              <span class="metric-label">Timeframe Gate</span>
-              <span class="metric-value compact" id="ms-timeframe-gate"
-                >---</span
-              >
+            <button
+              type="button"
+              class="section-toggle"
+              id="market-toggle"
+              aria-expanded="false"
+              aria-controls="market-panel"
+              data-expanded-label="Open"
+              data-collapsed-label="Hidden"
+            >
+              <span class="ar-heading-wrap">
+                <span class="section-toggle-label">Market State</span>
+                <span class="section-toggle-subtext"
+                  >Tap to open regime, bias, and execution gating details</span
+                >
+              </span>
+              <span class="ar-toggle-meta">
+                <span class="ar-toggle-badge js-toggle-badge">Hidden</span>
+                <svg
+                  class="ar-chevron"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="M6 9l6 6 6-6"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  ></path>
+                </svg>
+              </span>
+            </button>
+            <div id="market-panel" hidden>
+              <div class="metric-row">
+                <span class="metric-label">Regime</span>
+                <span class="metric-value" id="ms-regime">---</span>
+              </div>
+              <div class="metric-row">
+                <span class="metric-label">Directional Bias</span>
+                <span class="metric-value" id="ms-bias">---</span>
+              </div>
+              <div class="metric-row">
+                <span class="metric-label">Tradeability</span>
+                <span class="metric-value" id="ms-tradeability">---</span>
+              </div>
+              <div class="metric-row">
+                <span class="metric-label">Action State</span>
+                <span class="metric-value" id="ms-action-state">---</span>
+              </div>
+              <div class="metric-row">
+                <span class="metric-label">Action</span>
+                <span class="metric-value" id="ms-action">---</span>
+              </div>
+              <div class="metric-row">
+                <span class="metric-label">Composite Scores</span>
+                <span class="metric-value compact" id="ms-scores">---</span>
+              </div>
+              <div class="metric-row">
+                <span class="metric-label">Direction Model</span>
+                <span class="metric-value compact" id="ms-direction-model"
+                  >---</span
+                >
+              </div>
+              <div class="metric-row">
+                <span class="metric-label">Timeframe Gate</span>
+                <span class="metric-value compact" id="ms-timeframe-gate"
+                  >---</span
+                >
+              </div>
             </div>
           </section>
 
@@ -1129,255 +1217,358 @@
           </section>
 
           <section class="section-card card-rr">
-            <h2 class="section-title">Adaptive RR Signal (1:2)</h2>
-            <div class="metric-row">
-              <span class="metric-label">Signal Status</span>
-              <span class="metric-value" id="rr-status">---</span>
-            </div>
-            <div class="metric-row">
-              <span class="metric-label">Direction / Grade</span>
-              <span class="metric-value" id="rr-direction-grade">---</span>
-            </div>
-            <div class="metric-row">
-              <span class="metric-label">Timeframe Filter</span>
-              <span class="metric-value compact" id="rr-timeframe-filter"
-                >---</span
-              >
-            </div>
-            <div class="metric-row">
-              <span class="metric-label">Target Bucket Probability</span>
-              <span class="metric-value" id="rr-probability">---</span>
-            </div>
-            <div class="metric-row">
-              <span class="metric-label">Projected Move / ATR</span>
-              <span class="metric-value" id="rr-projected">---</span>
-            </div>
-            <div class="metric-row">
-              <span class="metric-label">ATR Buckets</span>
-              <span class="metric-value compact" id="rr-buckets">---</span>
-            </div>
-            <div class="metric-row">
-              <span class="metric-label">Entry / SL / TP</span>
-              <span class="metric-value compact" id="rr-levels">---</span>
-            </div>
-            <div class="metric-row">
-              <span class="metric-label">Summary</span>
-              <span class="metric-value compact" id="rr-summary">---</span>
-            </div>
-            <div class="metric-row">
-              <span class="metric-label">Today (A+/A/B)</span>
-              <span class="metric-value compact" id="rr-live-today">---</span>
-            </div>
-            <div class="metric-row">
-              <span class="metric-label">Expected / Day</span>
-              <span class="metric-value compact" id="rr-live-expected"
-                >---</span
-              >
+            <button
+              type="button"
+              class="section-toggle"
+              id="rr-toggle"
+              aria-expanded="false"
+              aria-controls="rr-panel"
+              data-expanded-label="Open"
+              data-collapsed-label="Hidden"
+            >
+              <span class="ar-heading-wrap">
+                <span class="section-toggle-label">Adaptive RR Signal (1:2)</span>
+                <span class="section-toggle-subtext"
+                  >Tap to open grade, bucket probability, and level details</span
+                >
+              </span>
+              <span class="ar-toggle-meta">
+                <span class="ar-toggle-badge js-toggle-badge">Hidden</span>
+                <svg
+                  class="ar-chevron"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="M6 9l6 6 6-6"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  ></path>
+                </svg>
+              </span>
+            </button>
+            <div id="rr-panel" hidden>
+              <div class="metric-row">
+                <span class="metric-label">Signal Status</span>
+                <span class="metric-value" id="rr-status">---</span>
+              </div>
+              <div class="metric-row">
+                <span class="metric-label">Direction / Grade</span>
+                <span class="metric-value" id="rr-direction-grade">---</span>
+              </div>
+              <div class="metric-row">
+                <span class="metric-label">Timeframe Filter</span>
+                <span class="metric-value compact" id="rr-timeframe-filter"
+                  >---</span
+                >
+              </div>
+              <div class="metric-row">
+                <span class="metric-label">Target Bucket Probability</span>
+                <span class="metric-value" id="rr-probability">---</span>
+              </div>
+              <div class="metric-row">
+                <span class="metric-label">Projected Move / ATR</span>
+                <span class="metric-value" id="rr-projected">---</span>
+              </div>
+              <div class="metric-row">
+                <span class="metric-label">ATR Buckets</span>
+                <span class="metric-value compact" id="rr-buckets">---</span>
+              </div>
+              <div class="metric-row">
+                <span class="metric-label">Entry / SL / TP</span>
+                <span class="metric-value compact" id="rr-levels">---</span>
+              </div>
+              <div class="metric-row">
+                <span class="metric-label">Summary</span>
+                <span class="metric-value compact" id="rr-summary">---</span>
+              </div>
+              <div class="metric-row">
+                <span class="metric-label">Today (A+/A/B)</span>
+                <span class="metric-value compact" id="rr-live-today">---</span>
+              </div>
+              <div class="metric-row">
+                <span class="metric-label">Expected / Day</span>
+                <span class="metric-value compact" id="rr-live-expected"
+                  >---</span
+                >
+              </div>
             </div>
           </section>
 
           <section class="section-card section-card-wide card-guidance">
-            <h2 class="section-title">Trade Guidance</h2>
-            <div id="trade-guidance">
-              <div class="metric-row">
-                <span class="metric-label">Sell Setup</span>
-                <span class="metric-value" id="tg-sell">---</span>
-              </div>
-              <div class="metric-row">
-                <span class="metric-label">Buy Setup</span>
-                <span class="metric-value" id="tg-buy">---</span>
-              </div>
-              <div class="metric-row">
-                <span class="metric-label">Exit Warning</span>
-                <span class="metric-value" id="tg-exit">---</span>
-              </div>
-              <div class="metric-row">
-                <span class="metric-label">Summary</span>
-                <span class="metric-value compact" id="tg-summary">---</span>
-              </div>
-            </div>
-
-            <div class="decision-card">
-              <div class="decision-title">Execution Checklist</div>
-              <div class="decision-status">
-                <div class="decision-status-label">Current Read</div>
-                <div class="decision-status-value wait" id="decision-status">
-                  Evaluating checklist...
-                </div>
-              </div>
-              <div class="decision-status">
-                <div class="decision-status-label">Execution Permission</div>
-                <div
-                  class="decision-status-value wait"
-                  id="execution-permission"
+            <button
+              type="button"
+              class="section-toggle"
+              id="guidance-toggle"
+              aria-expanded="false"
+              aria-controls="guidance-panel"
+              data-expanded-label="Open"
+              data-collapsed-label="Hidden"
+            >
+              <span class="ar-heading-wrap">
+                <span class="section-toggle-label">Trade Guidance</span>
+                <span class="section-toggle-subtext"
+                  >Tap to open guidance summary and execution workflow</span
                 >
-                  Evaluating market state...
-                </div>
-              </div>
-              <div class="decision-status">
-                <div class="decision-status-label">Trade Playbook</div>
-                <div
-                  class="decision-status-value wait"
-                  id="trade-playbook-stage"
+              </span>
+              <span class="ar-toggle-meta">
+                <span class="ar-toggle-badge js-toggle-badge">Hidden</span>
+                <svg
+                  class="ar-chevron"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  aria-hidden="true"
                 >
-                  Building combined entry/exit playbook...
+                  <path
+                    d="M6 9l6 6 6-6"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  ></path>
+                </svg>
+              </span>
+            </button>
+            <div id="guidance-panel" hidden>
+              <div id="trade-guidance">
+                <div class="metric-row">
+                  <span class="metric-label">Sell Setup</span>
+                  <span class="metric-value" id="tg-sell">---</span>
+                </div>
+                <div class="metric-row">
+                  <span class="metric-label">Buy Setup</span>
+                  <span class="metric-value" id="tg-buy">---</span>
+                </div>
+                <div class="metric-row">
+                  <span class="metric-label">Exit Warning</span>
+                  <span class="metric-value" id="tg-exit">---</span>
+                </div>
+                <div class="metric-row">
+                  <span class="metric-label">Summary</span>
+                  <span class="metric-value compact" id="tg-summary">---</span>
                 </div>
               </div>
 
-              <div class="metric-row">
-                <span class="metric-label">Forecast Bucket</span>
-                <span class="metric-value" id="forecast-bucket">---</span>
-              </div>
-              <div class="metric-row">
-                <span class="metric-label">Execution State</span>
-                <span class="metric-value" id="execution-state">---</span>
-              </div>
-              <div class="metric-row">
-                <span class="metric-label">Anti-Chop Filter</span>
-                <span class="metric-value compact" id="anti-chop-state"
-                  >---</span
+              <div class="decision-card">
+                <button
+                  type="button"
+                  class="decision-toggle"
+                  id="execution-toggle"
+                  aria-expanded="false"
+                  aria-controls="execution-panel"
+                  data-expanded-label="Open"
+                  data-collapsed-label="Hidden"
                 >
-              </div>
+                  <span class="ar-heading-wrap">
+                    <span class="decision-toggle-label">Execution Checklist</span>
+                    <span class="decision-toggle-subtext"
+                      >Tap to open execution state, playbook, and checklist rules</span
+                    >
+                  </span>
+                  <span class="ar-toggle-meta">
+                    <span class="ar-toggle-badge js-toggle-badge">Hidden</span>
+                    <svg
+                      class="ar-chevron"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      aria-hidden="true"
+                    >
+                      <path
+                        d="M6 9l6 6 6-6"
+                        stroke="currentColor"
+                        stroke-width="2"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                      ></path>
+                    </svg>
+                  </span>
+                </button>
 
-              <div class="decision-block">
-                <div class="decision-heading exit">Playbook Read</div>
-                <div class="metric-value compact" id="trade-playbook-text">
-                  Waiting for event-regime and directional alignment...
-                </div>
-                <ul class="playbook-why" id="trade-playbook-why">
-                  <li>
-                    Playbook rationale will appear here once the market state is
-                    loaded.
-                  </li>
-                </ul>
-              </div>
-
-              <button
-                type="button"
-                class="decision-toggle"
-                id="decision-toggle"
-                aria-expanded="false"
-                aria-controls="decision-details"
-              >
-                <span class="ar-heading-wrap">
-                  <span class="decision-toggle-label">Detailed Checklist</span>
-                  <span class="decision-toggle-subtext"
-                    >Tap to open buy, sell, and exit rules</span
-                  >
-                </span>
-                <span class="ar-toggle-meta">
-                  <span class="ar-toggle-badge">Optional</span>
-                  <svg
-                    class="ar-chevron"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    aria-hidden="true"
-                  >
-                    <path
-                      d="M6 9l6 6 6-6"
-                      stroke="currentColor"
-                      stroke-width="2"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                    ></path>
-                  </svg>
-                </span>
-              </button>
-
-              <div class="decision-grid" id="decision-details" hidden>
-                <div class="decision-block">
-                  <div class="decision-heading buy">Buy Only When</div>
-                  <ul class="decision-points" id="buy-checklist">
-                    <li>
-                      <span class="check-icon">-</span
-                      ><strong>Verdict:</strong> Bullish with confidence around
-                      70% or higher.
-                    </li>
-                    <li>
-                      <span class="check-icon">-</span
-                      ><strong>Trend + structure:</strong> Trend Structure is
-                      Bullish and Market Structure is bullish drift, breakout,
-                      or continuation.
-                    </li>
-                    <li>
-                      <span class="check-icon">-</span
-                      ><strong>Alignment:</strong> 15m / 1H / 4H shows strong
-                      bullish alignment.
-                    </li>
-                    <li>
-                      <span class="check-icon">-</span
-                      ><strong>Trigger:</strong> Candle is not a doji and
-                      Summary does not say there is no clean trigger.
-                    </li>
-                    <li>
-                      <span class="check-icon">-</span
-                      ><strong>Guidance:</strong> Buy Setup is Watch or Strong
-                      while Exit Warning stays Low or Moderate.
-                    </li>
-                  </ul>
-                </div>
-                <div class="decision-block">
-                  <div class="decision-heading sell">Sell Only When</div>
-                  <ul class="decision-points" id="sell-checklist">
-                    <li>
-                      <span class="check-icon">-</span
-                      ><strong>Verdict:</strong> Bearish with confidence around
-                      70% or higher.
-                    </li>
-                    <li>
-                      <span class="check-icon">-</span
-                      ><strong>Trend + structure:</strong> Trend Structure is
-                      Bearish and Market Structure shows bearish drift,
-                      breakdown, or rejection.
-                    </li>
-                    <li>
-                      <span class="check-icon">-</span
-                      ><strong>Alignment:</strong> 15m / 1H / 4H shows strong
-                      bearish alignment.
-                    </li>
-                    <li>
-                      <span class="check-icon">-</span
-                      ><strong>Trigger:</strong> Candle is not indecisive and
-                      Summary supports downside continuation or rejection.
-                    </li>
-                    <li>
-                      <span class="check-icon">-</span
-                      ><strong>Guidance:</strong> Sell Setup is Watch or Strong
-                      while Exit Warning stays Low or Moderate.
-                    </li>
-                  </ul>
-                </div>
-                <div class="decision-block">
-                  <div class="decision-heading exit">
-                    Exit Or Stand Aside When
+                <div id="execution-panel" hidden>
+                  <div class="decision-status">
+                    <div class="decision-status-label">Current Read</div>
+                    <div class="decision-status-value wait" id="decision-status">
+                      Evaluating checklist...
+                    </div>
                   </div>
-                  <ul class="decision-points" id="exit-checklist">
-                    <li>
-                      <span class="check-icon">-</span
-                      ><strong>Neutral:</strong> Verdict is Neutral, alignment
-                      is mixed, or Summary says no clean trigger is present.
-                    </li>
-                    <li>
-                      <span class="check-icon">-</span
-                      ><strong>Warning:</strong> Exit Warning is High or
-                      confidence drops sharply.
-                    </li>
-                    <li>
-                      <span class="check-icon">-</span
-                      ><strong>Conflict:</strong> Market Structure and Trend
-                      Structure point in different directions.
-                    </li>
-                    <li>
-                      <span class="check-icon">-</span
-                      ><strong>Indecision:</strong> Summary flags indecision or
-                      no clean trigger near key levels.
-                    </li>
-                    <li>
-                      <span class="check-icon">-</span><strong>Rule:</strong> If
-                      Buy Setup and Sell Setup are both Weak, do not force a
-                      trade.
-                    </li>
-                  </ul>
+                  <div class="decision-status">
+                    <div class="decision-status-label">Execution Permission</div>
+                    <div
+                      class="decision-status-value wait"
+                      id="execution-permission"
+                    >
+                      Evaluating market state...
+                    </div>
+                  </div>
+                  <div class="decision-status">
+                    <div class="decision-status-label">Trade Playbook</div>
+                    <div
+                      class="decision-status-value wait"
+                      id="trade-playbook-stage"
+                    >
+                      Building combined entry/exit playbook...
+                    </div>
+                  </div>
+
+                  <div class="metric-row">
+                    <span class="metric-label">Forecast Bucket</span>
+                    <span class="metric-value" id="forecast-bucket">---</span>
+                  </div>
+                  <div class="metric-row">
+                    <span class="metric-label">Execution State</span>
+                    <span class="metric-value" id="execution-state">---</span>
+                  </div>
+                  <div class="metric-row">
+                    <span class="metric-label">Anti-Chop Filter</span>
+                    <span class="metric-value compact" id="anti-chop-state"
+                      >---</span
+                    >
+                  </div>
+
+                  <div class="decision-block">
+                    <div class="decision-heading exit">Playbook Read</div>
+                    <div class="metric-value compact" id="trade-playbook-text">
+                      Waiting for event-regime and directional alignment...
+                    </div>
+                    <ul class="playbook-why" id="trade-playbook-why">
+                      <li>
+                        Playbook rationale will appear here once the market state
+                        is loaded.
+                      </li>
+                    </ul>
+                  </div>
+
+                  <button
+                    type="button"
+                    class="decision-toggle"
+                    id="decision-toggle"
+                    aria-expanded="false"
+                    aria-controls="decision-details"
+                  >
+                    <span class="ar-heading-wrap">
+                      <span class="decision-toggle-label">Detailed Checklist</span>
+                      <span class="decision-toggle-subtext"
+                        >Tap to open buy, sell, and exit rules</span
+                      >
+                    </span>
+                    <span class="ar-toggle-meta">
+                      <span class="ar-toggle-badge">Optional</span>
+                      <svg
+                        class="ar-chevron"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        aria-hidden="true"
+                      >
+                        <path
+                          d="M6 9l6 6 6-6"
+                          stroke="currentColor"
+                          stroke-width="2"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                        ></path>
+                      </svg>
+                    </span>
+                  </button>
+
+                  <div class="decision-grid" id="decision-details" hidden>
+                    <div class="decision-block">
+                      <div class="decision-heading buy">Buy Only When</div>
+                      <ul class="decision-points" id="buy-checklist">
+                        <li>
+                          <span class="check-icon">-</span
+                          ><strong>Verdict:</strong> Bullish with confidence around
+                          70% or higher.
+                        </li>
+                        <li>
+                          <span class="check-icon">-</span
+                          ><strong>Trend + structure:</strong> Trend Structure is
+                          Bullish and Market Structure is bullish drift, breakout,
+                          or continuation.
+                        </li>
+                        <li>
+                          <span class="check-icon">-</span
+                          ><strong>Alignment:</strong> 15m / 1H / 4H shows strong
+                          bullish alignment.
+                        </li>
+                        <li>
+                          <span class="check-icon">-</span
+                          ><strong>Trigger:</strong> Candle is not a doji and
+                          Summary does not say there is no clean trigger.
+                        </li>
+                        <li>
+                          <span class="check-icon">-</span
+                          ><strong>Guidance:</strong> Buy Setup is Watch or Strong
+                          while Exit Warning stays Low or Moderate.
+                        </li>
+                      </ul>
+                    </div>
+                    <div class="decision-block">
+                      <div class="decision-heading sell">Sell Only When</div>
+                      <ul class="decision-points" id="sell-checklist">
+                        <li>
+                          <span class="check-icon">-</span
+                          ><strong>Verdict:</strong> Bearish with confidence around
+                          70% or higher.
+                        </li>
+                        <li>
+                          <span class="check-icon">-</span
+                          ><strong>Trend + structure:</strong> Trend Structure is
+                          Bearish and Market Structure shows bearish drift,
+                          breakdown, or rejection.
+                        </li>
+                        <li>
+                          <span class="check-icon">-</span
+                          ><strong>Alignment:</strong> 15m / 1H / 4H shows strong
+                          bearish alignment.
+                        </li>
+                        <li>
+                          <span class="check-icon">-</span
+                          ><strong>Trigger:</strong> Candle is not indecisive and
+                          Summary supports downside continuation or rejection.
+                        </li>
+                        <li>
+                          <span class="check-icon">-</span
+                          ><strong>Guidance:</strong> Sell Setup is Watch or Strong
+                          while Exit Warning stays Low or Moderate.
+                        </li>
+                      </ul>
+                    </div>
+                    <div class="decision-block">
+                      <div class="decision-heading exit">
+                        Exit Or Stand Aside When
+                      </div>
+                      <ul class="decision-points" id="exit-checklist">
+                        <li>
+                          <span class="check-icon">-</span
+                          ><strong>Neutral:</strong> Verdict is Neutral, alignment
+                          is mixed, or Summary says no clean trigger is present.
+                        </li>
+                        <li>
+                          <span class="check-icon">-</span
+                          ><strong>Warning:</strong> Exit Warning is High or
+                          confidence drops sharply.
+                        </li>
+                        <li>
+                          <span class="check-icon">-</span
+                          ><strong>Conflict:</strong> Market Structure and Trend
+                          Structure point in different directions.
+                        </li>
+                        <li>
+                          <span class="check-icon">-</span
+                          ><strong>Indecision:</strong> Summary flags indecision or
+                          no clean trigger near key levels.
+                        </li>
+                        <li>
+                          <span class="check-icon">-</span><strong>Rule:</strong> If
+                          Buy Setup and Sell Setup are both Weak, do not force a
+                          trade.
+                        </li>
+                      </ul>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -2113,6 +2304,30 @@
         toggle.addEventListener("click", () => {
           const expanded = toggle.getAttribute("aria-expanded") === "true";
           setDecisionChecklistExpanded(!expanded);
+        });
+      }
+
+      function setCollapsibleSectionExpanded(toggleId, panelId, expanded) {
+        const toggle = document.getElementById(toggleId);
+        const panel = document.getElementById(panelId);
+        if (!toggle || !panel) return;
+        toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
+        panel.hidden = !expanded;
+        const badge = toggle.querySelector(".js-toggle-badge");
+        if (badge) {
+          badge.textContent = expanded
+            ? toggle.dataset.expandedLabel || "Open"
+            : toggle.dataset.collapsedLabel || "Hidden";
+        }
+      }
+
+      function initCollapsibleSectionToggle(toggleId, panelId) {
+        const toggle = document.getElementById(toggleId);
+        if (!toggle || toggle.dataset.bound === "1") return;
+        toggle.dataset.bound = "1";
+        toggle.addEventListener("click", () => {
+          const expanded = toggle.getAttribute("aria-expanded") === "true";
+          setCollapsibleSectionExpanded(toggleId, panelId, !expanded);
         });
       }
 
@@ -3091,6 +3306,16 @@
       // Fetch on load
       window.addEventListener("DOMContentLoaded", () => {
         bindViewportHeightSync();
+        initCollapsibleSectionToggle("technical-toggle", "technical-panel");
+        setCollapsibleSectionExpanded("technical-toggle", "technical-panel", false);
+        initCollapsibleSectionToggle("market-toggle", "market-panel");
+        setCollapsibleSectionExpanded("market-toggle", "market-panel", false);
+        initCollapsibleSectionToggle("rr-toggle", "rr-panel");
+        setCollapsibleSectionExpanded("rr-toggle", "rr-panel", false);
+        initCollapsibleSectionToggle("guidance-toggle", "guidance-panel");
+        setCollapsibleSectionExpanded("guidance-toggle", "guidance-panel", false);
+        initCollapsibleSectionToggle("execution-toggle", "execution-panel");
+        setCollapsibleSectionExpanded("execution-toggle", "execution-panel", false);
         initAutoresearchToggle();
         setAutoresearchExpanded(false);
         initDecisionChecklistToggle();
