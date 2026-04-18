@@ -599,6 +599,24 @@
       "start": "2026-10-14T12:00:00Z",
       "end": "2026-10-14T13:45:00Z",
       "reason": "Consumer Price Index release date from the St. Louis Fed FRED release schedule for October 14, 2026; FRED notes dates are published by the source."
+    },
+    {
+      "name": "PPI",
+      "start": "2026-10-15T12:00:00Z",
+      "end": "2026-10-15T13:45:00Z",
+      "reason": "Producer Price Index release date from the St. Louis Fed FRED release schedule for October 15, 2026; FRED notes dates are published by the source."
+    },
+    {
+      "name": "Retail Sales",
+      "start": "2026-10-15T12:00:00Z",
+      "end": "2026-10-15T13:45:00Z",
+      "reason": "Release date from the St. Louis Fed FRED release schedule for October 15, 2026 (Selected Real Retail Sales Series)."
+    },
+    {
+      "name": "Initial Jobless Claims",
+      "start": "2026-10-15T12:10:00Z",
+      "end": "2026-10-15T13:30:00Z",
+      "reason": "Release date from the St. Louis Fed FRED release schedule for October 15, 2026 (Unemployment Insurance Weekly Claims Report)."
     }
   ]
 }
