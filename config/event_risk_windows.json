@@ -617,6 +617,12 @@
       "start": "2026-10-15T12:10:00Z",
       "end": "2026-10-15T13:30:00Z",
       "reason": "Release date from the St. Louis Fed FRED release schedule for October 15, 2026 (Unemployment Insurance Weekly Claims Report)."
+    },
+    {
+      "name": "Initial Jobless Claims",
+      "start": "2026-10-16T12:10:00Z",
+      "end": "2026-10-16T13:30:00Z",
+      "reason": "Release date from the St. Louis Fed FRED release schedule for October 16, 2026 (State Unemployment Insurance Weekly Claims Report)."
     }
   ]
 }
