@@ -934,11 +934,20 @@ def _derive_dashboard_action(payload, ta_data=None):
         "Bearish Resistance Rejection",
         "Bearish Breakdown Through Support",
     }
-    bullish_event = event_regime in {"trend_acceleration", "range_expansion"} or (
-        event_regime == "breakout_watch" and breakout_bias == "Bullish"
+    event_direction = (
+        breakout_bias
+        if breakout_bias in {"Bullish", "Bearish"}
+        else direction_bias
+        if direction_bias in {"Bullish", "Bearish"}
+        else ""
     )
-    bearish_event = event_regime in {"trend_acceleration", "range_expansion"} or (
-        event_regime == "breakout_watch" and breakout_bias == "Bearish"
+    bullish_event = (
+        event_regime in {"trend_acceleration", "range_expansion", "breakout_watch"}
+        and event_direction == "Bullish"
+    )
+    bearish_event = (
+        event_regime in {"trend_acceleration", "range_expansion", "breakout_watch"}
+        and event_direction == "Bearish"
     )
     directional_warning = warning_ladder in {
         "Directional Expansion Likely",
