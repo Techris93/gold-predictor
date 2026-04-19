@@ -721,15 +721,12 @@ def _build_technical_analysis_from_frame(
     strategy_params = normalize_strategy_params(active_strategy_params)
     enriched = prepare_historical_features(df, strategy_params)
     latest = enriched.iloc[-1]
-    prev = enriched.iloc[-2] if len(enriched) > 1 else latest
     cross_asset_context = _get_cached_cross_asset_context()
-    support_resistance = _support_resistance_snapshot(enriched, latest, prev)
     shared_payload = build_ta_payload_from_row(
         latest,
         strategy_params,
         event_risk=result["event_risk"],
         cross_asset_context=cross_asset_context,
-        support_resistance=support_resistance,
     )
     result.update(shared_payload)
     result["data_source"] = data_source
@@ -742,7 +739,116 @@ def _build_technical_analysis_from_frame(
     result["cross_asset_context"] = cross_asset_context
     result["live_price_applied"] = bool(live_price_applied)
     result["live_price_tick_age_seconds"] = (max(0, now_ts - LAST_LIVE_PRICE_TS) if LAST_LIVE_PRICE_TS else None)
-    return _attach_freshness_metadata(result, df, now_ts)
+    return _attach_freshness_metadata(_normalize_ta_payload_schema(result), df, now_ts)
+
+
+def _normalize_ta_payload_schema(payload):
+    if not isinstance(payload, dict):
+        return payload
+
+    normalized = dict(payload)
+    support_resistance = normalized.get("support_resistance")
+    if not isinstance(support_resistance, dict):
+        support_resistance = {}
+    support_resistance = dict(support_resistance)
+    support_resistance.setdefault("nearest_support", None)
+    support_resistance.setdefault("nearest_resistance", None)
+    support_resistance.setdefault("support_distance_pct", None)
+    support_resistance.setdefault("resistance_distance_pct", None)
+    support_resistance.setdefault("reaction", "None")
+    support_resistance["nearby_supports"] = (
+        list(support_resistance.get("nearby_supports"))
+        if isinstance(support_resistance.get("nearby_supports"), list)
+        else []
+    )
+    support_resistance["nearby_resistances"] = (
+        list(support_resistance.get("nearby_resistances"))
+        if isinstance(support_resistance.get("nearby_resistances"), list)
+        else []
+    )
+    support_resistance["support_confluence"] = int(support_resistance.get("support_confluence") or 0)
+    support_resistance["resistance_confluence"] = int(support_resistance.get("resistance_confluence") or 0)
+    support_resistance["support_family_confluence"] = int(support_resistance.get("support_family_confluence") or 0)
+    support_resistance["resistance_family_confluence"] = int(support_resistance.get("resistance_family_confluence") or 0)
+
+    pivot_levels = support_resistance.get("pivot_levels")
+    if not isinstance(pivot_levels, dict):
+        pivot_levels = support_resistance.get("pivotLevels")
+    if not isinstance(pivot_levels, dict):
+        pivot_levels = {}
+    support_resistance["pivot_levels"] = {
+        "pp": pivot_levels.get("pp"),
+        "r1": pivot_levels.get("r1"),
+        "s1": pivot_levels.get("s1"),
+        "r2": pivot_levels.get("r2"),
+        "s2": pivot_levels.get("s2"),
+    }
+
+    round_numbers = support_resistance.get("round_numbers")
+    if not isinstance(round_numbers, dict):
+        round_numbers = support_resistance.get("roundNumbers")
+    if not isinstance(round_numbers, dict):
+        round_numbers = {}
+    support_resistance["round_numbers"] = {
+        "support": round_numbers.get("support"),
+        "resistance": round_numbers.get("resistance"),
+        "majorSupport": round_numbers.get("majorSupport"),
+        "majorResistance": round_numbers.get("majorResistance"),
+        "step": round_numbers.get("step"),
+    }
+
+    active_fvgs = support_resistance.get("active_fvgs")
+    if not isinstance(active_fvgs, dict):
+        active_fvgs = support_resistance.get("activeFvgs")
+    if not isinstance(active_fvgs, dict):
+        active_fvgs = {}
+    support_resistance["active_fvgs"] = {
+        "bullish": active_fvgs.get("bullish"),
+        "bearish": active_fvgs.get("bearish"),
+    }
+    support_resistance["range_zone"] = (
+        support_resistance.get("range_zone")
+        if isinstance(support_resistance.get("range_zone"), dict)
+        else support_resistance.get("rangeZone")
+        if isinstance(support_resistance.get("rangeZone"), dict)
+        else None
+    )
+    normalized["support_resistance"] = support_resistance
+
+    structure_context = normalized.get("structure_context")
+    if not isinstance(structure_context, dict):
+        structure_context = {}
+    structure_context = dict(structure_context)
+    structure_defaults = {
+        "pivotPoint": support_resistance["pivot_levels"]["pp"],
+        "pivotResistance1": support_resistance["pivot_levels"]["r1"],
+        "pivotSupport1": support_resistance["pivot_levels"]["s1"],
+        "pivotResistance2": support_resistance["pivot_levels"]["r2"],
+        "pivotSupport2": support_resistance["pivot_levels"]["s2"],
+        "roundNumberSupport": support_resistance["round_numbers"]["support"],
+        "roundNumberResistance": support_resistance["round_numbers"]["resistance"],
+        "majorRoundNumberSupport": support_resistance["round_numbers"]["majorSupport"],
+        "majorRoundNumberResistance": support_resistance["round_numbers"]["majorResistance"],
+        "roundNumberStep": support_resistance["round_numbers"]["step"],
+        "roundSupportDistancePct": structure_context.get("roundSupportDistancePct"),
+        "roundResistanceDistancePct": structure_context.get("roundResistanceDistancePct"),
+        "bullishFvg": support_resistance["active_fvgs"]["bullish"],
+        "bearishFvg": support_resistance["active_fvgs"]["bearish"],
+        "bullishFvgDistancePct": structure_context.get("bullishFvgDistancePct"),
+        "bearishFvgDistancePct": structure_context.get("bearishFvgDistancePct"),
+        "inBullishFvg": bool(structure_context.get("inBullishFvg") or 0),
+        "inBearishFvg": bool(structure_context.get("inBearishFvg") or 0),
+        "rangeZone": support_resistance["range_zone"],
+        "rangeZoneActive": bool(structure_context.get("rangeZoneActive") or 0),
+        "inRangeZone": bool(structure_context.get("inRangeZone") or 0),
+        "rangeZoneBreak": structure_context.get("rangeZoneBreak"),
+        "rangeZonePosition": structure_context.get("rangeZonePosition"),
+        "rangeZoneWidthPct": structure_context.get("rangeZoneWidthPct"),
+    }
+    for key, default_value in structure_defaults.items():
+        structure_context.setdefault(key, default_value)
+    normalized["structure_context"] = structure_context
+    return normalized
 
 
 def get_technical_analysis():
@@ -786,7 +892,7 @@ def get_technical_analysis():
             cached["data_source"] = f"{cached.get('data_source', 'Twelve Data')} (Cached Fallback)"
             cached["served_from_cache"] = True
             cached["cache_age_seconds"] = cache_age_seconds
-            return cached
+            return _normalize_ta_payload_schema(cached)
         return {"error": error_message}
 
     if (
@@ -818,7 +924,7 @@ def get_technical_analysis():
                 cached = dict(LAST_SUCCESSFUL_TA)
                 cached["served_from_cache"] = True
                 cached["cache_age_seconds"] = max(0, now_ts - LAST_TA_REFRESH_TS)
-                return cached
+                return _normalize_ta_payload_schema(cached)
 
     try:
         df = pd.DataFrame()

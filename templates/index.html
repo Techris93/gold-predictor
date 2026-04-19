@@ -54,7 +54,12 @@
         --border-soft: rgba(91, 113, 98, 0.35);
         --accent: #d6c45e;
         --accent-strong: #efe2a1;
-        --accent-gradient: linear-gradient(135deg, #d6c45e 0%, #f3e6a6 48%, #baaa4d 100%);
+        --accent-gradient: linear-gradient(
+          135deg,
+          #d6c45e 0%,
+          #f3e6a6 48%,
+          #baaa4d 100%
+        );
         --bullish: #72d48f;
         --bearish: #ef7a71;
         --neutral: #b9c3bc;
@@ -82,8 +87,16 @@
       body {
         font-family: "IBM Plex Sans", sans-serif;
         background:
-          radial-gradient(circle at 14% 10%, rgba(114, 212, 143, 0.08), transparent 26%),
-          radial-gradient(circle at 86% 8%, rgba(214, 196, 94, 0.13), transparent 28%),
+          radial-gradient(
+            circle at 14% 10%,
+            rgba(114, 212, 143, 0.08),
+            transparent 26%
+          ),
+          radial-gradient(
+            circle at 86% 8%,
+            rgba(214, 196, 94, 0.13),
+            transparent 28%
+          ),
           linear-gradient(180deg, #121613 0%, #0e120f 100%);
         color: var(--text-main);
         min-height: 100vh;
@@ -208,7 +221,11 @@
         border: 1px solid var(--border);
         border-radius: 8px;
         background:
-          linear-gradient(135deg, rgba(23, 31, 26, 0.96), rgba(17, 22, 19, 0.94)),
+          linear-gradient(
+            135deg,
+            rgba(23, 31, 26, 0.96),
+            rgba(17, 22, 19, 0.94)
+          ),
           var(--surface);
         overflow: hidden;
         box-shadow: 0 22px 42px rgba(0, 0, 0, 0.28);
@@ -220,7 +237,11 @@
         inset: 0;
         background:
           linear-gradient(105deg, rgba(214, 196, 94, 0.08), transparent 42%),
-          radial-gradient(circle at 88% 18%, rgba(114, 212, 143, 0.08), transparent 28%);
+          radial-gradient(
+            circle at 88% 18%,
+            rgba(114, 212, 143, 0.08),
+            transparent 28%
+          );
         pointer-events: none;
       }
 
@@ -260,7 +281,11 @@
         padding: 16px;
         border: 1px solid rgba(214, 196, 94, 0.32);
         border-radius: 8px;
-        background: linear-gradient(180deg, rgba(33, 41, 36, 0.92), rgba(22, 27, 24, 0.92));
+        background: linear-gradient(
+          180deg,
+          rgba(33, 41, 36, 0.92),
+          rgba(22, 27, 24, 0.92)
+        );
       }
 
       .card-kicker {
@@ -403,7 +428,11 @@
         padding: 16px;
         border-radius: 8px;
         border: 1px solid var(--border-soft);
-        background: linear-gradient(180deg, rgba(31, 39, 34, 0.94), rgba(21, 28, 24, 0.92));
+        background: linear-gradient(
+          180deg,
+          rgba(31, 39, 34, 0.94),
+          rgba(21, 28, 24, 0.92)
+        );
         box-shadow: 0 14px 30px rgba(0, 0, 0, 0.18);
         overflow: hidden;
       }
@@ -1070,6 +1099,18 @@
               <span class="metric-label">Bar Session / Microstructure</span>
               <span class="metric-value compact" id="rs-session">---</span>
             </div>
+            <div class="metric-row">
+              <span class="metric-label">Pivots / Round</span>
+              <span class="metric-value compact" id="rs-levels">---</span>
+            </div>
+            <div class="metric-row">
+              <span class="metric-label">Nearby S/R</span>
+              <span class="metric-value compact" id="rs-nearby">---</span>
+            </div>
+            <div class="metric-row">
+              <span class="metric-label">FVG / Range Zone</span>
+              <span class="metric-value compact" id="rs-zones">---</span>
+            </div>
           </section>
 
           <section class="section-card card-technical">
@@ -1085,7 +1126,8 @@
               <span class="ar-heading-wrap">
                 <span class="section-toggle-label">Technical Indicators</span>
                 <span class="section-toggle-subtext"
-                  >Tap to open trend, momentum, and active parameter details</span
+                  >Tap to open trend, momentum, and active parameter
+                  details</span
                 >
               </span>
               <span class="ar-toggle-meta">
@@ -1127,7 +1169,9 @@
                 <span class="metric-value" id="ta-regime">---</span>
               </div>
               <div class="metric-row">
-                <span class="metric-label">Trend Alignment (15m / 1H / 4H)</span>
+                <span class="metric-label"
+                  >Trend Alignment (15m / 1H / 4H)</span
+                >
                 <span class="metric-value" id="ta-alignment">---</span>
               </div>
               <div class="metric-row">
@@ -1231,9 +1275,12 @@
               data-collapsed-label="Hidden"
             >
               <span class="ar-heading-wrap">
-                <span class="section-toggle-label">Adaptive RR Signal (1:2)</span>
+                <span class="section-toggle-label"
+                  >Adaptive RR Signal (1:2)</span
+                >
                 <span class="section-toggle-subtext"
-                  >Tap to open grade, bucket probability, and level details</span
+                  >Tap to open grade, bucket probability, and level
+                  details</span
                 >
               </span>
               <span class="ar-toggle-meta">
@@ -1367,9 +1414,12 @@
                   data-collapsed-label="Hidden"
                 >
                   <span class="ar-heading-wrap">
-                    <span class="decision-toggle-label">Execution Checklist</span>
+                    <span class="decision-toggle-label"
+                      >Execution Checklist</span
+                    >
                     <span class="decision-toggle-subtext"
-                      >Tap to open execution state, playbook, and checklist rules</span
+                      >Tap to open execution state, playbook, and checklist
+                      rules</span
                     >
                   </span>
                   <span class="ar-toggle-meta">
@@ -1394,12 +1444,17 @@
                 <div id="execution-panel" hidden>
                   <div class="decision-status">
                     <div class="decision-status-label">Current Read</div>
-                    <div class="decision-status-value wait" id="decision-status">
+                    <div
+                      class="decision-status-value wait"
+                      id="decision-status"
+                    >
                       Evaluating checklist...
                     </div>
                   </div>
                   <div class="decision-status">
-                    <div class="decision-status-label">Execution Permission</div>
+                    <div class="decision-status-label">
+                      Execution Permission
+                    </div>
                     <div
                       class="decision-status-value wait"
                       id="execution-permission"
@@ -1439,8 +1494,8 @@
                     </div>
                     <ul class="playbook-why" id="trade-playbook-why">
                       <li>
-                        Playbook rationale will appear here once the market state
-                        is loaded.
+                        Playbook rationale will appear here once the market
+                        state is loaded.
                       </li>
                     </ul>
                   </div>
@@ -1453,7 +1508,9 @@
                     aria-controls="decision-details"
                   >
                     <span class="ar-heading-wrap">
-                      <span class="decision-toggle-label">Detailed Checklist</span>
+                      <span class="decision-toggle-label"
+                        >Detailed Checklist</span
+                      >
                       <span class="decision-toggle-subtext"
                         >Tap to open buy, sell, and exit rules</span
                       >
@@ -1483,19 +1540,19 @@
                       <ul class="decision-points" id="buy-checklist">
                         <li>
                           <span class="check-icon">-</span
-                          ><strong>Verdict:</strong> Bullish with confidence around
-                          70% or higher.
+                          ><strong>Verdict:</strong> Bullish with confidence
+                          around 70% or higher.
                         </li>
                         <li>
                           <span class="check-icon">-</span
-                          ><strong>Trend + structure:</strong> Trend Structure is
-                          Bullish and Market Structure is bullish drift, breakout,
-                          or continuation.
+                          ><strong>Trend + structure:</strong> Trend Structure
+                          is Bullish and Market Structure is bullish drift,
+                          breakout, or continuation.
                         </li>
                         <li>
                           <span class="check-icon">-</span
-                          ><strong>Alignment:</strong> 15m / 1H / 4H shows strong
-                          bullish alignment.
+                          ><strong>Alignment:</strong> 15m / 1H / 4H shows
+                          strong bullish alignment.
                         </li>
                         <li>
                           <span class="check-icon">-</span
@@ -1504,8 +1561,8 @@
                         </li>
                         <li>
                           <span class="check-icon">-</span
-                          ><strong>Guidance:</strong> Buy Setup is Watch or Strong
-                          while Exit Warning stays Low or Moderate.
+                          ><strong>Guidance:</strong> Buy Setup is Watch or
+                          Strong while Exit Warning stays Low or Moderate.
                         </li>
                       </ul>
                     </div>
@@ -1514,29 +1571,30 @@
                       <ul class="decision-points" id="sell-checklist">
                         <li>
                           <span class="check-icon">-</span
-                          ><strong>Verdict:</strong> Bearish with confidence around
-                          70% or higher.
+                          ><strong>Verdict:</strong> Bearish with confidence
+                          around 70% or higher.
                         </li>
                         <li>
                           <span class="check-icon">-</span
-                          ><strong>Trend + structure:</strong> Trend Structure is
-                          Bearish and Market Structure shows bearish drift,
+                          ><strong>Trend + structure:</strong> Trend Structure
+                          is Bearish and Market Structure shows bearish drift,
                           breakdown, or rejection.
                         </li>
                         <li>
                           <span class="check-icon">-</span
-                          ><strong>Alignment:</strong> 15m / 1H / 4H shows strong
-                          bearish alignment.
+                          ><strong>Alignment:</strong> 15m / 1H / 4H shows
+                          strong bearish alignment.
                         </li>
                         <li>
                           <span class="check-icon">-</span
-                          ><strong>Trigger:</strong> Candle is not indecisive and
-                          Summary supports downside continuation or rejection.
+                          ><strong>Trigger:</strong> Candle is not indecisive
+                          and Summary supports downside continuation or
+                          rejection.
                         </li>
                         <li>
                           <span class="check-icon">-</span
-                          ><strong>Guidance:</strong> Sell Setup is Watch or Strong
-                          while Exit Warning stays Low or Moderate.
+                          ><strong>Guidance:</strong> Sell Setup is Watch or
+                          Strong while Exit Warning stays Low or Moderate.
                         </li>
                       </ul>
                     </div>
@@ -1547,8 +1605,9 @@
                       <ul class="decision-points" id="exit-checklist">
                         <li>
                           <span class="check-icon">-</span
-                          ><strong>Neutral:</strong> Verdict is Neutral, alignment
-                          is mixed, or Summary says no clean trigger is present.
+                          ><strong>Neutral:</strong> Verdict is Neutral,
+                          alignment is mixed, or Summary says no clean trigger
+                          is present.
                         </li>
                         <li>
                           <span class="check-icon">-</span
@@ -1562,13 +1621,13 @@
                         </li>
                         <li>
                           <span class="check-icon">-</span
-                          ><strong>Indecision:</strong> Summary flags indecision or
-                          no clean trigger near key levels.
+                          ><strong>Indecision:</strong> Summary flags indecision
+                          or no clean trigger near key levels.
                         </li>
                         <li>
-                          <span class="check-icon">-</span><strong>Rule:</strong> If
-                          Buy Setup and Sell Setup are both Weak, do not force a
-                          trade.
+                          <span class="check-icon">-</span
+                          ><strong>Rule:</strong> If Buy Setup and Sell Setup
+                          are both Weak, do not force a trade.
                         </li>
                       </ul>
                     </div>
@@ -1708,7 +1767,9 @@
 
       function hasPersistedPushEnable() {
         try {
-          return window.localStorage.getItem(ALERTS_ENABLED_STORAGE_KEY) === "1";
+          return (
+            window.localStorage.getItem(ALERTS_ENABLED_STORAGE_KEY) === "1"
+          );
         } catch (_) {
           return false;
         }
@@ -2155,8 +2216,12 @@
       }
 
       function formatDirectionalOwnerLabel(source, timeframe) {
-        const normalizedSource = String(source || "h1").trim().toLowerCase();
-        const normalizedTimeframe = String(timeframe || "").trim().toUpperCase();
+        const normalizedSource = String(source || "h1")
+          .trim()
+          .toLowerCase();
+        const normalizedTimeframe = String(timeframe || "")
+          .trim()
+          .toUpperCase();
         if (normalizedSource === "breakout_stack") {
           return normalizedTimeframe
             ? `Breakout Model ${normalizedTimeframe}`
@@ -2172,12 +2237,16 @@
       }
 
       function formatDirectionOwnerTitle(source, timeframe, entryTimeframe) {
-        const normalizedSource = String(source || "h1").trim().toLowerCase();
+        const normalizedSource = String(source || "h1")
+          .trim()
+          .toLowerCase();
         const directionOwnerLabel = formatDirectionalOwnerLabel(
           normalizedSource,
           timeframe,
         );
-        const entryTf = String(entryTimeframe || "15m").trim().toUpperCase();
+        const entryTf = String(entryTimeframe || "15m")
+          .trim()
+          .toUpperCase();
         if (normalizedSource === "breakout_stack") {
           return `Direction is owned by the ${String(timeframe || "60m").toUpperCase()} breakout probability model while raw H1 remains neutral; ${entryTf} is entry-only.`;
         }
@@ -2583,7 +2652,9 @@
         }
         const parts = formatter.formatToParts(date);
         const hour = Number(parts.find((part) => part.type === "hour")?.value);
-        const minute = Number(parts.find((part) => part.type === "minute")?.value);
+        const minute = Number(
+          parts.find((part) => part.type === "minute")?.value,
+        );
         if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null;
         return { hour, minute };
       }
@@ -2657,7 +2728,9 @@
             : vwapBias === "Bearish" || vwapBias === "Mild Bearish"
               ? -1
               : 0;
-        return Math.sign(vwapTone + Math.sign(orbState) + Math.sign(sweepState));
+        return Math.sign(
+          vwapTone + Math.sign(orbState) + Math.sign(sweepState),
+        );
       }
 
       function getBigMoveRiskBucket(value) {
@@ -2680,6 +2753,125 @@
         const hours = String(date.getUTCHours()).padStart(2, "0");
         const minutes = String(date.getUTCMinutes()).padStart(2, "0");
         return `${hours}:${minutes} UTC`;
+      }
+
+      function getFirstDefinedValue(...values) {
+        for (const value of values) {
+          if (value !== undefined && value !== null) return value;
+        }
+        return undefined;
+      }
+
+      function getObjectWithFallback(...values) {
+        for (const value of values) {
+          if (value && typeof value === "object" && !Array.isArray(value)) {
+            return value;
+          }
+        }
+        return null;
+      }
+
+      function getArrayWithFallback(...values) {
+        for (const value of values) {
+          if (Array.isArray(value)) return value;
+        }
+        return [];
+      }
+
+      function getNullableNumber(...values) {
+        const value = getFirstDefinedValue(...values);
+        if (value === null || value === undefined || value === "") return null;
+        const numeric = Number(value);
+        return Number.isFinite(numeric) ? numeric : null;
+      }
+
+      function formatPriceLevel(value) {
+        const numeric = Number(value);
+        return Number.isFinite(numeric) ? numeric.toFixed(2) : null;
+      }
+
+      function formatCompactLevelPair(label, left, right) {
+        const leftText = formatPriceLevel(left);
+        const rightText = formatPriceLevel(right);
+        if (!leftText && !rightText) return null;
+        if (leftText && rightText && leftText === rightText) {
+          return `${label} ${leftText}`;
+        }
+        if (leftText && rightText) {
+          return `${label} ${leftText} / ${rightText}`;
+        }
+        return `${label} ${leftText || rightText}`;
+      }
+
+      function formatZoneText(zone) {
+        if (!zone || typeof zone !== "object") return null;
+        const low = formatPriceLevel(zone.low);
+        const high = formatPriceLevel(zone.high);
+        if (!low || !high) return null;
+        return `${low}-${high}`;
+      }
+
+      function shortenLevelLabel(label) {
+        const text = String(label || "").trim();
+        if (!text) return "Level";
+        const labelMap = {
+          "Daily Pivot Point": "PP",
+          "Daily Pivot Resistance 1": "R1",
+          "Daily Pivot Support 1": "S1",
+          "Daily Pivot Resistance 2": "R2",
+          "Daily Pivot Support 2": "S2",
+          "Round Number Support": "Round S",
+          "Round Number Resistance": "Round R",
+          "Major Round Number Support": "Major S",
+          "Major Round Number Resistance": "Major R",
+          "Bullish FVG Support": "Bull FVG",
+          "Bullish FVG Lower Edge": "Bull FVG L",
+          "Bullish FVG Upper Edge": "Bull FVG U",
+          "Bearish FVG Resistance": "Bear FVG",
+          "Bearish FVG Lower Edge": "Bear FVG L",
+          "Bearish FVG Upper Edge": "Bear FVG U",
+          "Previous Day High": "PDH",
+          "Previous Day Low": "PDL",
+          "Previous Week High": "PWH",
+          "Previous Week Low": "PWL",
+          "Recent Swing High": "Swing High",
+          "Recent Swing Low": "Swing Low",
+          "Major Swing High": "Major High",
+          "Major Swing Low": "Major Low",
+          "Range Zone High": "Range High",
+          "Range Zone Low": "Range Low",
+        };
+        if (labelMap[text]) return labelMap[text];
+        return text
+          .replace("Resistance", "Res")
+          .replace("Support", "Sup")
+          .replace("Previous", "Prev")
+          .replace("Number", "")
+          .replace(/\s+/g, " ")
+          .trim();
+      }
+
+      function formatNearbyLevelSummary(levels, sideLabel) {
+        if (!Array.isArray(levels) || levels.length === 0) {
+          return `${sideLabel} none`;
+        }
+        const items = levels
+          .slice(0, 2)
+          .map((level) => {
+            const price = formatPriceLevel(level?.price);
+            const label = shortenLevelLabel(level?.label);
+            return price ? `${label} ${price}` : label;
+          })
+          .filter(Boolean);
+        return items.length
+          ? `${sideLabel} ${items.join(", ")}`
+          : `${sideLabel} none`;
+      }
+
+      function getRangeBreakLabel(value, active) {
+        if (value > 0) return "Bull Break";
+        if (value < 0) return "Bear Break";
+        return active ? "Holding" : "Inactive";
       }
 
       function evaluateDecisionChecklist(data, ta, tradeGuidance) {
@@ -2815,9 +3007,15 @@
         )
           ? verdict.toLowerCase()
           : "neutral";
-        const confidence = Math.max(0, Math.min(100, safeNumber(data.confidence, 0)));
+        const confidence = Math.max(
+          0,
+          Math.min(100, safeNumber(data.confidence, 0)),
+        );
         const trendText = safeText(ta.ema_trend, "Neutral");
-        const dataSourceText = safeText(ta.data_source, "Market data available");
+        const dataSourceText = safeText(
+          ta.data_source,
+          "Market data available",
+        );
         const structureText = safeText(
           priceAction.structure,
           "No clear structure",
@@ -2873,7 +3071,8 @@
         badge.className = `badge ${verdictClass}`;
 
         document.getElementById("confidence-val").innerText = `${confidence}%`;
-        document.getElementById("confidence-bar").style.width = `${confidence}%`;
+        document.getElementById("confidence-bar").style.width =
+          `${confidence}%`;
 
         const trendEl = document.getElementById("ta-trend");
         trendEl.innerText = trendText;
@@ -2918,7 +3117,9 @@
         document.getElementById("ta-adx").innerText =
           regime.adx_14 !== undefined ? safeText(regime.adx_14) : "N/A";
         document.getElementById("ta-atrpct").innerText =
-          regime.atr_percent !== undefined ? `${safeText(regime.atr_percent)}%` : "N/A";
+          regime.atr_percent !== undefined
+            ? `${safeText(regime.atr_percent)}%`
+            : "N/A";
         const activeParamsEl = document.getElementById("ta-active-params");
         if (activeParamsEl) {
           activeParamsEl.innerText = formatActiveParamsSummary(
@@ -3045,6 +3246,9 @@
         const regimeEventEl = document.getElementById("rs-event-regime");
         const regimeLadderEl = document.getElementById("rs-warning-ladder");
         const regimeContextEl = document.getElementById("rs-context");
+        const regimeLevelsEl = document.getElementById("rs-levels");
+        const regimeNearbyEl = document.getElementById("rs-nearby");
+        const regimeZonesEl = document.getElementById("rs-zones");
 
         const bigMoveRisk = Number(regimeState.big_move_risk || 0);
         const breakoutBias = regimeState.breakout_bias || "Neutral";
@@ -3058,11 +3262,14 @@
         regimeBiasEl.className = `metric-value ${breakoutBias === "Bullish" ? "value-bullish" : breakoutBias === "Bearish" ? "value-bearish" : ""}`;
         regimeEventEl.innerText = humanizeWords(eventRegimeText);
         regimeEventEl.className = `metric-value ${
-          eventRegimeText === "panic_reversal" || eventRegimeText === "event_risk"
+          eventRegimeText === "panic_reversal" ||
+          eventRegimeText === "event_risk"
             ? "value-bearish"
-            : ["breakout_watch", "trend_acceleration", "range_expansion"].includes(
-                  eventRegimeText,
-                )
+            : [
+                  "breakout_watch",
+                  "trend_acceleration",
+                  "range_expansion",
+                ].includes(eventRegimeText)
               ? breakoutBias === "Bullish"
                 ? "value-bullish"
                 : breakoutBias === "Bearish"
@@ -3112,6 +3319,26 @@
           .filter(Boolean)
           .join(" · ");
         regimeContextEl.innerText = `Range ${regimeState.expected_range_expansion || "---"} · Cross-asset ${crossAssetText} · Next event ${nextEventText}${nearEventsText ? ` · Near ${nearEventsText}` : ""}`;
+        const structureContext =
+          ta.structure_context && typeof ta.structure_context === "object"
+            ? ta.structure_context
+            : {};
+        const supportResistance =
+          ta.support_resistance && typeof ta.support_resistance === "object"
+            ? ta.support_resistance
+            : {};
+        const pivotLevels = getObjectWithFallback(
+          supportResistance.pivot_levels,
+          supportResistance.pivotLevels,
+        );
+        const roundNumbers = getObjectWithFallback(
+          supportResistance.round_numbers,
+          supportResistance.roundNumbers,
+        );
+        const activeFvgs = getObjectWithFallback(
+          supportResistance.active_fvgs,
+          supportResistance.activeFvgs,
+        );
         const sessionContextEl = document.getElementById("rs-session");
         if (sessionContextEl) {
           const session = ta.session_context || {};
@@ -3119,13 +3346,13 @@
             session.bar_session && typeof session.bar_session === "object"
               ? session.bar_session
               : {};
-          const structureContext = ta.structure_context || {};
           const barTimestampUtc =
             barSession.timestampUtc ||
             session.barTimestampUtc ||
             ta.bar_timestamp_utc;
           const currentSession =
-            session.current_session && typeof session.current_session === "object"
+            session.current_session &&
+            typeof session.current_session === "object"
               ? session.current_session
               : {};
           const barLabel =
@@ -3163,6 +3390,200 @@
             sweepState,
           );
           sessionContextEl.className = `metric-value compact ${microstructureTone > 0 ? "value-bullish" : microstructureTone < 0 ? "value-bearish" : ""}`;
+        }
+        if (regimeLevelsEl) {
+          const pivotPoint = getFirstDefinedValue(
+            structureContext.pivotPoint,
+            structureContext.pivot_point,
+            pivotLevels?.pp,
+          );
+          const pivotResistance1 = getFirstDefinedValue(
+            structureContext.pivotResistance1,
+            structureContext.pivot_resistance_1,
+            pivotLevels?.r1,
+          );
+          const pivotSupport1 = getFirstDefinedValue(
+            structureContext.pivotSupport1,
+            structureContext.pivot_support_1,
+            pivotLevels?.s1,
+          );
+          const pivotResistance2 = getFirstDefinedValue(
+            structureContext.pivotResistance2,
+            structureContext.pivot_resistance_2,
+            pivotLevels?.r2,
+          );
+          const pivotSupport2 = getFirstDefinedValue(
+            structureContext.pivotSupport2,
+            structureContext.pivot_support_2,
+            pivotLevels?.s2,
+          );
+          const roundSupport = getFirstDefinedValue(
+            structureContext.roundNumberSupport,
+            structureContext.round_number_support,
+            roundNumbers?.support,
+          );
+          const roundResistance = getFirstDefinedValue(
+            structureContext.roundNumberResistance,
+            structureContext.round_number_resistance,
+            roundNumbers?.resistance,
+          );
+          const majorRoundSupport = getFirstDefinedValue(
+            structureContext.majorRoundNumberSupport,
+            structureContext.major_round_number_support,
+            roundNumbers?.majorSupport,
+          );
+          const majorRoundResistance = getFirstDefinedValue(
+            structureContext.majorRoundNumberResistance,
+            structureContext.major_round_number_resistance,
+            roundNumbers?.majorResistance,
+          );
+          const pivotRoundParts = [
+            formatCompactLevelPair(
+              "PP",
+              pivotPoint,
+              pivotPoint,
+            ),
+            formatCompactLevelPair(
+              "R1/S1",
+              pivotResistance1,
+              pivotSupport1,
+            ),
+            formatCompactLevelPair(
+              "R2/S2",
+              pivotResistance2,
+              pivotSupport2,
+            ),
+            formatCompactLevelPair(
+              "Round",
+              roundSupport,
+              roundResistance,
+            ),
+            formatCompactLevelPair(
+              "Major",
+              majorRoundSupport,
+              majorRoundResistance,
+            ),
+          ].filter(Boolean);
+          regimeLevelsEl.innerText = pivotRoundParts.length
+            ? pivotRoundParts.join(" · ")
+            : "Unavailable";
+          regimeLevelsEl.className = "metric-value compact";
+        }
+        if (regimeNearbyEl) {
+          const nearbySupports = getArrayWithFallback(
+            supportResistance.nearby_supports,
+            supportResistance.nearbySupports,
+          );
+          const nearbyResistances = getArrayWithFallback(
+            supportResistance.nearby_resistances,
+            supportResistance.nearbyResistances,
+          );
+          const supportTone = Number(
+            getFirstDefinedValue(
+              supportResistance.support_family_confluence,
+              supportResistance.supportFamilyConfluence,
+              supportResistance.support_confluence,
+              supportResistance.supportConfluence,
+            ) ||
+              nearbySupports.length ||
+              0,
+          );
+          const resistanceTone = Number(
+            getFirstDefinedValue(
+              supportResistance.resistance_family_confluence,
+              supportResistance.resistanceFamilyConfluence,
+              supportResistance.resistance_confluence,
+              supportResistance.resistanceConfluence,
+            ) ||
+              nearbyResistances.length ||
+              0,
+          );
+          regimeNearbyEl.innerText = `${formatNearbyLevelSummary(nearbySupports, "S")} · ${formatNearbyLevelSummary(nearbyResistances, "R")}`;
+          regimeNearbyEl.className = `metric-value compact ${supportTone > resistanceTone ? "value-bullish" : resistanceTone > supportTone ? "value-bearish" : ""}`;
+        }
+        if (regimeZonesEl) {
+          const bullishFvg = getObjectWithFallback(
+            structureContext.bullishFvg,
+            structureContext.bullish_fvg,
+            activeFvgs?.bullish,
+          );
+          const bearishFvg = getObjectWithFallback(
+            structureContext.bearishFvg,
+            structureContext.bearish_fvg,
+            activeFvgs?.bearish,
+          );
+          const rangeZone = getObjectWithFallback(
+            structureContext.rangeZone,
+            structureContext.range_zone,
+            supportResistance.range_zone,
+            supportResistance.rangeZone,
+          );
+          const bullishFvgText = formatZoneText(bullishFvg);
+          const bearishFvgText = formatZoneText(bearishFvg);
+          const rangeZoneText = formatZoneText(rangeZone);
+          const rangeZoneActive = Boolean(
+            getFirstDefinedValue(
+              structureContext.rangeZoneActive,
+              structureContext.range_zone_active,
+            ),
+          );
+          const inRangeZone = Boolean(
+            getFirstDefinedValue(
+              structureContext.inRangeZone,
+              structureContext.in_range_zone,
+            ),
+          );
+          const inBullishFvg = Boolean(
+            getFirstDefinedValue(
+              structureContext.inBullishFvg,
+              structureContext.in_bullish_fvg,
+            ),
+          );
+          const inBearishFvg = Boolean(
+            getFirstDefinedValue(
+              structureContext.inBearishFvg,
+              structureContext.in_bearish_fvg,
+            ),
+          );
+          const rangeBreak = getRoundedSignalState(
+            getFirstDefinedValue(
+              structureContext.rangeZoneBreak,
+              structureContext.range_zone_break,
+            ),
+          );
+          const rangePosition = getNullableNumber(
+            structureContext.rangeZonePosition,
+            structureContext.range_zone_position,
+          );
+          const zoneParts = [
+            `Bull ${bullishFvgText || "none"}${inBullishFvg ? " in" : ""}`,
+            `Bear ${bearishFvgText || "none"}${inBearishFvg ? " in" : ""}`,
+          ];
+          if (rangeZoneText) {
+            const positionText = Number.isFinite(rangePosition)
+              ? ` @ ${(rangePosition * 100).toFixed(0)}%`
+              : "";
+            const rangeState = rangeZoneActive
+              ? "active"
+              : inRangeZone
+                ? "inside"
+                : "tracked";
+            zoneParts.push(
+              `Range ${rangeState} ${rangeZoneText}${positionText} · ${getRangeBreakLabel(rangeBreak, rangeZoneActive || inRangeZone)}`,
+            );
+          } else {
+            zoneParts.push(
+              `Range ${getRangeBreakLabel(rangeBreak, rangeZoneActive || inRangeZone)}`,
+            );
+          }
+          regimeZonesEl.innerText = zoneParts.join(" · ");
+          const zoneTone =
+            rangeBreak > 0 || inBullishFvg
+              ? 1
+              : rangeBreak < 0 || inBearishFvg
+                ? -1
+                : 0;
+          regimeZonesEl.className = `metric-value compact ${zoneTone > 0 ? "value-bullish" : zoneTone < 0 ? "value-bearish" : ""}`;
         }
 
         const rrSignal =
@@ -3242,9 +3663,7 @@
               : rrH4Trend === "Neutral"
                 ? "neutral"
                 : "watch";
-          const rrH1Prefix = rrSignal.h1NeutralOverrideActive
-            ? "Raw H1"
-            : "H1";
+          const rrH1Prefix = rrSignal.h1NeutralOverrideActive ? "Raw H1" : "H1";
           rrTimeframeFilterEl.innerText = `Dir ${rrDirectionOwnerLabel} ${rrDisplayedDirection} · ${rrH1Prefix} ${rrH1Trend} ${rrH1GateLabel} · H4 ${rrH4Trend} ${rrH4GateLabel} · M15 ${rrEntryTf} ${rrM15Trend} ${rrM15Pass ? "trigger" : "waiting"}`;
           rrTimeframeFilterEl.className = `metric-value compact ${(!rrH4Pass && rrDisplayedDirection !== "Neutral") || (!rrH1Pass && !rrSignal.h1Neutral) ? "value-bearish" : rrM15Pass ? (rrDisplayedDirection === "Bullish" ? "value-bullish" : rrDisplayedDirection === "Bearish" ? "value-bearish" : "") : ""}`;
         }
@@ -3437,15 +3856,27 @@
       window.addEventListener("DOMContentLoaded", () => {
         bindViewportHeightSync();
         initCollapsibleSectionToggle("technical-toggle", "technical-panel");
-        setCollapsibleSectionExpanded("technical-toggle", "technical-panel", false);
+        setCollapsibleSectionExpanded(
+          "technical-toggle",
+          "technical-panel",
+          false,
+        );
         initCollapsibleSectionToggle("market-toggle", "market-panel");
         setCollapsibleSectionExpanded("market-toggle", "market-panel", false);
         initCollapsibleSectionToggle("rr-toggle", "rr-panel");
         setCollapsibleSectionExpanded("rr-toggle", "rr-panel", false);
         initCollapsibleSectionToggle("guidance-toggle", "guidance-panel");
-        setCollapsibleSectionExpanded("guidance-toggle", "guidance-panel", false);
+        setCollapsibleSectionExpanded(
+          "guidance-toggle",
+          "guidance-panel",
+          false,
+        );
         initCollapsibleSectionToggle("execution-toggle", "execution-panel");
-        setCollapsibleSectionExpanded("execution-toggle", "execution-panel", false);
+        setCollapsibleSectionExpanded(
+          "execution-toggle",
+          "execution-panel",
+          false,
+        );
         initAutoresearchToggle();
         setAutoresearchExpanded(false);
         initDecisionChecklistToggle();
