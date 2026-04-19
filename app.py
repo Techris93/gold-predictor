@@ -1323,6 +1323,41 @@ def _derive_dashboard_action(payload, ta_data=None):
             "bearish_evidence": bearish_evidence,
         }
 
+    if (
+        active_long
+        and permission_status == "entry_allowed"
+        and not bullish_major_conflicts
+        and bullish_evidence
+    ):
+        variant_text = bullish_variant or "Bullish stack aligned"
+        basis = _join_readable_list(bullish_evidence[:4])
+        return {
+            "label": "Buy",
+            "tone": _dashboard_action_tone("Buy"),
+            "reason": f"Active long remains aligned: {variant_text}. {basis}.",
+            "variant": variant_text,
+            "bullish_evidence": bullish_evidence,
+            "bullish_major_conflicts": bullish_major_conflicts,
+            "bullish_soft_conflicts": bullish_soft_conflicts,
+        }
+    if (
+        active_short
+        and permission_status == "entry_allowed"
+        and not bearish_major_conflicts
+        and bearish_evidence
+    ):
+        variant_text = bearish_variant or "Bearish stack aligned"
+        basis = _join_readable_list(bearish_evidence[:4])
+        return {
+            "label": "Sell",
+            "tone": _dashboard_action_tone("Sell"),
+            "reason": f"Active short remains aligned: {variant_text}. {basis}.",
+            "variant": variant_text,
+            "bearish_evidence": bearish_evidence,
+            "bearish_major_conflicts": bearish_major_conflicts,
+            "bearish_soft_conflicts": bearish_soft_conflicts,
+        }
+
     if hard_risk_regime and not in_position:
         risk_label = _humanize_words(event_regime)
         return {
@@ -1521,6 +1556,94 @@ def _derive_dashboard_action(payload, ta_data=None):
         "bullish_major_conflicts": bullish_major_conflicts,
         "bearish_major_conflicts": bearish_major_conflicts,
     }
+
+
+def _align_dashboard_response_contract(payload):
+    if not isinstance(payload, dict):
+        return payload
+
+    market_state = payload.get("MarketState")
+    market_state = dict(market_state) if isinstance(market_state, dict) else {}
+    execution_permission = payload.get("ExecutionPermission")
+    execution_permission = (
+        dict(execution_permission) if isinstance(execution_permission, dict) else {}
+    )
+    execution_state = payload.get("ExecutionState")
+    execution_state = dict(execution_state) if isinstance(execution_state, dict) else {}
+    trade_playbook = payload.get("TradePlaybook")
+    trade_playbook = dict(trade_playbook) if isinstance(trade_playbook, dict) else {}
+    dashboard_action = payload.get("DashboardAction")
+    dashboard_action = dict(dashboard_action) if isinstance(dashboard_action, dict) else {}
+
+    dashboard_label = str(dashboard_action.get("label") or "Stand Aside").strip()
+    dashboard_reason = str(dashboard_action.get("reason") or "").strip()
+    playbook_stage = str(trade_playbook.get("stage") or "stand_aside").strip()
+    directional_bias = str(
+        market_state.get("directional_bias")
+        or trade_playbook.get("directionalBias")
+        or "Neutral"
+    ).strip()
+
+    if dashboard_label == "Exit":
+        exit_text = dashboard_reason or str(
+            execution_permission.get("text")
+            or trade_playbook.get("text")
+            or "active position quality is deteriorating."
+        ).strip()
+        if exit_text and not exit_text.lower().startswith("exit recommended"):
+            exit_text = f"Exit Recommended: {exit_text}"
+        execution_permission["status"] = "exit_recommended"
+        execution_permission["text"] = exit_text or "Exit Recommended: active position quality is deteriorating."
+        execution_permission["actionState"] = "EXIT_RISK"
+        if not execution_permission.get("decisionStatus"):
+            execution_permission["decisionStatus"] = "exit"
+
+        market_state["action"] = "exit"
+        market_state["action_state"] = "EXIT_RISK"
+
+        trade_playbook["stage"] = "exit"
+        trade_playbook["title"] = "Exit / Reduce"
+        trade_playbook["text"] = dashboard_reason or trade_playbook.get("text") or exit_text
+        trade_playbook["entryReadiness"] = "blocked"
+        trade_playbook["exitUrgency"] = "high"
+        if not trade_playbook.get("why"):
+            trade_playbook["why"] = [dashboard_reason or "Dashboard action mapped to exit."]
+        if not trade_playbook.get("directionalBias") and directional_bias:
+            trade_playbook["directionalBias"] = directional_bias
+
+        execution_state["status"] = "exit"
+        execution_state["title"] = trade_playbook.get("title") or "Exit / Reduce"
+        execution_state["text"] = trade_playbook.get("text") or exit_text
+        execution_state["entryAllowed"] = False
+        execution_state["exitRecommended"] = True
+        execution_state["permissionStatus"] = "exit_recommended"
+        execution_state["action"] = "exit"
+        execution_state["actionState"] = "EXIT_RISK"
+    elif playbook_stage == "hold":
+        execution_state["status"] = "hold"
+        execution_state["title"] = trade_playbook.get("title") or execution_state.get("title") or "Hold"
+        execution_state["text"] = (
+            trade_playbook.get("text")
+            or execution_state.get("text")
+            or execution_permission.get("text")
+            or ""
+        )
+        execution_state["permissionStatus"] = str(
+            execution_permission.get("status") or execution_state.get("permissionStatus") or "no_trade"
+        )
+        execution_state["entryAllowed"] = execution_state["permissionStatus"] == "entry_allowed"
+        execution_state["exitRecommended"] = execution_state["permissionStatus"] == "exit_recommended"
+        execution_state["action"] = "hold"
+        if directional_bias == "Bullish":
+            execution_state["actionState"] = "LONG_ACTIVE"
+        elif directional_bias == "Bearish":
+            execution_state["actionState"] = "SHORT_ACTIVE"
+
+    payload["MarketState"] = market_state
+    payload["ExecutionPermission"] = execution_permission
+    payload["ExecutionState"] = execution_state
+    payload["TradePlaybook"] = trade_playbook
+    return payload
 
 
 def _is_rr_signal_actionable(rr_signal):
@@ -2132,9 +2255,9 @@ def _evaluate_execution_permission(decision_status, market_state):
         status = "exit_recommended"
     elif directional_entry_confirmed:
         text = (
-            "Entry Allowed: buy conditions are confirmed."
+            "Execution remains active on the buy side."
             if action_state == "LONG_ACTIVE"
-            else "Entry Allowed: sell conditions are confirmed."
+            else "Execution remains active on the sell side."
         )
         status = "entry_allowed"
     elif action_state in {"LONG_ACTIVE", "SHORT_ACTIVE"} and decision_kind in {"buy", "sell"}:
@@ -3015,7 +3138,19 @@ def _build_prediction_response():
     stabilized_execution_status = (
         "exit"
         if execution_permission.get("status") == "exit_recommended"
-        else ("enter" if trade_playbook.get("stage") in {"enter", "hold"} else ("prepare" if trade_playbook.get("stage") in {"prepare", "stalk_entry"} else "stand_aside"))
+        else (
+            "hold"
+            if trade_playbook.get("stage") == "hold"
+            else (
+                "enter"
+                if trade_playbook.get("stage") == "enter"
+                else (
+                    "prepare"
+                    if trade_playbook.get("stage") in {"prepare", "stalk_entry"}
+                    else "stand_aside"
+                )
+            )
+        )
     )
     execution_state["status"] = stabilized_execution_status
     execution_state["title"] = trade_playbook.get("title") or _humanize_value(stabilized_execution_status or "stand_aside")
@@ -3061,6 +3196,7 @@ def _build_prediction_response():
         response_payload,
         ta_data=ta_data,
     )
+    response_payload = _align_dashboard_response_contract(response_payload)
 
     return response_payload, 200
 

@@ -234,6 +234,8 @@ def _fetch_symbol_snapshot(client: TDClient, candidates: list[str], interval: st
                 "pct_1h": round(pct_1h, 4),
                 "pct_4h": round(pct_4h, 4),
                 "trend": trend,
+                "source": "twelve_data",
+                "cadence": interval,
             }
         except Exception:
             continue
@@ -300,6 +302,7 @@ def _fetch_fred_series_snapshot(series_id: str, *, fallback_symbol: str = "", at
                 "pct_4h": round(pct_4h, 4),
                 "trend": trend,
                 "source": "fred",
+                "cadence": "daily",
             }
         except Exception:
             continue

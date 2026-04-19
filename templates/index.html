@@ -1108,8 +1108,16 @@
               <span class="metric-value compact" id="rs-session">---</span>
             </div>
             <div class="metric-row">
-              <span class="metric-label">Pivots / Round</span>
-              <span class="metric-value compact" id="rs-levels">---</span>
+              <span class="metric-label">Daily Pivots</span>
+              <span class="metric-value compact" id="rs-pivots">---</span>
+            </div>
+            <div class="metric-row">
+              <span class="metric-label">Pivot Context</span>
+              <span class="metric-value compact" id="rs-pivot-context">---</span>
+            </div>
+            <div class="metric-row">
+              <span class="metric-label">Round Numbers</span>
+              <span class="metric-value compact" id="rs-rounds">---</span>
             </div>
             <div class="metric-row">
               <span class="metric-label">Nearby S/R</span>
@@ -2835,6 +2843,68 @@
         return `${label} ${leftText || rightText}`;
       }
 
+      function describeDailyPivotContext(
+        currentPrice,
+        pivotPoint,
+        pivotResistance1,
+        pivotSupport1,
+        pivotResistance2,
+        pivotSupport2,
+      ) {
+        const price = Number(currentPrice);
+        const levels = [
+          pivotPoint,
+          pivotResistance1,
+          pivotSupport1,
+          pivotResistance2,
+          pivotSupport2,
+        ]
+          .map((value) => Number(value))
+          .filter((value) => Number.isFinite(value));
+        if (!Number.isFinite(price) || price <= 0 || !levels.length) {
+          return { text: "Unavailable", tone: "" };
+        }
+
+        const lowestPivot = Math.min(...levels);
+        const highestPivot = Math.max(...levels);
+        const pp = Number(pivotPoint);
+
+        if (price < lowestPivot) {
+          return {
+            text: "Price below prior-day pivot complex",
+            tone: "value-bearish",
+          };
+        }
+        if (price > highestPivot) {
+          return {
+            text: "Price above prior-day pivot complex",
+            tone: "value-bullish",
+          };
+        }
+        if (Number.isFinite(pp)) {
+          if (price < pp) {
+            return {
+              text: "Price below PP, inside prior-day pivot band",
+              tone: "value-bearish",
+            };
+          }
+          if (price > pp) {
+            return {
+              text: "Price above PP, inside prior-day pivot band",
+              tone: "value-bullish",
+            };
+          }
+          return {
+            text: "Price sitting on PP",
+            tone: "value-watch",
+          };
+        }
+        return {
+          text: "Price inside prior-day pivot band",
+          tone: "",
+        };
+      }
+
       function formatZoneText(zone) {
         if (!zone || typeof zone !== "object") return null;
         const low = formatPriceLevel(zone.low);
@@ -3057,9 +3127,50 @@
             nearbyResistances.length ||
             0,
         );
-        if (supportTone > resistanceTone) return "support is closer and cleaner";
-        if (resistanceTone > supportTone)
-          return "resistance is closer and cleaner";
+        const supportDistance = Number(
+          getFirstDefinedValue(
+            supportResistance?.support_distance_pct,
+            supportResistance?.supportDistancePct,
+            null,
+          ),
+        );
+        const resistanceDistance = Number(
+          getFirstDefinedValue(
+            supportResistance?.resistance_distance_pct,
+            supportResistance?.resistanceDistancePct,
+            null,
+          ),
+        );
+        const hasSupportDistance = Number.isFinite(supportDistance);
+        const hasResistanceDistance = Number.isFinite(resistanceDistance);
+        if (
+          hasSupportDistance &&
+          hasResistanceDistance &&
+          supportDistance + 0.02 < resistanceDistance
+        ) {
+          return supportTone >= resistanceTone
+            ? "support is nearer and denser"
+            : "support is nearer";
+        }
+        if (
+          hasSupportDistance &&
+          hasResistanceDistance &&
+          resistanceDistance + 0.02 < supportDistance
+        ) {
+          return resistanceTone >= supportTone
+            ? "resistance is nearer and denser"
+            : "resistance is nearer";
+        }
+        if (supportTone > resistanceTone) {
+          return hasSupportDistance
+            ? "support cluster is denser nearby"
+            : "support cluster is denser";
+        }
+        if (resistanceTone > supportTone) {
+          return hasResistanceDistance
+            ? "resistance cluster is denser nearby"
+            : "resistance cluster is denser";
+        }
         return "";
       }
 
@@ -3431,8 +3542,17 @@
           paStructureEl.className = "metric-value value-bearish";
         else paStructureEl.className = "metric-value";
 
-        document.getElementById("ta-rsi").innerText =
-          `${safeText(ta.rsi_14, "N/A")} (${safeText(rsiSignalText.split(" ")[0], "Neutral")})`;
+        const rsiEl = document.getElementById("ta-rsi");
+        if (rsiEl) {
+          rsiEl.innerText = `${safeText(ta.rsi_14, "N/A")} (${rsiSignalText})`;
+          rsiEl.className = `metric-value ${
+            /oversold/i.test(rsiSignalText)
+              ? "value-bullish"
+              : /overbought/i.test(rsiSignalText)
+                ? "value-bearish"
+                : ""
+          }`;
+        }
         document.getElementById("ta-ema20").innerText = safeText(
           ta.ema_20,
           "N/A",
@@ -3519,13 +3639,15 @@
               ? marketBiasText
               : String(marketState.probabilistic_direction || "Neutral");
           const directionKey = displayedDirection === "Bearish" ? "down" : "up";
-          directionModelEl.innerText = `15m ${(
-            Number(directionProbabilities[`${directionKey}_15m`] || 0.5) * 100
-          ).toFixed(1)}% · 30m ${(
-            Number(directionProbabilities[`${directionKey}_30m`] || 0.5) * 100
-          ).toFixed(1)}% · 60m ${(
-            Number(directionProbabilities[`${directionKey}_60m`] || 0.5) * 100
-          ).toFixed(1)}%`;
+          const readDirectionProbability = (key) => {
+            const value = Number(directionProbabilities[key]);
+            return Number.isFinite(value) ? `${(value * 100).toFixed(1)}%` : "n/a";
+          };
+          directionModelEl.innerText = `15m ${readDirectionProbability(
+            `${directionKey}_15m`,
+          )} · 30m ${readDirectionProbability(
+            `${directionKey}_30m`,
+          )} · 60m ${readDirectionProbability(`${directionKey}_60m`)}`;
           directionModelEl.className = `metric-value compact ${displayedDirection === "Bullish" ? "value-bullish" : displayedDirection === "Bearish" ? "value-bearish" : ""}`;
         }
         if (timeframeGateEl) {
@@ -3591,7 +3713,9 @@
         const regimeEventEl = document.getElementById("rs-event-regime");
         const regimeLadderEl = document.getElementById("rs-warning-ladder");
         const regimeContextEl = document.getElementById("rs-context");
-        const regimeLevelsEl = document.getElementById("rs-levels");
+        const regimePivotsEl = document.getElementById("rs-pivots");
+        const regimePivotContextEl = document.getElementById("rs-pivot-context");
+        const regimeRoundsEl = document.getElementById("rs-rounds");
         const regimeNearbyEl = document.getElementById("rs-nearby");
         const regimeZonesEl = document.getElementById("rs-zones");
 
@@ -3736,7 +3860,7 @@
           );
           sessionContextEl.className = `metric-value compact ${microstructureTone > 0 ? "value-bullish" : microstructureTone < 0 ? "value-bearish" : ""}`;
         }
-        if (regimeLevelsEl) {
+        if (regimePivotsEl || regimePivotContextEl || regimeRoundsEl) {
           const pivotPoint = getFirstDefinedValue(
             structureContext.pivotPoint,
             structureContext.pivot_point,
@@ -3782,7 +3906,7 @@
             structureContext.major_round_number_resistance,
             roundNumbers?.majorResistance,
           );
-          const pivotRoundParts = [
+          const pivotParts = [
             formatCompactLevelPair(
               "PP",
               pivotPoint,
@@ -3798,6 +3922,8 @@
               pivotResistance2,
               pivotSupport2,
             ),
+          ].filter(Boolean);
+          const roundParts = [
             formatCompactLevelPair(
               "Round",
               roundSupport,
@@ -3809,10 +3935,30 @@
               majorRoundResistance,
             ),
           ].filter(Boolean);
-          regimeLevelsEl.innerText = pivotRoundParts.length
-            ? pivotRoundParts.join(" · ")
-            : "Unavailable";
-          regimeLevelsEl.className = "metric-value compact";
+          if (regimePivotsEl) {
+            regimePivotsEl.innerText = pivotParts.length
+              ? pivotParts.join(" · ")
+              : "Unavailable";
+            regimePivotsEl.className = "metric-value compact";
+          }
+          if (regimePivotContextEl) {
+            const pivotContext = describeDailyPivotContext(
+              newPrice,
+              pivotPoint,
+              pivotResistance1,
+              pivotSupport1,
+              pivotResistance2,
+              pivotSupport2,
+            );
+            regimePivotContextEl.innerText = pivotContext.text;
+            regimePivotContextEl.className = `metric-value compact ${pivotContext.tone}`;
+          }
+          if (regimeRoundsEl) {
+            regimeRoundsEl.innerText = roundParts.length
+              ? roundParts.join(" · ")
+              : "Unavailable";
+            regimeRoundsEl.className = "metric-value compact";
+          }
         }
         if (regimeNearbyEl) {
           const nearbySupports = getArrayWithFallback(
@@ -4053,9 +4199,16 @@
               : "Awaiting directional setup";
         }
         if (rrSummaryEl) {
-          rrSummaryEl.innerText =
+          const rrBaseSummary =
             rrSignal.statusText ||
             (rrBlockers.length ? rrBlockers[0] : "No RR200 signal yet.");
+          const rrBlockerText = joinReadableList(rrBlockers.slice(0, 2));
+          rrSummaryEl.innerText =
+            rrStatus !== "ready" &&
+            rrBlockerText &&
+            !rrBaseSummary.toLowerCase().includes(rrBlockers[0]?.toLowerCase?.() || "")
+              ? `${rrBaseSummary} Blocked by ${rrBlockerText}.`
+              : rrBaseSummary;
         }
         const rrLive =
           data.RR200LiveCounter && typeof data.RR200LiveCounter === "object"
@@ -4170,10 +4323,6 @@
                 executionPermission,
                 executionState,
               );
-        if (marketActionEl) {
-          marketActionEl.innerText = dashboardAction.label;
-          marketActionEl.className = `metric-value ${dashboardAction.tone}`;
-        }
         const dashboardLabelEl = document.getElementById("tg-dashboard-label");
         if (dashboardLabelEl) {
           dashboardLabelEl.innerText = dashboardAction.label;
@@ -4244,8 +4393,25 @@
         const executionStateEl = document.getElementById("execution-state");
         if (executionStateEl) {
           const executionStatus = executionState.status || "stand_aside";
+          const executionActionState = String(
+            executionState.actionState || marketActionStateText || "WAIT",
+          );
+          const executionTone =
+            executionStatus === "enter"
+              ? "value-bullish"
+              : executionStatus === "exit"
+                ? "value-bearish"
+                : executionStatus === "hold"
+                  ? executionActionState === "SHORT_ACTIVE"
+                    ? "value-bearish"
+                    : executionActionState === "LONG_ACTIVE"
+                      ? "value-bullish"
+                      : ""
+                  : executionStatus === "prepare"
+                    ? ""
+                    : "";
           executionStateEl.innerText = humanizeWords(executionStatus);
-          executionStateEl.className = `metric-value ${executionStatus === "enter" ? "value-bullish" : executionStatus === "exit" ? "value-bearish" : executionStatus === "prepare" ? "" : ""}`;
+          executionStateEl.className = `metric-value ${executionTone}`;
         }
         const antiChopEl = document.getElementById("anti-chop-state");
         if (antiChopEl) {

@@ -1430,6 +1430,10 @@ def _build_rr_signal_state(
             status_text = "Directional setup detected; waiting for full fixed-target confirmation."
     elif status == "ready":
         status_text = "High-accuracy RR 1:2 signal is ready for alerting."
+    if status != "ready" and blockers:
+        blocker_text = " and ".join(str(item) for item in blockers[:2] if str(item).strip())
+        if blocker_text and blocker_text.lower() not in status_text.lower():
+            status_text = f"{status_text} Blocked by {blocker_text}."
 
     partial_tp_pips = float(strategy_params.get("rr_signal_partial_take_profit_pips", sl_pips) or sl_pips)
     move_sl_to_be = bool(int(strategy_params.get("rr_signal_move_sl_to_be_after_partial", 1) or 0))
@@ -3066,6 +3070,8 @@ def compute_prediction_from_ta(ta_data):
             "cross_asset_bias": regime_state.get("cross_asset_bias", "Neutral"),
             "cross_asset_available": regime_state.get("cross_asset_available", 0),
             "minutes_to_next_event": regime_state.get("minutes_to_next_event"),
+            "next_event_name": regime_state.get("next_event_name"),
+            "near_events": regime_state.get("near_events", []),
             "feature_hits": regime_state.get("feature_hits", {}),
             "components": regime_state.get("components", {}),
         },

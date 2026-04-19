@@ -383,22 +383,33 @@ def summarize_cross_asset_context(cross_asset_context: dict | None) -> dict:
         value = assets.get(name) or {}
         return value if isinstance(value, dict) else {}
 
+    def _supports_intraday_scoring(snapshot: dict) -> bool:
+        if not isinstance(snapshot, dict) or not snapshot.get("available"):
+            return False
+        cadence = str(snapshot.get("cadence") or "").strip().lower()
+        source = str(snapshot.get("source") or "").strip().lower()
+        if cadence in {"1h", "60m", "60min", "hourly", "intraday"}:
+            return True
+        if source == "fred":
+            return False
+        return True
+
     dxy = _asset("dxy")
-    if dxy.get("available"):
+    if _supports_intraday_scoring(dxy):
         if _safe_float(dxy.get("pct_1h")) < -0.1:
             bullish_score += 1.4
         elif _safe_float(dxy.get("pct_1h")) > 0.1:
             bearish_score += 1.4
 
     yields = _asset("us10y")
-    if yields.get("available"):
+    if _supports_intraday_scoring(yields):
         if _safe_float(yields.get("pct_1h")) < -0.1:
             bullish_score += 1.0
         elif _safe_float(yields.get("pct_1h")) > 0.1:
             bearish_score += 1.0
 
     real_yield = _asset("real_yield")
-    if real_yield.get("available"):
+    if _supports_intraday_scoring(real_yield):
         real_yield_change = _safe_float(real_yield.get("pct_1h"))
         if real_yield_change <= -0.25:
             bullish_score += 1.6
@@ -410,35 +421,35 @@ def summarize_cross_asset_context(cross_asset_context: dict | None) -> dict:
             bearish_score += 0.8
 
     silver = _asset("silver")
-    if silver.get("available"):
+    if _supports_intraday_scoring(silver):
         if _safe_float(silver.get("pct_1h")) > 0.15:
             bullish_score += 1.2
         elif _safe_float(silver.get("pct_1h")) < -0.15:
             bearish_score += 1.2
 
     oil = _asset("oil")
-    if oil.get("available"):
+    if _supports_intraday_scoring(oil):
         if _safe_float(oil.get("pct_4h")) > 0.35:
             bullish_score += 0.4
         elif _safe_float(oil.get("pct_4h")) < -0.35:
             bearish_score += 0.4
 
     spx = _asset("spx")
-    if spx.get("available"):
+    if _supports_intraday_scoring(spx):
         if _safe_float(spx.get("pct_1h")) < -0.25:
             bullish_score += 0.8
         elif _safe_float(spx.get("pct_1h")) > 0.25:
             bearish_score += 0.4
 
     vix = _asset("vix")
-    if vix.get("available"):
+    if _supports_intraday_scoring(vix):
         if _safe_float(vix.get("pct_1h")) > 0.6:
             bullish_score += 0.8
         elif _safe_float(vix.get("pct_1h")) < -0.6:
             bearish_score += 0.6
 
     usdjpy = _asset("usdjpy")
-    if usdjpy.get("available"):
+    if _supports_intraday_scoring(usdjpy):
         if _safe_float(usdjpy.get("pct_1h")) < -0.2:
             bullish_score += 0.7
         elif _safe_float(usdjpy.get("pct_1h")) > 0.2:
