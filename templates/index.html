@@ -511,6 +511,14 @@
         font-size: 0.94rem;
       }
 
+      .metric-value.rule-copy {
+        font-size: 0.93rem;
+        font-weight: 500;
+        line-height: 1.58;
+        text-align: left;
+        white-space: pre-line;
+      }
+
       .value-bullish {
         color: var(--bullish);
       }
@@ -1408,6 +1416,20 @@
                 <div class="metric-row">
                   <span class="metric-label">Label Basis</span>
                   <span class="metric-value compact" id="tg-dashboard-reason"
+                    >---</span
+                  >
+                </div>
+                <div class="metric-row">
+                  <span class="metric-label">Action Variant</span>
+                  <span class="metric-value compact" id="tg-dashboard-variant"
+                    >---</span
+                  >
+                </div>
+                <div class="metric-row">
+                  <span class="metric-label">How To Use</span>
+                  <span
+                    class="metric-value compact rule-copy"
+                    id="tg-dashboard-copy"
                     >---</span
                   >
                 </div>
@@ -2901,6 +2923,87 @@
         return "";
       }
 
+      function getDashboardActionVariantFallback(label) {
+        if (label === "Buy") return "General Buy Criteria";
+        if (label === "Sell") return "General Sell Criteria";
+        if (label === "Exit") return "General Exit Criteria";
+        return "General Stand Aside Criteria";
+      }
+
+      function getDashboardActionGuide(label) {
+        if (label === "Buy") {
+          return [
+            "Use Buy when most align:",
+            "• Bullish Breakout, Bullish Structure, Bullish Drift, or Bullish Pressure in Range",
+            "• Breakout Bias Bullish",
+            "• Warning Ladder Directional Expansion Likely or Active Momentum Event",
+            "• Bullish microstructure: VWAP Mild Bullish/Bullish, ORB Bullish, or Sweep Bullish",
+            "• Support stronger than resistance",
+            "• Price above or reclaiming PP, S1, round support, or major round support",
+            "• Bullish FVG or range-low hold / Bull Break",
+            "",
+            "Best variants:",
+            "• Bullish Breakout + ORB Bullish",
+            "• Bullish Drift + bullish VWAP + support rejection",
+            "• Bullish Pressure in Range + support hold + Bull Break",
+            "• Active Momentum Event + bullish bias + no nearby heavy resistance",
+          ].join("\n");
+        }
+        if (label === "Sell") {
+          return [
+            "Use Sell when most align:",
+            "• Bearish Breakdown, Bearish Structure, Bearish Drift, or Bearish Pressure in Range",
+            "• Breakout Bias Bearish",
+            "• Warning Ladder Directional Expansion Likely or Active Momentum Event",
+            "• Bearish microstructure: VWAP Mild Bearish/Bearish, ORB Bearish, or Sweep Bearish",
+            "• Resistance stronger than support",
+            "• Price below or rejecting PP, R1, round resistance, or major round resistance",
+            "• Bearish FVG or range-high rejection / Bear Break",
+            "",
+            "Best variants:",
+            "• Bearish Breakdown + ORB Bearish",
+            "• Bearish Drift + bearish VWAP + resistance rejection",
+            "• Bearish Pressure in Range + resistance hold + Bear Break",
+            "• Active Momentum Event + bearish bias + no nearby strong support",
+          ].join("\n");
+        }
+        if (label === "Exit") {
+          return [
+            "Use Exit / Reduce when the active trade starts conflicting:",
+            "• Price Action flips against the position",
+            "• Breakout Bias flips against the position",
+            "• VWAP, ORB, or Sweep flips against the position",
+            "• Price reaches a dense opposing S/R cluster",
+            "• Longs into R1/R2/major round resistance or shorts into S1/S2/major round support",
+            "• Event Regime panic_reversal or event_risk",
+            "• Warning Ladder cools while follow-through fades",
+            "• Opposing FVG rejection or consolidation near target",
+            "",
+            "Direct exit variants:",
+            "• Long + Bearish Resistance Rejection",
+            "• Short + Bullish Support Rejection",
+            "• Any position + panic_reversal",
+            "• Any position + opposing FVG rejection",
+          ].join("\n");
+        }
+        return [
+          "Use Stand Aside when the stack is mixed or weak:",
+          "• Price Action Consolidating or mixed",
+          "• Breakout Bias Neutral or conflicting",
+          "• Warning Ladder Normal",
+          "• VWAP Neutral + ORB Neutral + No Sweep",
+          "• Support and resistance both very close",
+          "• Bullish Drift with bearish event/cross-asset bias, or bearish drift with bullish bias",
+          "• Range inactive and no FVG edge",
+          "• High Big Move Risk with no direction",
+          "",
+          "Downgrade rules:",
+          "• One major conflict: prepare only, no full entry",
+          "• Two or more major conflicts: stand aside",
+          "• Existing trade + opposite major conflict: exit / reduce",
+        ].join("\n");
+      }
+
       function summarizeMicrostructureContext(structureContext) {
         const vwapBias = getVwapBiasLabel(
           Number(structureContext?.distSessionVwapPct || 0),
@@ -4038,6 +4141,7 @@
                 label: String(data.DashboardAction.label || "Stand Aside"),
                 tone: String(data.DashboardAction.tone || ""),
                 reason: String(data.DashboardAction.reason || ""),
+                variant: String(data.DashboardAction.variant || ""),
               }
             : deriveDashboardActionLabel(
                 data,
@@ -4063,6 +4167,21 @@
           dashboardReasonEl.innerText =
             dashboardAction.reason ||
             "No mapped dashboard action is available yet.";
+        }
+        const dashboardVariantEl = document.getElementById(
+          "tg-dashboard-variant",
+        );
+        if (dashboardVariantEl) {
+          dashboardVariantEl.innerText =
+            dashboardAction.variant ||
+            getDashboardActionVariantFallback(dashboardAction.label);
+          dashboardVariantEl.className = `metric-value compact ${dashboardAction.tone}`;
+        }
+        const dashboardCopyEl = document.getElementById("tg-dashboard-copy");
+        if (dashboardCopyEl) {
+          dashboardCopyEl.innerText = getDashboardActionGuide(
+            dashboardAction.label,
+          );
         }
 
         const playbook =
