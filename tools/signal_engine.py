@@ -761,7 +761,10 @@ def _compute_move_bucket_state(
     projected_move_pips = round(projected_move_atr * atr_move_pips, 1) if atr_move_pips > 0 else 0.0
     target_move_pips = max(1.0, _safe_float(strategy_params.get("rr_signal_target_move_pips"), 200.0))
     target_atr = (target_move_pips / atr_move_pips) if atr_move_pips > 0 else 2.0
-    target_key = _nearest_move_bucket_key(max(0.5, min(2.0, target_atr)))
+    probability_target_atr = max(0.5, min(2.0, target_atr))
+    target_key = _nearest_move_bucket_key(probability_target_atr)
+    target_probability = float(probabilities.get(target_key, 0.0))
+    target_probability_is_proxy = bool(target_atr > 2.0 or target_atr < 0.5)
 
     return {
         "atr_move_pips": round(atr_move_pips, 2),
@@ -769,8 +772,10 @@ def _compute_move_bucket_state(
         "projected_move_pips": projected_move_pips,
         "probabilities": probabilities,
         "selected_target_key": target_key,
-        "selected_target_atr": round(max(0.5, min(2.0, target_atr)), 2),
-        "selected_probability": probabilities.get(target_key, 0.0),
+        "selected_target_atr": round(probability_target_atr, 2),
+        "target_move_atr_raw": round(target_atr, 2),
+        "selected_probability": round(target_probability, 4),
+        "selected_probability_is_proxy": target_probability_is_proxy,
     }
 
 
@@ -1149,8 +1154,6 @@ def _build_rr_signal_state(
     b_require_active_state = bool(int(strategy_params.get("rr_signal_b_require_active_state", 1) or 0))
     b_min_mtf_matches = int(round(float(strategy_params.get("rr_signal_b_min_mtf_matches", 3) or 3)))
     b_min_mtf_matches = max(2, min(3, b_min_mtf_matches))
-    strong_stack_target_atr_cap = float(strategy_params.get("rr_signal_strong_stack_target_atr_cap", 1.20) or 1.20)
-    strong_stack_target_atr_cap = max(0.9, min(2.0, strong_stack_target_atr_cap))
     allow_soft_no_trade = bool(int(strategy_params.get("rr_signal_allow_soft_no_trade", 1) or 0))
     soft_no_trade_terms = strategy_params.get("rr_signal_soft_no_trade_terms", [])
     soft_no_trade_terms = soft_no_trade_terms if isinstance(soft_no_trade_terms, list) else []
@@ -1187,8 +1190,10 @@ def _build_rr_signal_state(
     bucket_probabilities = move_bucket_state.get("probabilities") if isinstance(move_bucket_state.get("probabilities"), dict) else {}
     selected_bucket_key = str(move_bucket_state.get("selected_target_key") or "2.0_atr")
     selected_target_atr = float(move_bucket_state.get("selected_target_atr") or 2.0)
+    target_move_atr = float(move_bucket_state.get("target_move_atr_raw") or selected_target_atr)
     projected_move_atr = float(move_bucket_state.get("projected_move_atr") or 0.0)
     bucket_move_probability = float(move_bucket_state.get("selected_probability") or 0.0)
+    bucket_probability_is_proxy = bool(move_bucket_state.get("selected_probability_is_proxy"))
 
     direction = "Neutral"
     if verdict in {"Bullish", "Bearish"}:
@@ -1306,12 +1311,10 @@ def _build_rr_signal_state(
     )
     effective_min_confidence = min_confidence
     effective_min_expected_edge = min_expected_edge
-    effective_target_atr = selected_target_atr
     if strong_directional_stack:
         # Allow earlier arming when direction quality is strong and stack agreement is clean.
         effective_min_confidence = min(min_confidence, 60.0)
         effective_min_expected_edge = min(min_expected_edge, 0.008)
-        effective_target_atr = min(selected_target_atr, strong_stack_target_atr_cap)
 
     tier = "watch"
     grade = "Watchlist"
@@ -1336,9 +1339,9 @@ def _build_rr_signal_state(
     if float(tradeability_score) < min_tradeability_score:
         blockers.append(f"Tradeability below {round(min_tradeability_score, 1)}")
     if move_probability < min_move_probability:
-        blockers.append(f"Target bucket probability below {round(min_move_probability * 100)}%")
-    if projected_move_pips < target_move_pips and projected_move_atr < max(0.9, effective_target_atr * 0.9):
-        blockers.append(f"Projected move below {round(effective_target_atr, 1)} ATR / {int(target_move_pips)} pips")
+        blockers.append(f"RR move probability below {round(min_move_probability * 100)}%")
+    if projected_move_pips < target_move_pips:
+        blockers.append(f"Projected move below fixed {int(target_move_pips)} pip target")
     if float(expected_edge_pct) < effective_min_expected_edge:
         blockers.append(f"Expected edge below {round(effective_min_expected_edge, 3)}")
     if action_state not in {"LONG_ACTIVE", "SHORT_ACTIVE", "SETUP_LONG", "SETUP_SHORT"} and not momentum_override_qualified:
@@ -1424,7 +1427,7 @@ def _build_rr_signal_state(
         if momentum_override_qualified and h1_neutral:
             status_text = "15M momentum acceleration detected while H1 is neutral; waiting for H1 trend confirmation."
         else:
-            status_text = "Directional setup detected; waiting for full target-bucket confirmation."
+            status_text = "Directional setup detected; waiting for full fixed-target confirmation."
     elif status == "ready":
         status_text = "High-accuracy RR 1:2 signal is ready for alerting."
 
@@ -1454,8 +1457,11 @@ def _build_rr_signal_state(
         "m15Trend": m15_trend,
         "momentumOverrideQualified": momentum_override_qualified,
         "targetMovePips": round(target_move_pips, 1),
-        "targetMoveAtr": round(selected_target_atr, 2),
+        "targetMoveAtr": round(target_move_atr, 2),
         "targetBucket": selected_bucket_key,
+        "targetBucketAtr": round(selected_target_atr, 2),
+        "targetBucketProbability": round(bucket_move_probability, 4),
+        "targetBucketIsProxy": bucket_probability_is_proxy,
         "projectedMovePips": round(projected_move_pips, 1),
         "projectedMoveAtr": round(projected_move_atr, 2),
         "moveProbability": round(move_probability, 4),

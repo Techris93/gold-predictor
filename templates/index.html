@@ -3942,9 +3942,21 @@
             ? rrDirection
             : String(rrSignal.candidateDirection || rrDirection);
         const rrGrade = rrSignal.grade || "C (Low Confidence)";
-        const rrProbability = Number(rrSignal.moveProbability || 0) * 100;
+        const rrProbability =
+          Number(
+            getFirstDefinedValue(
+              rrSignal.targetBucketProbability,
+              rrSignal.moveProbability,
+              0,
+            ),
+          ) * 100;
         const rrProjectedMove = Number(rrSignal.projectedMovePips || 0);
         const rrTargetMove = Number(rrSignal.targetMovePips || 200);
+        const rrTargetAtr = Number(rrSignal.targetMoveAtr || 0);
+        const rrBucketAtr = Number(
+          getFirstDefinedValue(rrSignal.targetBucketAtr, rrTargetAtr, 0),
+        );
+        const rrBucketIsProxy = Boolean(rrSignal.targetBucketIsProxy);
         const rrEntry = rrSignal.entryPrice;
         const rrSl = rrSignal.stopLossPrice;
         const rrTp = rrSignal.takeProfitPrice;
@@ -4013,11 +4025,15 @@
           rrTimeframeFilterEl.className = `metric-value compact ${(!rrH4Pass && rrDisplayedDirection !== "Neutral") || (!rrH1Pass && !rrSignal.h1Neutral) ? "value-bearish" : rrM15Pass ? (rrDisplayedDirection === "Bullish" ? "value-bullish" : rrDisplayedDirection === "Bearish" ? "value-bearish" : "") : ""}`;
         }
         if (rrProbabilityEl) {
-          rrProbabilityEl.innerText = `${humanizeWords(rrSignal.targetBucket || "1.0_atr")} · ${rrProbability.toFixed(1)}%`;
+          const rrBucketLabel =
+            rrSignal.targetBucket && String(rrSignal.targetBucket).trim()
+              ? humanizeWords(rrSignal.targetBucket)
+              : `${rrBucketAtr.toFixed(1)} ATR`;
+          rrProbabilityEl.innerText = `${rrBucketLabel}${rrBucketIsProxy ? " proxy" : ""} · ${rrProbability.toFixed(1)}%`;
           rrProbabilityEl.className = `metric-value ${rrProbability >= 70 ? "value-bullish" : rrProbability >= 55 ? "" : "value-bearish"}`;
         }
         if (rrProjectedEl) {
-          rrProjectedEl.innerText = `${rrProjectedMove.toFixed(1)} pips / ${Number(rrSignal.projectedMoveAtr || 0).toFixed(2)} ATR (target ${rrTargetMove.toFixed(0)})`;
+          rrProjectedEl.innerText = `${rrProjectedMove.toFixed(1)} pips / ${Number(rrSignal.projectedMoveAtr || 0).toFixed(2)} ATR (target ${rrTargetMove.toFixed(0)} pips / ${rrTargetAtr.toFixed(2)} ATR)`;
           rrProjectedEl.className = `metric-value ${rrProjectedMove >= rrTargetMove ? "value-bullish" : "value-bearish"}`;
         }
         if (rrBucketsEl) {

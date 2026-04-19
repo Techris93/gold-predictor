@@ -324,11 +324,19 @@ def _format_rr_target_bucket_probability(rr_signal):
     if target_bucket:
         target_bucket = target_bucket.replace("_atr", " ATR").replace("_", " ")
     if not target_bucket:
-        target_move_atr = rr_signal.get("targetMoveAtr")
-        if isinstance(target_move_atr, (int, float)):
-            target_bucket = f"{float(target_move_atr):.1f} ATR"
+        target_bucket_atr = rr_signal.get("targetBucketAtr")
+        if isinstance(target_bucket_atr, (int, float)):
+            target_bucket = f"{float(target_bucket_atr):.1f} ATR"
+        else:
+            target_move_atr = rr_signal.get("targetMoveAtr")
+            if isinstance(target_move_atr, (int, float)):
+                target_bucket = f"{float(target_move_atr):.1f} ATR"
+    if target_bucket and bool(rr_signal.get("targetBucketIsProxy")):
+        target_bucket = f"{target_bucket} proxy"
 
-    move_probability = rr_signal.get("moveProbability")
+    move_probability = rr_signal.get("targetBucketProbability")
+    if not isinstance(move_probability, (int, float)):
+        move_probability = rr_signal.get("moveProbability")
     probability_text = "N/A"
     if isinstance(move_probability, (int, float)):
         probability_text = f"{float(move_probability) * 100.0:.1f}%"
@@ -2105,6 +2113,7 @@ def _evaluate_decision_status(verdict, confidence, ta_data, trade_guidance):
 
 def _evaluate_execution_permission(decision_status, market_state):
     action_state = str((market_state or {}).get("action_state") or "WAIT")
+    action = str((market_state or {}).get("action") or "hold").strip().lower()
     decision_kind = str((decision_status or {}).get("status") or "wait")
     decision_text = str((decision_status or {}).get("text") or "")
     tradeability = str((market_state or {}).get("tradeability") or "Low")
@@ -2118,7 +2127,10 @@ def _evaluate_execution_permission(decision_status, market_state):
         or (action_state == "SHORT_ACTIVE" and decision_kind == "sell")
     )
 
-    if directional_entry_confirmed:
+    if action_state == "EXIT_RISK" or action == "exit" or decision_kind == "exit":
+        text = "Exit Recommended: active position quality is deteriorating."
+        status = "exit_recommended"
+    elif directional_entry_confirmed:
         text = (
             "Entry Allowed: buy conditions are confirmed."
             if action_state == "LONG_ACTIVE"
@@ -2131,9 +2143,6 @@ def _evaluate_execution_permission(decision_status, market_state):
     elif action_state in {"SETUP_LONG", "SETUP_SHORT"}:
         text = "Watchlist Only: setup is forming, but execution is not confirmed yet."
         status = "watchlist_only"
-    elif action_state == "EXIT_RISK" or decision_kind == "exit":
-        text = "Exit Recommended: active position quality is deteriorating."
-        status = "exit_recommended"
     elif action_state == "WAIT" and decision_text.startswith("Watchlist Only:"):
         blockers = []
         if tradeability.lower() == "low":
