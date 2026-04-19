@@ -80,6 +80,7 @@ PUSH_EXCLUDED_FIELDS = {
     "ema_50",
     "adx_14",
     "atr_percent",
+    "micro_vwap_band",
 }
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -201,11 +202,14 @@ def _filter_notification_changes(changes):
     """Remove fields that should not appear in push notifications."""
     if not isinstance(changes, dict):
         return {}
-    return {
+    filtered = {
         key: val
         for key, val in changes.items()
         if key not in PUSH_EXCLUDED_FIELDS
     }
+    if "micro_vwap_bias" not in filtered:
+        filtered.pop("micro_vwap_delta_pct", None)
+    return filtered
 
 
 def _summarize_changes_for_push(changes):
@@ -398,15 +402,28 @@ def _format_vwap_microstructure_text(value):
     return f"VWAP {numeric:.2f}% {_vwap_bias_label(numeric)}"
 
 
+def _vwap_bias_strategy_note(bias_label):
+    bias = str(bias_label or "").strip()
+    if bias == "Bullish":
+        return "hold longs, buy pullbacks"
+    if bias == "Mild Bullish":
+        return "cautious long"
+    if bias == "Neutral":
+        return "wait for break"
+    if bias == "Mild Bearish":
+        return "cautious short"
+    if bias == "Bearish":
+        return "hold shorts, sell rallies"
+    return ""
+
+
 def _format_microstructure_change(changes):
     changes = changes if isinstance(changes, dict) else {}
     parts = []
     vwap_band_delta = changes.get("micro_vwap_band")
     vwap_bias_delta = changes.get("micro_vwap_bias")
     vwap_value_delta = changes.get("micro_vwap_delta_pct")
-    if isinstance(vwap_band_delta, dict) or isinstance(vwap_bias_delta, dict):
-        prev_band = str((vwap_band_delta or {}).get("previous") or "")
-        cur_band = str((vwap_band_delta or {}).get("current") or "")
+    if isinstance(vwap_bias_delta, dict) or isinstance(vwap_band_delta, dict):
         prev_bias = str((vwap_bias_delta or {}).get("previous") or "")
         cur_bias = str((vwap_bias_delta or {}).get("current") or "")
         prev_val = (vwap_value_delta or {}).get("previous") if isinstance(vwap_value_delta, dict) else None
@@ -414,10 +431,10 @@ def _format_microstructure_change(changes):
         value_suffix = ""
         if isinstance(prev_val, (int, float)) and isinstance(cur_val, (int, float)):
             value_suffix = f" ({float(prev_val):.2f}% -> {float(cur_val):.2f}%)"
-        if prev_band and cur_band and prev_band != cur_band:
-            parts.append(f"VWAP band {prev_band} -> {cur_band}{value_suffix}")
-        elif prev_bias and cur_bias and prev_bias != cur_bias:
-            parts.append(f"VWAP bias {prev_bias} -> {cur_bias}{value_suffix}")
+        if prev_bias and cur_bias and prev_bias != cur_bias:
+            strategy_note = _vwap_bias_strategy_note(cur_bias)
+            strategy_suffix = f": {strategy_note}" if strategy_note else ""
+            parts.append(f"VWAP {prev_bias} -> {cur_bias}{value_suffix}{strategy_suffix}")
     orb_delta = changes.get("micro_orb_state")
     if isinstance(orb_delta, dict):
         prev_orb = _orb_state_label(orb_delta.get("previous"))
@@ -472,6 +489,1023 @@ def _format_bar_session_microstructure(ta_data):
     )
 
 
+def _join_readable_list(items):
+    filtered = [str(item or "").strip() for item in items if str(item or "").strip()]
+    if not filtered:
+        return ""
+    if len(filtered) == 1:
+        return filtered[0]
+    if len(filtered) == 2:
+        return f"{filtered[0]} and {filtered[1]}"
+    return f"{', '.join(filtered[:-1])}, and {filtered[-1]}"
+
+
+def _dashboard_action_tone(label):
+    if label == "Buy":
+        return "value-bullish"
+    if label == "Sell":
+        return "value-bearish"
+    if label == "Exit":
+        return "value-watch"
+    return ""
+
+
+def _summarize_microstructure_context(ta_data):
+    ta_data = ta_data if isinstance(ta_data, dict) else {}
+    structure = (
+        ta_data.get("structure_context")
+        if isinstance(ta_data.get("structure_context"), dict)
+        else {}
+    )
+    try:
+        vwap_delta = float(structure.get("distSessionVwapPct") or 0.0)
+    except Exception:
+        vwap_delta = 0.0
+    try:
+        orb_state = int(round(float(structure.get("openingRangeBreak") or 0.0)))
+    except Exception:
+        orb_state = 0
+    try:
+        sweep_state = int(round(float(structure.get("sweepReclaimSignal") or 0.0)))
+    except Exception:
+        sweep_state = 0
+
+    parts = []
+    vwap_bias = _vwap_bias_label(vwap_delta)
+    if vwap_bias != "Neutral":
+        parts.append(f"VWAP {vwap_bias.lower()}")
+    if orb_state != 0:
+        parts.append(f"ORB {_orb_state_label(orb_state).lower()}")
+    if sweep_state != 0:
+        parts.append(f"{_sweep_state_label(sweep_state).lower()} sweep")
+    return _join_readable_list(parts)
+
+
+def _summarize_level_pressure(ta_data):
+    ta_data = ta_data if isinstance(ta_data, dict) else {}
+    support_resistance = (
+        ta_data.get("support_resistance")
+        if isinstance(ta_data.get("support_resistance"), dict)
+        else {}
+    )
+    nearby_supports = (
+        list(support_resistance.get("nearby_supports"))
+        if isinstance(support_resistance.get("nearby_supports"), list)
+        else []
+    )
+    nearby_resistances = (
+        list(support_resistance.get("nearby_resistances"))
+        if isinstance(support_resistance.get("nearby_resistances"), list)
+        else []
+    )
+    support_tone = int(
+        support_resistance.get("support_family_confluence")
+        or support_resistance.get("support_confluence")
+        or len(nearby_supports)
+        or 0
+    )
+    resistance_tone = int(
+        support_resistance.get("resistance_family_confluence")
+        or support_resistance.get("resistance_confluence")
+        or len(nearby_resistances)
+        or 0
+    )
+    if support_tone > resistance_tone:
+        return "support is closer and cleaner"
+    if resistance_tone > support_tone:
+        return "resistance is closer and cleaner"
+    return ""
+
+
+def _coerce_float(value, default=None):
+    try:
+        if value is None or value == "":
+            return default
+        return float(value)
+    except Exception:
+        return default
+
+
+def _first_non_empty(*values):
+    for value in values:
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        return value
+    return None
+
+
+def _level_is_near(current_price, level_price, threshold_pct=0.08):
+    price = _coerce_float(current_price, 0.0) or 0.0
+    level = _coerce_float(level_price, None)
+    if price <= 0.0 or level is None:
+        return False
+    return abs(price - level) / price * 100.0 <= threshold_pct + 1e-9
+
+
+def _zone_distance_pct(zone, current_price):
+    zone = zone if isinstance(zone, dict) else {}
+    price = _coerce_float(current_price, 0.0) or 0.0
+    low = _coerce_float(zone.get("low"), None)
+    high = _coerce_float(zone.get("high"), None)
+    if price <= 0.0 or low is None or high is None:
+        return None
+    zone_low = min(low, high)
+    zone_high = max(low, high)
+    if zone_low <= price <= zone_high:
+        return 0.0
+    if price < zone_low:
+        return (zone_low - price) / price * 100.0
+    return (price - zone_high) / price * 100.0
+
+
+def _levels_have_family(levels, families, max_distance_pct=None):
+    target_families = {str(family) for family in (families or set())}
+    for level in levels if isinstance(levels, list) else []:
+        if not isinstance(level, dict):
+            continue
+        family = str(level.get("family") or "")
+        if family not in target_families:
+            continue
+        distance_pct = _coerce_float(level.get("distance_pct"), None)
+        if max_distance_pct is None or (
+            distance_pct is not None and distance_pct <= max_distance_pct + 1e-9
+        ):
+            return True
+    return False
+
+
+def _nearest_level_distance_pct(levels, families=None):
+    candidates = []
+    target_families = {str(family) for family in (families or set())}
+    for level in levels if isinstance(levels, list) else []:
+        if not isinstance(level, dict):
+            continue
+        if target_families and str(level.get("family") or "") not in target_families:
+            continue
+        distance_pct = _coerce_float(level.get("distance_pct"), None)
+        if distance_pct is not None:
+            candidates.append(distance_pct)
+    return min(candidates) if candidates else None
+
+
+def _dedupe_preserve_order(items):
+    seen = set()
+    result = []
+    for item in items:
+        text = str(item or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+    return result
+
+
+def _derive_dashboard_action(payload, ta_data=None):
+    payload = payload if isinstance(payload, dict) else {}
+    ta_data = ta_data if isinstance(ta_data, dict) else (
+        payload.get("TechnicalAnalysis")
+        if isinstance(payload.get("TechnicalAnalysis"), dict)
+        else {}
+    )
+    market_state = (
+        payload.get("MarketState")
+        if isinstance(payload.get("MarketState"), dict)
+        else {}
+    )
+    regime_state = (
+        payload.get("RegimeState")
+        if isinstance(payload.get("RegimeState"), dict)
+        else {}
+    )
+    trade_guidance = (
+        payload.get("TradeGuidance")
+        if isinstance(payload.get("TradeGuidance"), dict)
+        else {}
+    )
+    decision_status = (
+        payload.get("DecisionStatus")
+        if isinstance(payload.get("DecisionStatus"), dict)
+        else {}
+    )
+    execution_permission = (
+        payload.get("ExecutionPermission")
+        if isinstance(payload.get("ExecutionPermission"), dict)
+        else {}
+    )
+    execution_state = (
+        payload.get("ExecutionState")
+        if isinstance(payload.get("ExecutionState"), dict)
+        else {}
+    )
+    price_action = (
+        ta_data.get("price_action")
+        if isinstance(ta_data.get("price_action"), dict)
+        else {}
+    )
+    structure_context = (
+        ta_data.get("structure_context")
+        if isinstance(ta_data.get("structure_context"), dict)
+        else {}
+    )
+    support_resistance = (
+        ta_data.get("support_resistance")
+        if isinstance(ta_data.get("support_resistance"), dict)
+        else {}
+    )
+
+    current_price = _coerce_float(ta_data.get("current_price"), 0.0) or 0.0
+    structure = str(price_action.get("structure") or "Consolidating").strip()
+    breakout_bias = str(regime_state.get("breakout_bias") or "Neutral").strip()
+    cross_asset_bias = str(regime_state.get("cross_asset_bias") or "Neutral").strip()
+    warning_ladder = str(regime_state.get("warning_ladder") or "Normal").strip()
+    event_regime = str(regime_state.get("event_regime") or "normal").strip()
+    big_move_risk = _coerce_float(regime_state.get("big_move_risk"), 0.0) or 0.0
+    action_state = str(
+        market_state.get("action_state")
+        or execution_state.get("actionState")
+        or "WAIT"
+    ).strip()
+    raw_action = str(
+        market_state.get("action") or execution_state.get("action") or "hold"
+    ).strip().lower()
+    execution_status = str(execution_state.get("status") or "stand_aside").strip()
+    permission_status = str(execution_permission.get("status") or "no_trade").strip()
+    direction_bias = str(
+        market_state.get("directional_bias")
+        or payload.get("directionalBias")
+        or "Neutral"
+    ).strip()
+    buy_level = str(trade_guidance.get("buyLevel") or "Weak").strip()
+    sell_level = str(trade_guidance.get("sellLevel") or "Weak").strip()
+    exit_level = str(trade_guidance.get("exitLevel") or "Low").strip()
+    summary = str(trade_guidance.get("summary") or "").strip()
+    sr_reaction = str(support_resistance.get("reaction") or "None").strip()
+
+    nearby_supports = (
+        list(support_resistance.get("nearby_supports"))
+        if isinstance(support_resistance.get("nearby_supports"), list)
+        else []
+    )
+    nearby_resistances = (
+        list(support_resistance.get("nearby_resistances"))
+        if isinstance(support_resistance.get("nearby_resistances"), list)
+        else []
+    )
+    support_tone = int(
+        support_resistance.get("support_family_confluence")
+        or support_resistance.get("support_confluence")
+        or len(nearby_supports)
+        or 0
+    )
+    resistance_tone = int(
+        support_resistance.get("resistance_family_confluence")
+        or support_resistance.get("resistance_confluence")
+        or len(nearby_resistances)
+        or 0
+    )
+    support_distance_pct = _coerce_float(
+        support_resistance.get("support_distance_pct"),
+        None,
+    )
+    resistance_distance_pct = _coerce_float(
+        support_resistance.get("resistance_distance_pct"),
+        None,
+    )
+
+    pivot_levels = (
+        support_resistance.get("pivot_levels")
+        if isinstance(support_resistance.get("pivot_levels"), dict)
+        else {}
+    )
+    round_numbers = (
+        support_resistance.get("round_numbers")
+        if isinstance(support_resistance.get("round_numbers"), dict)
+        else {}
+    )
+    active_fvgs = (
+        support_resistance.get("active_fvgs")
+        if isinstance(support_resistance.get("active_fvgs"), dict)
+        else {}
+    )
+    range_zone = (
+        support_resistance.get("range_zone")
+        if isinstance(support_resistance.get("range_zone"), dict)
+        else {}
+    )
+
+    pivot_point = _coerce_float(
+        _first_non_empty(
+            structure_context.get("pivotPoint"),
+            pivot_levels.get("pp"),
+        ),
+        None,
+    )
+    pivot_r1 = _coerce_float(
+        _first_non_empty(
+            structure_context.get("pivotResistance1"),
+            pivot_levels.get("r1"),
+        ),
+        None,
+    )
+    pivot_s1 = _coerce_float(
+        _first_non_empty(
+            structure_context.get("pivotSupport1"),
+            pivot_levels.get("s1"),
+        ),
+        None,
+    )
+    pivot_r2 = _coerce_float(
+        _first_non_empty(
+            structure_context.get("pivotResistance2"),
+            pivot_levels.get("r2"),
+        ),
+        None,
+    )
+    pivot_s2 = _coerce_float(
+        _first_non_empty(
+            structure_context.get("pivotSupport2"),
+            pivot_levels.get("s2"),
+        ),
+        None,
+    )
+    round_support = _coerce_float(
+        _first_non_empty(
+            structure_context.get("roundNumberSupport"),
+            round_numbers.get("support"),
+        ),
+        None,
+    )
+    round_resistance = _coerce_float(
+        _first_non_empty(
+            structure_context.get("roundNumberResistance"),
+            round_numbers.get("resistance"),
+        ),
+        None,
+    )
+    major_round_support = _coerce_float(
+        _first_non_empty(
+            structure_context.get("majorRoundNumberSupport"),
+            round_numbers.get("majorSupport"),
+        ),
+        None,
+    )
+    major_round_resistance = _coerce_float(
+        _first_non_empty(
+            structure_context.get("majorRoundNumberResistance"),
+            round_numbers.get("majorResistance"),
+        ),
+        None,
+    )
+    bullish_fvg = (
+        structure_context.get("bullishFvg")
+        if isinstance(structure_context.get("bullishFvg"), dict)
+        else active_fvgs.get("bullish")
+        if isinstance(active_fvgs.get("bullish"), dict)
+        else {}
+    )
+    bearish_fvg = (
+        structure_context.get("bearishFvg")
+        if isinstance(structure_context.get("bearishFvg"), dict)
+        else active_fvgs.get("bearish")
+        if isinstance(active_fvgs.get("bearish"), dict)
+        else {}
+    )
+    if not range_zone:
+        range_zone = (
+            structure_context.get("rangeZone")
+            if isinstance(structure_context.get("rangeZone"), dict)
+            else {}
+        )
+
+    bullish_fvg_distance_pct = _coerce_float(
+        _first_non_empty(
+            structure_context.get("bullishFvgDistancePct"),
+            _zone_distance_pct(bullish_fvg, current_price),
+        ),
+        None,
+    )
+    bearish_fvg_distance_pct = _coerce_float(
+        _first_non_empty(
+            structure_context.get("bearishFvgDistancePct"),
+            _zone_distance_pct(bearish_fvg, current_price),
+        ),
+        None,
+    )
+    in_bullish_fvg = bool(structure_context.get("inBullishFvg") or 0)
+    in_bearish_fvg = bool(structure_context.get("inBearishFvg") or 0)
+    range_zone_active = bool(structure_context.get("rangeZoneActive") or 0)
+    in_range_zone = bool(structure_context.get("inRangeZone") or 0)
+    range_zone_break = int(round(_coerce_float(structure_context.get("rangeZoneBreak"), 0.0) or 0.0))
+    range_zone_position = _coerce_float(structure_context.get("rangeZonePosition"), None)
+
+    vwap_delta = _coerce_float(structure_context.get("distSessionVwapPct"), 0.0) or 0.0
+    vwap_bias = _vwap_bias_label(vwap_delta)
+    orb_state = int(round(_coerce_float(structure_context.get("openingRangeBreak"), 0.0) or 0.0))
+    sweep_state = int(round(_coerce_float(structure_context.get("sweepReclaimSignal"), 0.0) or 0.0))
+    micro_bull_count = int(vwap_bias in {"Mild Bullish", "Bullish"}) + int(orb_state > 0) + int(sweep_state > 0)
+    micro_bear_count = int(vwap_bias in {"Mild Bearish", "Bearish"}) + int(orb_state < 0) + int(sweep_state < 0)
+
+    bullish_structure = any(
+        token in structure
+        for token in (
+            "Bullish Breakout",
+            "Bullish Structure",
+            "Bullish Drift",
+            "Bullish Pressure in Range",
+        )
+    )
+    bearish_structure = any(
+        token in structure
+        for token in (
+            "Bearish Breakdown",
+            "Bearish Structure",
+            "Bearish Drift",
+            "Bearish Pressure in Range",
+        )
+    )
+    consolidating = "Consolidating" in structure
+    bullish_reaction = sr_reaction in {
+        "Bullish Support Rejection",
+        "Bullish Breakout Through Resistance",
+    }
+    bearish_reaction = sr_reaction in {
+        "Bearish Resistance Rejection",
+        "Bearish Breakdown Through Support",
+    }
+    bullish_event = event_regime in {"trend_acceleration", "range_expansion"} or (
+        event_regime == "breakout_watch" and breakout_bias == "Bullish"
+    )
+    bearish_event = event_regime in {"trend_acceleration", "range_expansion"} or (
+        event_regime == "breakout_watch" and breakout_bias == "Bearish"
+    )
+    directional_warning = warning_ladder in {
+        "Directional Expansion Likely",
+        "Active Momentum Event",
+    }
+    hard_risk_regime = event_regime in {"panic_reversal", "event_risk"}
+    support_pressure = support_tone > resistance_tone
+    resistance_pressure = resistance_tone > support_tone
+    support_cluster_dense_near = bool(
+        support_tone >= 2
+        and support_distance_pct is not None
+        and support_distance_pct <= 0.08
+    )
+    resistance_cluster_dense_near = bool(
+        resistance_tone >= 2
+        and resistance_distance_pct is not None
+        and resistance_distance_pct <= 0.08
+    )
+    both_sides_tight = bool(
+        support_distance_pct is not None
+        and resistance_distance_pct is not None
+        and support_distance_pct <= 0.08
+        and resistance_distance_pct <= 0.08
+    )
+
+    pivot_or_round_support_near = _levels_have_family(
+        nearby_supports,
+        {"pivot", "round"},
+        max_distance_pct=0.10,
+    )
+    pivot_or_round_resistance_near = _levels_have_family(
+        nearby_resistances,
+        {"pivot", "round"},
+        max_distance_pct=0.10,
+    )
+    range_or_fvg_support_near = _levels_have_family(
+        nearby_supports,
+        {"range", "fvg"},
+        max_distance_pct=0.10,
+    )
+    range_or_fvg_resistance_near = _levels_have_family(
+        nearby_resistances,
+        {"range", "fvg"},
+        max_distance_pct=0.10,
+    )
+
+    bullish_pivot_round = bool(
+        (pivot_point is not None and current_price >= pivot_point)
+        or (bullish_reaction and pivot_or_round_support_near)
+        or _level_is_near(current_price, pivot_s1, threshold_pct=0.10)
+        or _level_is_near(current_price, round_support, threshold_pct=0.10)
+        or _level_is_near(current_price, major_round_support, threshold_pct=0.10)
+    )
+    bearish_pivot_round = bool(
+        (pivot_point is not None and current_price <= pivot_point)
+        or (
+            bearish_reaction
+            and (
+                pivot_or_round_resistance_near
+                or _level_is_near(current_price, pivot_r1, threshold_pct=0.10)
+                or _level_is_near(current_price, round_resistance, threshold_pct=0.10)
+                or _level_is_near(current_price, major_round_resistance, threshold_pct=0.10)
+            )
+        )
+    )
+    bullish_pivot_round_conflict = bool(
+        (pivot_point is not None and current_price < pivot_point)
+        or (
+            bearish_reaction
+            and (
+                pivot_or_round_resistance_near
+                or _level_is_near(current_price, pivot_r1, threshold_pct=0.10)
+                or _level_is_near(current_price, round_resistance, threshold_pct=0.10)
+                or _level_is_near(current_price, major_round_resistance, threshold_pct=0.10)
+            )
+        )
+    )
+    bearish_pivot_round_conflict = bool(
+        (pivot_point is not None and current_price > pivot_point)
+        or (
+            bullish_reaction
+            and (
+                pivot_or_round_support_near
+                or _level_is_near(current_price, pivot_s1, threshold_pct=0.10)
+                or _level_is_near(current_price, round_support, threshold_pct=0.10)
+                or _level_is_near(current_price, major_round_support, threshold_pct=0.10)
+            )
+        )
+    )
+    bullish_fvg_range = bool(
+        in_bullish_fvg
+        or (
+            bullish_fvg_distance_pct is not None
+            and bullish_fvg_distance_pct <= 0.08
+        )
+        or range_zone_break > 0
+        or (
+            range_zone_active
+            and range_zone_position is not None
+            and range_zone_position <= 0.35
+        )
+        or (bullish_reaction and range_or_fvg_support_near)
+    )
+    bearish_fvg_range = bool(
+        in_bearish_fvg
+        or (
+            bearish_fvg_distance_pct is not None
+            and bearish_fvg_distance_pct <= 0.08
+        )
+        or range_zone_break < 0
+        or (
+            range_zone_active
+            and range_zone_position is not None
+            and range_zone_position >= 0.65
+        )
+        or (bearish_reaction and range_or_fvg_resistance_near)
+    )
+    no_fvg_edge = bool(
+        not bullish_fvg_range
+        and not bearish_fvg_range
+        and not range_zone_active
+        and not in_range_zone
+    )
+
+    bullish_variant = ""
+    if (
+        ("Bullish Breakout" in structure or sr_reaction == "Bullish Breakout Through Resistance")
+        and orb_state > 0
+    ):
+        bullish_variant = "Bullish Breakout + ORB Bullish"
+    elif (
+        "Bullish Drift" in structure
+        and vwap_bias in {"Mild Bullish", "Bullish"}
+        and sr_reaction == "Bullish Support Rejection"
+    ):
+        bullish_variant = "Bullish Drift + bullish VWAP + support rejection"
+    elif (
+        "Bullish Pressure in Range" in structure
+        and sr_reaction == "Bullish Support Rejection"
+        and range_zone_break > 0
+    ):
+        bullish_variant = "Bullish Pressure in Range + support hold + Bull Break"
+    elif (
+        warning_ladder == "Active Momentum Event"
+        and breakout_bias == "Bullish"
+        and not resistance_cluster_dense_near
+    ):
+        bullish_variant = "Active Momentum Event + bullish bias + no nearby heavy resistance"
+
+    bearish_variant = ""
+    if (
+        ("Bearish Breakdown" in structure or sr_reaction == "Bearish Breakdown Through Support")
+        and orb_state < 0
+    ):
+        bearish_variant = "Bearish Breakdown + ORB Bearish"
+    elif (
+        "Bearish Drift" in structure
+        and vwap_bias in {"Mild Bearish", "Bearish"}
+        and sr_reaction == "Bearish Resistance Rejection"
+    ):
+        bearish_variant = "Bearish Drift + bearish VWAP + resistance rejection"
+    elif (
+        "Bearish Pressure in Range" in structure
+        and sr_reaction == "Bearish Resistance Rejection"
+        and range_zone_break < 0
+    ):
+        bearish_variant = "Bearish Pressure in Range + resistance hold + Bear Break"
+    elif (
+        warning_ladder == "Active Momentum Event"
+        and breakout_bias == "Bearish"
+        and not support_cluster_dense_near
+    ):
+        bearish_variant = "Active Momentum Event + bearish bias + no nearby strong support"
+
+    bullish_evidence = []
+    bearish_evidence = []
+    if bullish_structure or bullish_reaction:
+        bullish_evidence.append(structure if bullish_structure else sr_reaction)
+    if bearish_structure or bearish_reaction:
+        bearish_evidence.append(structure if bearish_structure else sr_reaction)
+    if breakout_bias == "Bullish":
+        bullish_evidence.append("breakout bias is bullish")
+    elif breakout_bias == "Bearish":
+        bearish_evidence.append("breakout bias is bearish")
+    if directional_warning:
+        if breakout_bias == "Bullish":
+            bullish_evidence.append(warning_ladder)
+        elif breakout_bias == "Bearish":
+            bearish_evidence.append(warning_ladder)
+    if bullish_event:
+        bullish_evidence.append(f"event regime is {_humanize_words(event_regime)}")
+    if bearish_event:
+        bearish_evidence.append(f"event regime is {_humanize_words(event_regime)}")
+    if micro_bull_count >= 1:
+        bullish_evidence.append(_summarize_microstructure_context(ta_data) or "microstructure is bullish")
+    if micro_bear_count >= 1:
+        bearish_evidence.append(_summarize_microstructure_context(ta_data) or "microstructure is bearish")
+    if support_pressure:
+        bullish_evidence.append("support cluster is stronger than resistance")
+    if resistance_pressure:
+        bearish_evidence.append("resistance cluster is stronger than support")
+    if bullish_pivot_round:
+        bullish_evidence.append("pivot and round levels support the long side")
+    if bearish_pivot_round:
+        bearish_evidence.append("pivot and round levels support the short side")
+    if bullish_fvg_range:
+        bullish_evidence.append("bullish FVG or range-zone edge is active")
+    if bearish_fvg_range:
+        bearish_evidence.append("bearish FVG or range-zone edge is active")
+
+    bullish_major_conflicts = []
+    bearish_major_conflicts = []
+    bullish_soft_conflicts = []
+    bearish_soft_conflicts = []
+
+    if breakout_bias == "Bearish":
+        bullish_major_conflicts.append("breakout bias is bearish")
+    elif breakout_bias == "Bullish":
+        bearish_major_conflicts.append("breakout bias is bullish")
+
+    if hard_risk_regime:
+        risk_text = _humanize_words(event_regime)
+        bullish_major_conflicts.append(f"{risk_text} is active")
+        bearish_major_conflicts.append(f"{risk_text} is active")
+
+    if bearish_structure and not bullish_structure:
+        bullish_major_conflicts.append(f"price action is {structure.lower()}")
+    if bullish_structure and not bearish_structure:
+        bearish_major_conflicts.append(f"price action is {structure.lower()}")
+
+    if bearish_reaction or micro_bear_count >= 2:
+        bullish_major_conflicts.append(
+            sr_reaction.lower() if bearish_reaction else "microstructure has turned bearish"
+        )
+    if bullish_reaction or micro_bull_count >= 2:
+        bearish_major_conflicts.append(
+            sr_reaction.lower() if bullish_reaction else "microstructure has turned bullish"
+        )
+
+    if resistance_cluster_dense_near or (
+        resistance_pressure
+        and resistance_distance_pct is not None
+        and resistance_distance_pct <= 0.10
+    ):
+        bullish_major_conflicts.append("dense nearby resistance is overhead")
+    if support_cluster_dense_near or (
+        support_pressure
+        and support_distance_pct is not None
+        and support_distance_pct <= 0.10
+    ):
+        bearish_major_conflicts.append("dense nearby support is underneath")
+
+    if bullish_pivot_round_conflict:
+        bullish_major_conflicts.append("price is below or rejecting pivot/round resistance")
+    if bearish_pivot_round_conflict:
+        bearish_major_conflicts.append("price is above or reclaiming pivot/round support")
+
+    if bearish_fvg_range:
+        bullish_major_conflicts.append("bearish FVG or range resistance is active")
+    if bullish_fvg_range:
+        bearish_major_conflicts.append("bullish FVG or range support is active")
+
+    if cross_asset_bias == "Bearish":
+        bullish_soft_conflicts.append("cross-asset context is bearish")
+    elif cross_asset_bias == "Bullish":
+        bearish_soft_conflicts.append("cross-asset context is bullish")
+
+    if both_sides_tight:
+        bullish_soft_conflicts.append("support and resistance are both very close")
+        bearish_soft_conflicts.append("support and resistance are both very close")
+
+    if consolidating:
+        bullish_soft_conflicts.append("price action is consolidating")
+        bearish_soft_conflicts.append("price action is consolidating")
+
+    bullish_major_conflicts = _dedupe_preserve_order(bullish_major_conflicts)
+    bearish_major_conflicts = _dedupe_preserve_order(bearish_major_conflicts)
+    bullish_soft_conflicts = _dedupe_preserve_order(bullish_soft_conflicts)
+    bearish_soft_conflicts = _dedupe_preserve_order(bearish_soft_conflicts)
+    bullish_evidence = _dedupe_preserve_order(bullish_evidence)
+    bearish_evidence = _dedupe_preserve_order(bearish_evidence)
+
+    buy_watch = buy_level in {"Watch", "Strong"}
+    sell_watch = sell_level in {"Watch", "Strong"}
+    active_long = action_state == "LONG_ACTIVE"
+    active_short = action_state == "SHORT_ACTIVE"
+    in_position = active_long or active_short
+
+    long_exit_reasons = []
+    short_exit_reasons = []
+    if event_regime == "panic_reversal":
+        long_exit_reasons.append("panic reversal is active")
+        short_exit_reasons.append("panic reversal is active")
+    if event_regime == "event_risk":
+        long_exit_reasons.append("event risk is active")
+        short_exit_reasons.append("event risk is active")
+    if active_long and sr_reaction == "Bearish Resistance Rejection":
+        long_exit_reasons.append("long position faces bearish resistance rejection")
+    if active_short and sr_reaction == "Bullish Support Rejection":
+        short_exit_reasons.append("short position faces bullish support rejection")
+    if active_long and resistance_cluster_dense_near:
+        long_exit_reasons.append("price has reached a dense nearby resistance cluster")
+    if active_short and support_cluster_dense_near:
+        short_exit_reasons.append("price has reached a dense nearby support cluster")
+    if active_long and any(
+        _level_is_near(current_price, level, threshold_pct=0.06)
+        for level in (pivot_r1, pivot_r2, major_round_resistance)
+    ):
+        long_exit_reasons.append("price is pressing into R1/R2 or major round resistance")
+    if active_short and any(
+        _level_is_near(current_price, level, threshold_pct=0.06)
+        for level in (pivot_s1, pivot_s2, major_round_support)
+    ):
+        short_exit_reasons.append("price is pressing into S1/S2 or major round support")
+    if active_long and warning_ladder in {"Normal", "Expansion Watch"} and micro_bear_count >= 1:
+        long_exit_reasons.append("follow-through has faded while risk conditions cooled")
+    if active_short and warning_ladder in {"Normal", "Expansion Watch"} and micro_bull_count >= 1:
+        short_exit_reasons.append("follow-through has faded while risk conditions cooled")
+    if active_long and consolidating and resistance_cluster_dense_near:
+        long_exit_reasons.append("price has gone back to consolidation near resistance")
+    if active_short and consolidating and support_cluster_dense_near:
+        short_exit_reasons.append("price has gone back to consolidation near support")
+    if active_long and in_bearish_fvg and bearish_reaction:
+        long_exit_reasons.append("opposing bearish FVG rejection is active")
+    if active_short and in_bullish_fvg and bullish_reaction:
+        short_exit_reasons.append("opposing bullish FVG rejection is active")
+
+    long_exit_reasons = _dedupe_preserve_order(long_exit_reasons)
+    short_exit_reasons = _dedupe_preserve_order(short_exit_reasons)
+
+    if active_long and (long_exit_reasons or bullish_major_conflicts):
+        reasons = long_exit_reasons or bullish_major_conflicts
+        exit_variant = reasons[0]
+        return {
+            "label": "Exit",
+            "tone": _dashboard_action_tone("Exit"),
+            "reason": f"Exit / reduce long: {exit_variant}.",
+            "variant": exit_variant,
+            "bullish_evidence": bullish_evidence,
+            "bearish_evidence": bearish_evidence,
+            "bullish_major_conflicts": bullish_major_conflicts,
+            "bullish_soft_conflicts": bullish_soft_conflicts,
+        }
+    if active_short and (short_exit_reasons or bearish_major_conflicts):
+        reasons = short_exit_reasons or bearish_major_conflicts
+        exit_variant = reasons[0]
+        return {
+            "label": "Exit",
+            "tone": _dashboard_action_tone("Exit"),
+            "reason": f"Exit / reduce short: {exit_variant}.",
+            "variant": exit_variant,
+            "bullish_evidence": bullish_evidence,
+            "bearish_evidence": bearish_evidence,
+            "bearish_major_conflicts": bearish_major_conflicts,
+            "bearish_soft_conflicts": bearish_soft_conflicts,
+        }
+
+    if permission_status == "exit_recommended" or action_state == "EXIT_RISK" or execution_status == "exit":
+        return {
+            "label": "Exit",
+            "tone": _dashboard_action_tone("Exit"),
+            "reason": summary or "Exit risk is elevated against the current directional state.",
+            "variant": "Execution permission marked exit risk",
+            "bullish_evidence": bullish_evidence,
+            "bearish_evidence": bearish_evidence,
+        }
+
+    if hard_risk_regime and not in_position:
+        risk_label = _humanize_words(event_regime)
+        return {
+            "label": "Stand Aside",
+            "tone": _dashboard_action_tone("Stand Aside"),
+            "reason": f"{risk_label} is active, so no fresh entry is justified.",
+            "variant": risk_label,
+            "bullish_evidence": bullish_evidence,
+            "bearish_evidence": bearish_evidence,
+        }
+
+    if (
+        big_move_risk >= 56.0
+        and breakout_bias == "Neutral"
+        and direction_bias == "Neutral"
+        and micro_bull_count == 0
+        and micro_bear_count == 0
+    ):
+        return {
+            "label": "Stand Aside",
+            "tone": _dashboard_action_tone("Stand Aside"),
+            "reason": "High big-move risk is present, but direction is still undefined.",
+            "variant": "High Big Move Risk but no direction",
+            "bullish_evidence": bullish_evidence,
+            "bearish_evidence": bearish_evidence,
+        }
+
+    if (
+        consolidating
+        and breakout_bias == "Neutral"
+        and warning_ladder == "Normal"
+        and micro_bull_count == 0
+        and micro_bear_count == 0
+    ):
+        return {
+            "label": "Stand Aside",
+            "tone": _dashboard_action_tone("Stand Aside"),
+            "reason": "Price is consolidating with neutral bias, normal warning ladder, and no microstructure edge.",
+            "variant": "Consolidating + neutral stack",
+            "bullish_evidence": bullish_evidence,
+            "bearish_evidence": bearish_evidence,
+        }
+
+    bullish_score = len(bullish_evidence)
+    bearish_score = len(bearish_evidence)
+    bullish_candidate = bool(
+        buy_watch
+        and bullish_score >= 5
+        and bullish_score >= bearish_score + 2
+    )
+    bearish_candidate = bool(
+        sell_watch
+        and bearish_score >= 5
+        and bearish_score >= bullish_score + 2
+    )
+
+    if bullish_candidate and not bearish_candidate:
+        if bullish_major_conflicts:
+            conflict_text = _join_readable_list(bullish_major_conflicts[:2])
+            return {
+                "label": "Stand Aside",
+                "tone": _dashboard_action_tone("Stand Aside"),
+                "reason": f"Bullish setup is present, but {len(bullish_major_conflicts)} major conflict blocks entry: {conflict_text}.",
+                "variant": bullish_variant or "Bullish setup blocked",
+                "bullish_evidence": bullish_evidence,
+                "bullish_major_conflicts": bullish_major_conflicts,
+                "bullish_soft_conflicts": bullish_soft_conflicts,
+            }
+        if bullish_soft_conflicts:
+            soft_text = _join_readable_list(bullish_soft_conflicts[:2])
+            return {
+                "label": "Stand Aside",
+                "tone": _dashboard_action_tone("Stand Aside"),
+                "reason": f"Bullish setup is forming, but it stays prepare-only because {soft_text}.",
+                "variant": bullish_variant or "Bullish setup forming",
+                "bullish_evidence": bullish_evidence,
+                "bullish_major_conflicts": bullish_major_conflicts,
+                "bullish_soft_conflicts": bullish_soft_conflicts,
+            }
+        if permission_status != "entry_allowed":
+            return {
+                "label": "Stand Aside",
+                "tone": _dashboard_action_tone("Stand Aside"),
+                "reason": summary or "Bullish stack is aligned, but execution is not fully cleared yet.",
+                "variant": bullish_variant or "Bullish setup forming",
+                "bullish_evidence": bullish_evidence,
+            }
+        variant_text = bullish_variant or "Bullish stack aligned"
+        basis = _join_readable_list(bullish_evidence[:4])
+        return {
+            "label": "Buy",
+            "tone": _dashboard_action_tone("Buy"),
+            "reason": f"Buy setup confirmed: {variant_text}. {basis}.",
+            "variant": variant_text,
+            "bullish_evidence": bullish_evidence,
+            "bullish_major_conflicts": bullish_major_conflicts,
+            "bullish_soft_conflicts": bullish_soft_conflicts,
+        }
+
+    if bearish_candidate and not bullish_candidate:
+        if bearish_major_conflicts:
+            conflict_text = _join_readable_list(bearish_major_conflicts[:2])
+            return {
+                "label": "Stand Aside",
+                "tone": _dashboard_action_tone("Stand Aside"),
+                "reason": f"Bearish setup is present, but {len(bearish_major_conflicts)} major conflict blocks entry: {conflict_text}.",
+                "variant": bearish_variant or "Bearish setup blocked",
+                "bearish_evidence": bearish_evidence,
+                "bearish_major_conflicts": bearish_major_conflicts,
+                "bearish_soft_conflicts": bearish_soft_conflicts,
+            }
+        if bearish_soft_conflicts:
+            soft_text = _join_readable_list(bearish_soft_conflicts[:2])
+            return {
+                "label": "Stand Aside",
+                "tone": _dashboard_action_tone("Stand Aside"),
+                "reason": f"Bearish setup is forming, but it stays prepare-only because {soft_text}.",
+                "variant": bearish_variant or "Bearish setup forming",
+                "bearish_evidence": bearish_evidence,
+                "bearish_major_conflicts": bearish_major_conflicts,
+                "bearish_soft_conflicts": bearish_soft_conflicts,
+            }
+        if permission_status != "entry_allowed":
+            return {
+                "label": "Stand Aside",
+                "tone": _dashboard_action_tone("Stand Aside"),
+                "reason": summary or "Bearish stack is aligned, but execution is not fully cleared yet.",
+                "variant": bearish_variant or "Bearish setup forming",
+                "bearish_evidence": bearish_evidence,
+            }
+        variant_text = bearish_variant or "Bearish stack aligned"
+        basis = _join_readable_list(bearish_evidence[:4])
+        return {
+            "label": "Sell",
+            "tone": _dashboard_action_tone("Sell"),
+            "reason": f"Sell setup confirmed: {variant_text}. {basis}.",
+            "variant": variant_text,
+            "bearish_evidence": bearish_evidence,
+            "bearish_major_conflicts": bearish_major_conflicts,
+            "bearish_soft_conflicts": bearish_soft_conflicts,
+        }
+
+    if buy_watch and bullish_score >= 4 and bullish_score > bearish_score:
+        blockers = _join_readable_list((bullish_major_conflicts + bullish_soft_conflicts)[:2])
+        return {
+            "label": "Stand Aside",
+            "tone": _dashboard_action_tone("Stand Aside"),
+            "reason": (
+                f"Bullish setup is building, but entry is not clean enough yet because {blockers}."
+                if blockers
+                else summary or "Bullish setup is forming, but execution is not cleared yet."
+            ),
+            "variant": bullish_variant or "Bullish setup forming",
+            "bullish_evidence": bullish_evidence,
+            "bullish_major_conflicts": bullish_major_conflicts,
+            "bullish_soft_conflicts": bullish_soft_conflicts,
+        }
+    if sell_watch and bearish_score >= 4 and bearish_score > bullish_score:
+        blockers = _join_readable_list((bearish_major_conflicts + bearish_soft_conflicts)[:2])
+        return {
+            "label": "Stand Aside",
+            "tone": _dashboard_action_tone("Stand Aside"),
+            "reason": (
+                f"Bearish setup is building, but entry is not clean enough yet because {blockers}."
+                if blockers
+                else summary or "Bearish setup is forming, but execution is not cleared yet."
+            ),
+            "variant": bearish_variant or "Bearish setup forming",
+            "bearish_evidence": bearish_evidence,
+            "bearish_major_conflicts": bearish_major_conflicts,
+            "bearish_soft_conflicts": bearish_soft_conflicts,
+        }
+
+    if both_sides_tight or no_fvg_edge or (bullish_score and bearish_score):
+        mixed_parts = []
+        if bullish_evidence:
+            mixed_parts.append(f"bullish: {_join_readable_list(bullish_evidence[:2])}")
+        if bearish_evidence:
+            mixed_parts.append(f"bearish: {_join_readable_list(bearish_evidence[:2])}")
+        return {
+            "label": "Stand Aside",
+            "tone": _dashboard_action_tone("Stand Aside"),
+            "reason": f"Signals are mixed, so no fresh entry is justified. {_join_readable_list(mixed_parts)}.",
+            "variant": "Mixed stack",
+            "bullish_evidence": bullish_evidence,
+            "bearish_evidence": bearish_evidence,
+        }
+
+    return {
+        "label": "Stand Aside",
+        "tone": _dashboard_action_tone("Stand Aside"),
+        "reason": summary or "The directional stack is too weak or mixed for a clean trade.",
+        "variant": "No clean edge",
+        "bullish_evidence": bullish_evidence,
+        "bearish_evidence": bearish_evidence,
+        "bullish_major_conflicts": bullish_major_conflicts,
+        "bearish_major_conflicts": bearish_major_conflicts,
+    }
+
+
 def _is_rr_signal_actionable(rr_signal):
     rr_signal = rr_signal if isinstance(rr_signal, dict) else {}
     status = str(rr_signal.get("status") or "").strip()
@@ -484,10 +1518,17 @@ def _is_rr_signal_actionable(rr_signal):
     )
 
 
-def _build_signal_notification(changes, rr_signal, market_structure, ta_data=None):
+def _build_signal_notification(changes, rr_signal, market_structure, ta_data=None, payload=None):
     changed_keys = set((changes or {}).keys())
     title = _notification_title_for_changes(changes)
     body_lines = []
+    dashboard_action = _derive_dashboard_action(payload, ta_data=ta_data)
+    dashboard_label = str(dashboard_action.get("label") or "").strip()
+    dashboard_reason = str(dashboard_action.get("reason") or "").strip()
+    if dashboard_label:
+        body_lines.append(f"Dashboard Label: {dashboard_label}")
+    if dashboard_reason:
+        body_lines.append(f"Label Basis: {dashboard_reason}")
     if "market_structure" in changed_keys:
         body_lines.append(f"Market Structure: {_format_market_structure_change(changes, market_structure)}")
 
@@ -505,7 +1546,11 @@ def _build_signal_notification(changes, rr_signal, market_structure, ta_data=Non
         body_lines.append(f"Market Structure: {_format_market_structure_change(changes, market_structure)}")
 
     body = "\n".join(body_lines)
-    return {"title": title, "body": body}
+    return {
+        "title": title,
+        "body": body,
+        "dashboard_action": dashboard_action,
+    }
 
 
 def _humanize_words(value):
@@ -651,11 +1696,17 @@ def _has_background_alert_channels():
     return _has_push_subscribers() or _telegram_enabled()
 
 
-def _send_telegram_notification(changes, rr_signal, market_structure, ta_data=None):
+def _send_telegram_notification(changes, rr_signal, market_structure, ta_data=None, payload=None):
     if not _telegram_enabled():
         return
 
-    notification = _build_signal_notification(changes, rr_signal, market_structure, ta_data=ta_data)
+    notification = _build_signal_notification(
+        changes,
+        rr_signal,
+        market_structure,
+        ta_data=ta_data,
+        payload=payload,
+    )
 
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
@@ -679,7 +1730,7 @@ def _send_telegram_notification(changes, rr_signal, market_structure, ta_data=No
         return
 
 
-def _send_web_push_notifications(changes, rr_signal, market_structure, ta_data=None):
+def _send_web_push_notifications(changes, rr_signal, market_structure, ta_data=None, payload=None):
     if webpush is None or not VAPID_PUBLIC_KEY or not VAPID_PRIVATE_KEY:
         return
 
@@ -687,10 +1738,17 @@ def _send_web_push_notifications(changes, rr_signal, market_structure, ta_data=N
     if not subscriptions:
         return
 
-    notification = _build_signal_notification(changes, rr_signal, market_structure, ta_data=ta_data)
-    payload = {
+    notification = _build_signal_notification(
+        changes,
+        rr_signal,
+        market_structure,
+        ta_data=ta_data,
+        payload=payload,
+    )
+    push_payload = {
         "title": notification.get("title"),
         "body": notification.get("body"),
+        "dashboard_action": notification.get("dashboard_action"),
         "rr_signal": rr_signal,
         "market_structure": market_structure,
         "url": "/",
@@ -702,7 +1760,7 @@ def _send_web_push_notifications(changes, rr_signal, market_structure, ta_data=N
         try:
             webpush(
                 subscription_info=sub,
-                data=json.dumps(payload, ensure_ascii=True),
+                data=json.dumps(push_payload, ensure_ascii=True),
                 vapid_private_key=VAPID_PRIVATE_KEY,
                 vapid_claims={"sub": VAPID_CLAIMS_SUBJECT},
             )
@@ -741,7 +1799,6 @@ def _is_material_change(changes):
         "trade_sell_setup",
         "trade_buy_setup",
         "trade_exit_warning",
-        "micro_vwap_band",
         "micro_vwap_bias",
         "micro_orb_state",
         "micro_sweep_state",
@@ -1966,7 +3023,7 @@ def _build_prediction_response():
     else:
         execution_state["actionState"] = "WAIT"
 
-    return {
+    response_payload = {
         "status": "success",
         "verdict": prediction["verdict"],
         "confidence": prediction["confidence"],
@@ -1981,7 +3038,13 @@ def _build_prediction_response():
         "DecisionStatus": decision_status,
         "ExecutionPermission": execution_permission,
         "TradePlaybook": trade_playbook,
-    }, 200
+    }
+    response_payload["DashboardAction"] = _derive_dashboard_action(
+        response_payload,
+        ta_data=ta_data,
+    )
+
+    return response_payload, 200
 
 
 def _indicator_monitor_loop():
@@ -2186,6 +3249,7 @@ def _indicator_monitor_loop():
                             rr_signal_payload,
                             market_structure,
                             ta_data=payload.get("TechnicalAnalysis"),
+                            payload=payload,
                         )
                         alert_title = alert_notification.get("title") or "XAUUSD Direction / Grade Changed"
                         alert_message = alert_notification.get("body") or ""
@@ -2212,12 +3276,14 @@ def _indicator_monitor_loop():
                             rr_signal=rr_signal_payload,
                             market_structure=market_structure,
                             ta_data=payload.get("TechnicalAnalysis"),
+                            payload=payload,
                         )
                         _send_telegram_notification(
                             changes=notification_changes,
                             rr_signal=rr_signal_payload,
                             market_structure=market_structure,
                             ta_data=payload.get("TechnicalAnalysis"),
+                            payload=payload,
                         )
                         if rr_ready_event:
                             _record_rr200_delivery(payload, now_ts)

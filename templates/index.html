@@ -1401,6 +1401,16 @@
                   <span class="metric-label">Summary</span>
                   <span class="metric-value compact" id="tg-summary">---</span>
                 </div>
+                <div class="metric-row">
+                  <span class="metric-label">Dashboard Label</span>
+                  <span class="metric-value" id="tg-dashboard-label">---</span>
+                </div>
+                <div class="metric-row">
+                  <span class="metric-label">Label Basis</span>
+                  <span class="metric-value compact" id="tg-dashboard-reason"
+                    >---</span
+                  >
+                </div>
               </div>
 
               <div class="decision-card">
@@ -2874,6 +2884,235 @@
         return active ? "Holding" : "Inactive";
       }
 
+      function joinReadableList(items) {
+        const filtered = items
+          .map((item) => String(item || "").trim())
+          .filter(Boolean);
+        if (filtered.length === 0) return "";
+        if (filtered.length === 1) return filtered[0];
+        if (filtered.length === 2) return `${filtered[0]} and ${filtered[1]}`;
+        return `${filtered.slice(0, -1).join(", ")}, and ${filtered[filtered.length - 1]}`;
+      }
+
+      function getDashboardActionTone(label) {
+        if (label === "Buy") return "value-bullish";
+        if (label === "Sell") return "value-bearish";
+        if (label === "Exit") return "value-watch";
+        return "";
+      }
+
+      function summarizeMicrostructureContext(structureContext) {
+        const vwapBias = getVwapBiasLabel(
+          Number(structureContext?.distSessionVwapPct || 0),
+        );
+        const orbState = getRoundedSignalState(structureContext?.openingRangeBreak);
+        const sweepState = getRoundedSignalState(
+          structureContext?.sweepReclaimSignal,
+        );
+        const parts = [];
+        if (vwapBias !== "Neutral") {
+          parts.push(`VWAP ${vwapBias.toLowerCase()}`);
+        }
+        if (orbState !== 0) {
+          parts.push(`ORB ${getOrbStateLabel(orbState).toLowerCase()}`);
+        }
+        if (sweepState !== 0) {
+          parts.push(`${getSweepStateLabel(sweepState).toLowerCase()} sweep`);
+        }
+        return joinReadableList(parts);
+      }
+
+      function summarizeLevelPressure(supportResistance) {
+        const nearbySupports = getArrayWithFallback(
+          supportResistance?.nearby_supports,
+          supportResistance?.nearbySupports,
+        );
+        const nearbyResistances = getArrayWithFallback(
+          supportResistance?.nearby_resistances,
+          supportResistance?.nearbyResistances,
+        );
+        const supportTone = Number(
+          getFirstDefinedValue(
+            supportResistance?.support_family_confluence,
+            supportResistance?.supportFamilyConfluence,
+            supportResistance?.support_confluence,
+            supportResistance?.supportConfluence,
+          ) ||
+            nearbySupports.length ||
+            0,
+        );
+        const resistanceTone = Number(
+          getFirstDefinedValue(
+            supportResistance?.resistance_family_confluence,
+            supportResistance?.resistanceFamilyConfluence,
+            supportResistance?.resistance_confluence,
+            supportResistance?.resistanceConfluence,
+          ) ||
+            nearbyResistances.length ||
+            0,
+        );
+        if (supportTone > resistanceTone) return "support is closer and cleaner";
+        if (resistanceTone > supportTone)
+          return "resistance is closer and cleaner";
+        return "";
+      }
+
+      function deriveDashboardActionLabel(
+        data,
+        ta,
+        tradeGuidance,
+        checklist,
+        executionPermission,
+        executionState,
+      ) {
+        const marketState =
+          data?.MarketState && typeof data.MarketState === "object"
+            ? data.MarketState
+            : {};
+        const regimeState =
+          data?.RegimeState && typeof data.RegimeState === "object"
+            ? data.RegimeState
+            : {};
+        const structureContext =
+          ta?.structure_context && typeof ta.structure_context === "object"
+            ? ta.structure_context
+            : {};
+        const supportResistance =
+          ta?.support_resistance && typeof ta.support_resistance === "object"
+            ? ta.support_resistance
+            : {};
+        const priceAction =
+          ta?.price_action && typeof ta.price_action === "object"
+            ? ta.price_action
+            : {};
+
+        const structure = safeText(priceAction.structure, "Consolidating");
+        const breakoutBias = String(regimeState.breakout_bias || "Neutral");
+        const crossAssetBias = String(regimeState.cross_asset_bias || "Neutral");
+        const warningLadder = String(regimeState.warning_ladder || "Normal");
+        const actionState = String(
+          marketState.action_state || executionState?.actionState || "WAIT",
+        );
+        const rawAction = String(
+          marketState.action || executionState?.action || "hold",
+        ).toLowerCase();
+        const executionStatus = String(executionState?.status || "stand_aside");
+        const permissionStatus = String(
+          executionPermission?.status || "no_trade",
+        );
+        const directionBias = String(
+          marketState.directional_bias || data?.directionalBias || "Neutral",
+        );
+        const buyLevel = String(tradeGuidance?.buyLevel || "Weak");
+        const sellLevel = String(tradeGuidance?.sellLevel || "Weak");
+        const exitLevel = String(tradeGuidance?.exitLevel || "Low");
+        const summary = String(tradeGuidance?.summary || "").trim();
+
+        const evidence = [];
+        if (structure && structure !== "Consolidating") evidence.push(structure);
+        if (breakoutBias !== "Neutral") {
+          evidence.push(`breakout bias ${breakoutBias.toLowerCase()}`);
+        }
+        if (crossAssetBias !== "Neutral") {
+          evidence.push(`cross-asset ${crossAssetBias.toLowerCase()}`);
+        }
+        if (warningLadder !== "Normal") evidence.push(warningLadder);
+        const microText = summarizeMicrostructureContext(structureContext);
+        if (microText) evidence.push(microText);
+        const levelPressure = summarizeLevelPressure(supportResistance);
+        if (levelPressure) evidence.push(levelPressure);
+        const evidenceText = joinReadableList(evidence);
+
+        const actionableLong =
+          permissionStatus === "entry_allowed" &&
+          (rawAction === "buy" ||
+            actionState === "LONG_ACTIVE" ||
+            (executionStatus === "enter" && directionBias === "Bullish"));
+        const actionableShort =
+          permissionStatus === "entry_allowed" &&
+          (rawAction === "sell" ||
+            actionState === "SHORT_ACTIVE" ||
+            (executionStatus === "enter" && directionBias === "Bearish"));
+        const exitRecommended =
+          permissionStatus === "exit_recommended" ||
+          actionState === "EXIT_RISK" ||
+          executionStatus === "exit";
+        const bullishSetup =
+          actionState === "SETUP_LONG" ||
+          (/watch|strong/i.test(buyLevel) && directionBias === "Bullish");
+        const bearishSetup =
+          actionState === "SETUP_SHORT" ||
+          (/watch|strong/i.test(sellLevel) && directionBias === "Bearish");
+
+        if (exitRecommended) {
+          return {
+            label: "Exit",
+            tone: getDashboardActionTone("Exit"),
+            reason:
+              summary ||
+              "Risk is elevated and the active directional state is deteriorating.",
+          };
+        }
+
+        if (actionableLong) {
+          return {
+            label: "Buy",
+            tone: getDashboardActionTone("Buy"),
+            reason: evidenceText
+              ? `Bullish stack is aligned: ${evidenceText}.`
+              : "Bullish execution is cleared.",
+          };
+        }
+
+        if (actionableShort) {
+          return {
+            label: "Sell",
+            tone: getDashboardActionTone("Sell"),
+            reason: evidenceText
+              ? `Bearish stack is aligned: ${evidenceText}.`
+              : "Bearish execution is cleared.",
+          };
+        }
+
+        if (bullishSetup && !bearishSetup) {
+          return {
+            label: "Stand Aside",
+            tone: getDashboardActionTone("Stand Aside"),
+            reason:
+              summary ||
+              "Bullish conditions are forming, but execution is not cleared yet.",
+          };
+        }
+
+        if (bearishSetup && !bullishSetup) {
+          return {
+            label: "Stand Aside",
+            tone: getDashboardActionTone("Stand Aside"),
+            reason:
+              summary ||
+              "Bearish conditions are forming, but execution is not cleared yet.",
+          };
+        }
+
+        if (checklist?.statusClass === "exit" && exitLevel === "High") {
+          return {
+            label: "Stand Aside",
+            tone: getDashboardActionTone("Stand Aside"),
+            reason:
+              summary ||
+              "Risk or indecision is elevated, so no fresh trade is justified.",
+          };
+        }
+
+        return {
+          label: "Stand Aside",
+          tone: getDashboardActionTone("Stand Aside"),
+          reason:
+            summary ||
+            "Signals are mixed across structure, breakout bias, and microstructure.",
+        };
+      }
+
       function evaluateDecisionChecklist(data, ta, tradeGuidance) {
         const verdict = String(data?.verdict || "Neutral");
         const confidence = Number(data?.confidence || 0);
@@ -3768,12 +4007,16 @@
         const executionPermissionEl = document.getElementById(
           "execution-permission",
         );
+        const executionState =
+          data.ExecutionState && typeof data.ExecutionState === "object"
+            ? data.ExecutionState
+            : {};
+        const executionPermission =
+          data.ExecutionPermission &&
+          typeof data.ExecutionPermission === "object"
+            ? data.ExecutionPermission
+            : {};
         if (executionPermissionEl) {
-          const executionPermission =
-            data.ExecutionPermission &&
-            typeof data.ExecutionPermission === "object"
-              ? data.ExecutionPermission
-              : {};
           let permissionText = executionPermission.text || "No Trade";
           let permissionClass = "wait";
           const permissionStatus = executionPermission.status || "no_trade";
@@ -3787,6 +4030,39 @@
 
           executionPermissionEl.innerText = permissionText;
           executionPermissionEl.className = `decision-status-value ${permissionClass}`;
+        }
+
+        const dashboardAction =
+          data.DashboardAction && typeof data.DashboardAction === "object"
+            ? {
+                label: String(data.DashboardAction.label || "Stand Aside"),
+                tone: String(data.DashboardAction.tone || ""),
+                reason: String(data.DashboardAction.reason || ""),
+              }
+            : deriveDashboardActionLabel(
+                data,
+                ta,
+                tradeGuidance,
+                checklist,
+                executionPermission,
+                executionState,
+              );
+        if (marketActionEl) {
+          marketActionEl.innerText = dashboardAction.label;
+          marketActionEl.className = `metric-value ${dashboardAction.tone}`;
+        }
+        const dashboardLabelEl = document.getElementById("tg-dashboard-label");
+        if (dashboardLabelEl) {
+          dashboardLabelEl.innerText = dashboardAction.label;
+          dashboardLabelEl.className = `metric-value ${dashboardAction.tone}`;
+        }
+        const dashboardReasonEl = document.getElementById(
+          "tg-dashboard-reason",
+        );
+        if (dashboardReasonEl) {
+          dashboardReasonEl.innerText =
+            dashboardAction.reason ||
+            "No mapped dashboard action is available yet.";
         }
 
         const playbook =
@@ -3820,10 +4096,6 @@
         const forecastState =
           data.ForecastState && typeof data.ForecastState === "object"
             ? data.ForecastState
-            : {};
-        const executionState =
-          data.ExecutionState && typeof data.ExecutionState === "object"
-            ? data.ExecutionState
             : {};
         const forecastBucketEl = document.getElementById("forecast-bucket");
         if (forecastBucketEl) {
