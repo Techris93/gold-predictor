@@ -102,13 +102,9 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 TELEGRAM_THREAD_ID = os.getenv("TELEGRAM_THREAD_ID", "").strip()
 ENABLE_TELEGRAM_NOTIFICATIONS = _read_bool_env("GOLD_PREDICTOR_ENABLE_TELEGRAM", False)
 CHANGE_SUMMARY_ORDER = [
-    "trade_playbook_stage",
     "warning_ladder",
     "event_regime",
     "breakout_bias",
-    "rr_signal_status",
-    "rr_signal_grade",
-    "rr_signal_direction",
     "market_structure",
     "micro_vwap_band",
     "micro_vwap_bias",
@@ -116,9 +112,7 @@ CHANGE_SUMMARY_ORDER = [
     "micro_sweep_state",
     "verdict",
     "confidence_bucket",
-    "execution_permission",
-    "entry_readiness",
-    "exit_urgency",
+    "execution_state",
 ]
 def _load_subscriptions():
     if not SUBSCRIPTIONS_FILE.exists():
@@ -215,13 +209,9 @@ def _filter_notification_changes(changes):
 
 def _summarize_changes_for_push(changes):
     labels = {
-        "trade_playbook_stage": "Trade Setup",
         "warning_ladder": "Warning Ladder",
         "event_regime": "Event Regime",
         "breakout_bias": "Breakout Bias",
-        "rr_signal_status": "RR200 Signal",
-        "rr_signal_grade": "Quant Grade",
-        "rr_signal_direction": "RR Direction",
         "market_structure": "Market Structure",
         "micro_vwap_band": "VWAP Band",
         "micro_vwap_bias": "VWAP Bias",
@@ -229,9 +219,7 @@ def _summarize_changes_for_push(changes):
         "micro_sweep_state": "Sweep",
         "verdict": "Verdict",
         "confidence_bucket": "AI Confidence",
-        "execution_permission": "Execution State",
-        "entry_readiness": "Entry Readiness",
-        "exit_urgency": "Exit Urgency",
+        "execution_state": "Execution State",
     }
     ordered_keys = [key for key in CHANGE_SUMMARY_ORDER if key in changes]
     ordered_keys.extend(key for key in changes if key not in ordered_keys)
@@ -243,62 +231,44 @@ def _summarize_changes_for_push(changes):
         parts.append(
             f"{labels.get(key, key)}: {_humanize_alert_value(key, prev)} -> {_humanize_alert_value(key, cur)}"
         )
-    return " | ".join(parts) if parts else "Execution state changed"
+    return " | ".join(parts) if parts else "Signal state changed"
 
 
 def _notification_title_for_changes(changes):
     changed_keys = set((changes or {}).keys())
-    has_playbook = "trade_playbook_stage" in changed_keys
     has_structure = "market_structure" in changed_keys
     has_warning = "warning_ladder" in changed_keys
     has_event_regime = "event_regime" in changed_keys
     has_breakout_bias = "breakout_bias" in changed_keys
-    has_rr_status = "rr_signal_status" in changed_keys
-    has_rr_grade = "rr_signal_grade" in changed_keys
-    has_rr_direction = "rr_signal_direction" in changed_keys
     has_micro_vwap = "micro_vwap_band" in changed_keys or "micro_vwap_bias" in changed_keys
     has_micro_orb = "micro_orb_state" in changed_keys
     has_micro_sweep = "micro_sweep_state" in changed_keys
     has_microstructure = has_micro_vwap or has_micro_orb or has_micro_sweep
     has_verdict = "verdict" in changed_keys
     has_confidence = "confidence_bucket" in changed_keys
-    has_permission = "execution_permission" in changed_keys
-    has_entry_readiness = "entry_readiness" in changed_keys
-    has_exit_urgency = "exit_urgency" in changed_keys
+    has_execution_state = "execution_state" in changed_keys
 
-    if has_rr_status or has_rr_grade or has_rr_direction:
-        return "XAUUSD RR200 Signal Changed"
-    if has_microstructure and not has_structure and not has_permission:
+    if has_microstructure and not has_structure and not has_execution_state:
         return "XAUUSD Microstructure Changed"
-    if has_playbook and has_warning and not has_structure and not has_permission:
-        return "XAUUSD Trade Setup Changed"
-    if has_playbook and (has_breakout_bias or has_entry_readiness or has_exit_urgency) and not has_structure and not has_permission:
-        return "XAUUSD Trade Setup Changed"
-    if has_playbook and not has_warning and not has_event_regime and not has_structure and not has_permission:
-        return "XAUUSD Trade Setup Changed"
-    if (has_warning or has_event_regime or has_breakout_bias) and not has_structure and not has_permission and not has_verdict and not has_confidence:
+    if (has_warning or has_event_regime or has_breakout_bias) and not has_structure and not has_execution_state and not has_verdict and not has_confidence:
         return "XAUUSD Trade Context Changed"
-    if has_verdict and not has_structure and not has_permission and not has_confidence:
+    if has_verdict and not has_structure and not has_execution_state and not has_confidence:
         return "XAUUSD Verdict Changed"
-    if has_confidence and not has_structure and not has_permission and not has_verdict:
+    if has_confidence and not has_structure and not has_execution_state and not has_verdict:
         return "XAUUSD Confidence Changed"
-    if has_structure and not has_permission:
+    if has_structure and not has_execution_state:
         return "XAUUSD Market Structure Changed"
-    if has_exit_urgency and not has_structure and not has_permission:
-        return "XAUUSD Risk State Changed"
-    if has_entry_readiness and not has_structure and not has_permission:
-        return "XAUUSD Trade Setup Changed"
-    if has_permission and not has_structure:
+    if has_execution_state and not has_structure:
         return "XAUUSD Execution State Changed"
-    if (has_playbook or has_verdict or has_confidence or has_warning or has_event_regime or has_breakout_bias or has_entry_readiness or has_exit_urgency or has_rr_status or has_rr_grade or has_rr_direction) and not has_structure and not has_permission:
+    if (has_verdict or has_confidence or has_warning or has_event_regime or has_breakout_bias) and not has_structure and not has_execution_state:
         return "XAUUSD State Changed"
-    if has_permission and (has_structure or has_verdict or has_confidence or has_warning or has_event_regime or has_playbook or has_breakout_bias or has_entry_readiness or has_exit_urgency):
+    if has_execution_state and (has_structure or has_verdict or has_confidence or has_warning or has_event_regime or has_breakout_bias):
         return "XAUUSD Structure / Execution Changed"
-    if has_playbook or has_verdict or has_confidence or has_warning or has_event_regime or has_breakout_bias or has_entry_readiness or has_exit_urgency or has_rr_status or has_rr_grade or has_rr_direction:
+    if has_verdict or has_confidence or has_warning or has_event_regime or has_breakout_bias or has_execution_state:
         return "XAUUSD State Changed"
     if has_microstructure:
         return "XAUUSD Microstructure Changed"
-    return "XAUUSD Execution State Changed"
+    return "XAUUSD Signal Changed"
 
 
 def _effective_rr_direction(rr_signal):
@@ -1717,21 +1687,16 @@ def _build_signal_notification(changes, rr_signal, market_structure, ta_data=Non
     changed_keys = set((changes or {}).keys())
     title = _notification_title_for_changes(changes)
     body_lines = []
-    dashboard_action = _derive_dashboard_action(payload, ta_data=ta_data)
-    dashboard_label = str(dashboard_action.get("label") or "").strip()
-    dashboard_reason = str(dashboard_action.get("reason") or "").strip()
-    if dashboard_label:
-        body_lines.append(f"Signal Read: {dashboard_label}")
-    if dashboard_reason:
-        body_lines.append(f"Signal Basis: {dashboard_reason}")
+    decision_status = payload.get("DecisionStatus") if isinstance(payload, dict) else {}
+    execution_state = payload.get("ExecutionState") if isinstance(payload, dict) else {}
+    decision_text = str((decision_status or {}).get("text") or "").strip()
+    execution_title = str((execution_state or {}).get("title") or "").strip()
+    if execution_title:
+        body_lines.append(f"Execution State: {execution_title}")
+    if decision_text:
+        body_lines.append(f"Decision: {decision_text}")
     if "market_structure" in changed_keys:
         body_lines.append(f"Market Structure: {_format_market_structure_change(changes, market_structure)}")
-
-    rr_direction_grade = _format_rr_direction_grade(rr_signal)
-    rr_target_probability = _format_rr_target_bucket_probability(rr_signal)
-    if rr_direction_grade != "Neutral · N/A" or rr_target_probability != "N/A · N/A":
-        body_lines.append(f"Direction / Grade: {rr_direction_grade}")
-        body_lines.append(f"Target Bucket Probability: {rr_target_probability}")
     micro_change = _format_microstructure_change(changes)
     if micro_change:
         body_lines.append(f"Microstructure Change: {micro_change}")
@@ -1744,7 +1709,7 @@ def _build_signal_notification(changes, rr_signal, market_structure, ta_data=Non
     return {
         "title": title,
         "body": body,
-        "dashboard_action": dashboard_action,
+        "dashboard_action": {},
     }
 
 
@@ -1769,15 +1734,9 @@ def _humanize_alert_value(key, value):
     if not text:
         return "None"
     humanized_keys = {
-        "trade_playbook_stage",
         "event_regime",
         "breakout_bias",
-        "rr_signal_status",
-        "rr_signal_grade",
-        "rr_signal_direction",
-        "entry_readiness",
-        "exit_urgency",
-        "execution_permission",
+        "execution_state",
         "market_regime",
     }
     if key in humanized_keys:
@@ -1977,33 +1936,18 @@ def _is_material_change(changes):
         return False
 
     always_material = {
-        "trade_playbook_stage",
         "verdict",
         "confidence_bucket",
         "warning_ladder",
         "event_regime",
         "breakout_bias",
-        "rr_signal_status",
-        "rr_signal_grade",
-        "rr_signal_direction",
-        "entry_readiness",
-        "exit_urgency",
-        "trend",
         "market_structure",
-        "market_regime",
-        "trade_sell_setup",
-        "trade_buy_setup",
-        "trade_exit_warning",
+        "execution_state",
         "micro_vwap_bias",
         "micro_orb_state",
         "micro_sweep_state",
     }
     numeric_thresholds = {
-        "rsi_14": 0.6,
-        "ema_20": 0.25,
-        "ema_50": 0.25,
-        "adx_14": 0.4,
-        "atr_percent": 0.02,
         "micro_vwap_delta_pct": 0.10,
     }
 
@@ -2859,8 +2803,7 @@ def _extract_indicator_snapshot(payload):
     ta_data = payload.get("TechnicalAnalysis", {}) if isinstance(payload, dict) else {}
     pa = ta_data.get("price_action", {}) if isinstance(ta_data, dict) else {}
     regime_state = payload.get("RegimeState", {}) if isinstance(payload, dict) else {}
-    trade_playbook = payload.get("TradePlaybook", {}) if isinstance(payload, dict) else {}
-    rr_signal = payload.get("RR200Signal", {}) if isinstance(payload, dict) else {}
+    execution_state = payload.get("ExecutionState", {}) if isinstance(payload, dict) else {}
     structure_context = ta_data.get("structure_context", {}) if isinstance(ta_data, dict) else {}
     try:
         micro_vwap_delta = round(float(structure_context.get("distSessionVwapPct") or 0.0), 3)
@@ -2875,31 +2818,17 @@ def _extract_indicator_snapshot(payload):
     except Exception:
         micro_sweep_state = 0
     return {
-        "trade_playbook_stage": (trade_playbook.get("stage") if isinstance(trade_playbook, dict) else None),
-        "warning_ladder": (
-            trade_playbook.get("warningLadder")
-            if isinstance(trade_playbook, dict) and trade_playbook.get("warningLadder")
-            else (regime_state.get("warning_ladder") if isinstance(regime_state, dict) else None)
-        ),
-        "event_regime": (
-            trade_playbook.get("eventRegime")
-            if isinstance(trade_playbook, dict) and trade_playbook.get("eventRegime")
-            else (regime_state.get("event_regime") if isinstance(regime_state, dict) else None)
-        ),
-        "breakout_bias": (
-            trade_playbook.get("breakoutBias")
-            if isinstance(trade_playbook, dict) and trade_playbook.get("breakoutBias")
-            else (regime_state.get("breakout_bias") if isinstance(regime_state, dict) else None)
-        ),
+        "warning_ladder": (regime_state.get("warning_ladder") if isinstance(regime_state, dict) else None),
+        "event_regime": (regime_state.get("event_regime") if isinstance(regime_state, dict) else None),
+        "breakout_bias": (regime_state.get("breakout_bias") if isinstance(regime_state, dict) else None),
         "market_structure": (pa.get("structure") if isinstance(pa, dict) else None),
         "verdict": payload.get("verdict"),
         "confidence_bucket": _confidence_bucket(payload.get("confidence")),
-        "execution_permission": ((payload.get("ExecutionPermission") or {}).get("text")),
-        "entry_readiness": (trade_playbook.get("entryReadiness") if isinstance(trade_playbook, dict) else None),
-        "exit_urgency": (trade_playbook.get("exitUrgency") if isinstance(trade_playbook, dict) else None),
-        "rr_signal_status": (rr_signal.get("status") if isinstance(rr_signal, dict) else None),
-        "rr_signal_grade": (rr_signal.get("grade") if isinstance(rr_signal, dict) else None),
-        "rr_signal_direction": _effective_rr_direction(rr_signal),
+        "execution_state": (
+            execution_state.get("title")
+            if isinstance(execution_state, dict) and execution_state.get("title")
+            else (execution_state.get("status") if isinstance(execution_state, dict) else None)
+        ),
         "micro_vwap_delta_pct": micro_vwap_delta,
         "micro_vwap_band": _vwap_band_label(micro_vwap_delta),
         "micro_vwap_bias": _vwap_bias_label(micro_vwap_delta),
@@ -2928,7 +2857,7 @@ def _record_live_signal_outcome(payload, snapshot, changes, now_ts):
     price = float(ta_data.get("current_price") or 0.0)
     records = _load_json_file(LIVE_SIGNAL_OUTCOMES_FILE, {"records": []})
     record = {
-        "id": f"{now_ts}:{snapshot.get('trade_playbook_stage')}:{payload.get('verdict')}:{price}",
+        "id": f"{now_ts}:{snapshot.get('execution_state')}:{payload.get('verdict')}:{price}",
         "ts": now_ts,
         "price": round(price, 2),
         "verdict": payload.get("verdict"),
@@ -3159,7 +3088,6 @@ def _build_prediction_response():
         raw_prediction,
         ta_data,
     )
-    ta_data["_prediction_market_state"] = prediction.get("MarketState", {})
     decision_status = _evaluate_decision_status(
         verdict=prediction["verdict"],
         confidence=int(prediction["confidence"]),
@@ -3167,69 +3095,25 @@ def _build_prediction_response():
         trade_guidance=prediction["TradeGuidance"],
     )
     decision_status = _stabilize_decision_status(decision_status)
-    execution_permission = _evaluate_execution_permission(
-        decision_status=decision_status,
-        market_state=prediction.get("MarketState", {}),
-    )
-    trade_playbook = _evaluate_trade_playbook(
-        decision_status=decision_status,
-        execution_permission=execution_permission,
-        market_state=prediction.get("MarketState", {}),
-        regime_state=prediction.get("RegimeState", {}),
-        trade_guidance=prediction.get("TradeGuidance", {}),
-    )
-    trade_playbook = _stabilize_trade_playbook(
-        trade_playbook,
-        execution_permission=execution_permission,
-        decision_status=decision_status,
-    )
     forecast_state = dict(prediction.get("ForecastState", {}) or {})
-    forecast_state["warningLadder"] = trade_playbook.get("warningLadder") or forecast_state.get("warningLadder")
-    forecast_state["eventRegime"] = trade_playbook.get("eventRegime") or forecast_state.get("eventRegime")
-    forecast_state["breakoutBias"] = trade_playbook.get("breakoutBias") or forecast_state.get("breakoutBias")
-    forecast_state["directionalBias"] = trade_playbook.get("directionalBias") or forecast_state.get("directionalBias")
-
     execution_state = dict(prediction.get("ExecutionState", {}) or {})
-    stabilized_execution_status = (
-        "exit"
-        if execution_permission.get("status") == "exit_recommended"
-        else (
-            "hold"
-            if trade_playbook.get("stage") == "hold"
-            else (
-                "enter"
-                if trade_playbook.get("stage") == "enter"
-                else (
-                    "prepare"
-                    if trade_playbook.get("stage") in {"prepare", "stalk_entry"}
-                    else "stand_aside"
-                )
-            )
-        )
+    execution_status = str(execution_state.get("status") or "stand_aside")
+    execution_state["status"] = execution_status
+    execution_state["title"] = str(
+        execution_state.get("title")
+        or _humanize_value(execution_status or "stand_aside")
     )
-    execution_state["status"] = stabilized_execution_status
-    execution_state["title"] = trade_playbook.get("title") or _humanize_value(stabilized_execution_status or "stand_aside")
-    execution_state["text"] = trade_playbook.get("text") or execution_permission.get("text") or ""
-    execution_state["entryAllowed"] = execution_permission.get("status") == "entry_allowed"
-    execution_state["exitRecommended"] = execution_permission.get("status") == "exit_recommended"
-    execution_state["permissionStatus"] = execution_permission.get("status")
-    execution_state["action"] = (
-        "exit"
-        if stabilized_execution_status == "exit"
-        else ("hold" if trade_playbook.get("stage") == "hold" else ("enter" if stabilized_execution_status == "enter" else ("prepare" if stabilized_execution_status == "prepare" else "stand_aside")))
+    execution_state["text"] = str(
+        execution_state.get("text")
+        or decision_status.get("text")
+        or "No trade. Conditions are not clean enough yet."
     )
-    if stabilized_execution_status == "exit":
-        execution_state["actionState"] = "EXIT_RISK"
-    elif trade_playbook.get("stage") == "hold" and trade_playbook.get("directionalBias") == "Bullish":
-        execution_state["actionState"] = "LONG_ACTIVE"
-    elif trade_playbook.get("stage") == "hold" and trade_playbook.get("directionalBias") == "Bearish":
-        execution_state["actionState"] = "SHORT_ACTIVE"
-    elif stabilized_execution_status == "enter" and trade_playbook.get("directionalBias") == "Bullish":
-        execution_state["actionState"] = "SETUP_LONG"
-    elif stabilized_execution_status == "enter" and trade_playbook.get("directionalBias") == "Bearish":
-        execution_state["actionState"] = "SETUP_SHORT"
-    else:
-        execution_state["actionState"] = "WAIT"
+    execution_state["action"] = str(
+        execution_state.get("action") or execution_status
+    )
+    execution_state["actionState"] = str(
+        execution_state.get("actionState") or "WAIT"
+    )
 
     response_payload = {
         "status": "success",
@@ -3237,21 +3121,11 @@ def _build_prediction_response():
         "confidence": prediction["confidence"],
         "TechnicalAnalysis": ta_data,
         "TradeGuidance": prediction["TradeGuidance"],
-        "MarketState": prediction.get("MarketState", {}),
         "RegimeState": prediction.get("RegimeState", {}),
         "ForecastState": forecast_state,
         "ExecutionState": execution_state,
-        "RR200Signal": prediction.get("RR200Signal", {}),
-        "RR200LiveCounter": _load_rr200_counter(int(time.time())),
         "DecisionStatus": decision_status,
-        "ExecutionPermission": execution_permission,
-        "TradePlaybook": trade_playbook,
     }
-    response_payload["DashboardAction"] = _derive_dashboard_action(
-        response_payload,
-        ta_data=ta_data,
-    )
-    response_payload = _align_dashboard_response_contract(response_payload)
 
     return response_payload, 200
 
@@ -3284,21 +3158,14 @@ def _indicator_monitor_loop():
                         alert_state = _load_json_file(
                             ALERT_STATE_FILE,
                             {
-                                "last_trade_playbook_stage": "",
-                                "last_execution_permission": "",
                                 "last_market_structure": "",
                                 "last_warning_ladder": "",
                                 "last_event_regime": "",
                                 "last_breakout_bias": "",
                                 "last_verdict": "",
                                 "last_confidence_bucket": "",
-                                "last_entry_readiness": "",
-                                "last_exit_urgency": "",
-                                "last_rr_signal_status": "",
-                                "last_rr_signal_grade": "",
-                                "last_rr_signal_direction": "",
+                                "last_execution_state": "",
                                 "last_alert_ts": 0,
-                                "last_playbook_alert_ts": 0,
                                 "last_context_alert_ts": 0,
                                 "last_execution_alert_ts": 0,
                                 "last_diagnostics_alert_ts": 0,
@@ -3306,38 +3173,23 @@ def _indicator_monitor_loop():
                                 "last_boundary_wobble_ts": 0,
                             },
                         )
-                        decision_payload = payload.get("DecisionStatus") or {}
-                        execution_permission_payload = payload.get("ExecutionPermission") or {}
-                        trade_playbook_payload = payload.get("TradePlaybook") or {}
-                        execution_permission = str(execution_permission_payload.get("text") or "")
-                        permission_status = str(execution_permission_payload.get("status") or "no_trade")
-                        trade_playbook_stage = str(trade_playbook_payload.get("stage") or "")
-                        entry_readiness = str(trade_playbook_payload.get("entryReadiness") or "")
-                        exit_urgency = str(trade_playbook_payload.get("exitUrgency") or "")
+                        execution_state_payload = payload.get("ExecutionState") or {}
                         market_structure = str(((payload.get("TechnicalAnalysis") or {}).get("price_action") or {}).get("structure") or "")
-                        warning_ladder = str(trade_playbook_payload.get("warningLadder") or (payload.get("RegimeState") or {}).get("warning_ladder") or "")
-                        event_regime = str(trade_playbook_payload.get("eventRegime") or (payload.get("RegimeState") or {}).get("event_regime") or "")
-                        breakout_bias = str(trade_playbook_payload.get("breakoutBias") or (payload.get("RegimeState") or {}).get("breakout_bias") or "")
-                        rr_signal_payload = payload.get("RR200Signal") or {}
-                        rr_signal_status = str(rr_signal_payload.get("status") or "")
-                        rr_signal_grade = str(rr_signal_payload.get("grade") or "")
-                        rr_signal_direction = _effective_rr_direction(rr_signal_payload)
-                        rr_signal_actionable = _is_rr_signal_actionable(rr_signal_payload)
+                        warning_ladder = str((payload.get("RegimeState") or {}).get("warning_ladder") or "")
+                        event_regime = str((payload.get("RegimeState") or {}).get("event_regime") or "")
+                        breakout_bias = str((payload.get("RegimeState") or {}).get("breakout_bias") or "")
                         verdict = str(payload.get("verdict") or "")
                         confidence_bucket = _confidence_bucket(payload.get("confidence"))
-                        previous_trade_playbook_stage = str(alert_state.get("last_trade_playbook_stage", ""))
+                        execution_state_label = str(
+                            execution_state_payload.get("title")
+                            or execution_state_payload.get("status")
+                            or ""
+                        )
                         previous_warning_ladder = str(alert_state.get("last_warning_ladder", ""))
                         previous_event_regime = str(alert_state.get("last_event_regime", ""))
                         previous_breakout_bias = str(alert_state.get("last_breakout_bias", ""))
                         previous_confidence_bucket = str(alert_state.get("last_confidence_bucket", ""))
-                        previous_rr_signal_status = str(alert_state.get("last_rr_signal_status", ""))
-                        previous_rr_signal_grade = str(alert_state.get("last_rr_signal_grade", ""))
-                        previous_rr_signal_direction = str(alert_state.get("last_rr_signal_direction", ""))
-                        playbook_changed = (
-                            "trade_playbook_stage" in notification_changes
-                            and bool(trade_playbook_stage)
-                            and _is_major_playbook_transition(previous_trade_playbook_stage, trade_playbook_stage)
-                        )
+                        previous_execution_state = str(alert_state.get("last_execution_state", ""))
                         warning_tier_changed = (
                             _warning_tier_rank(previous_warning_ladder)
                             != _warning_tier_rank(warning_ladder)
@@ -3387,34 +3239,10 @@ def _indicator_monitor_loop():
                             and confidence_bucket != previous_confidence_bucket
                             and confidence_bucket in {"High", "Very High", "Low"}
                         )
-                        execution_permission_changed = "execution_permission" in notification_changes and bool(execution_permission)
-                        rr_signal_status_changed = (
-                            "rr_signal_status" in notification_changes
-                            and bool(rr_signal_status)
-                            and rr_signal_status != previous_rr_signal_status
-                            and rr_signal_status in {"arming", "ready"}
-                            and rr_signal_actionable
-                        )
-                        rr_signal_grade_changed = (
-                            "rr_signal_grade" in notification_changes
-                            and bool(rr_signal_grade)
-                            and rr_signal_grade != previous_rr_signal_grade
-                            and rr_signal_actionable
-                        )
-                        rr_signal_direction_changed = (
-                            "rr_signal_direction" in notification_changes
-                            and bool(rr_signal_direction)
-                            and rr_signal_direction != previous_rr_signal_direction
-                            and rr_signal_actionable
-                        )
-                        entry_readiness_changed = (
-                            "entry_readiness" in notification_changes
-                            and playbook_changed
-                            and entry_readiness in {"medium", "high"}
-                        )
-                        exit_urgency_changed = (
-                            "exit_urgency" in notification_changes
-                            and exit_urgency == "high"
+                        execution_state_changed = (
+                            "execution_state" in notification_changes
+                            and bool(execution_state_label)
+                            and execution_state_label != previous_execution_state
                         )
                         should_alert = bool(
                             market_structure_changed
@@ -3424,23 +3252,17 @@ def _indicator_monitor_loop():
                             or breakout_bias_changed
                             or verdict_changed
                             or confidence_changed
-                            or execution_permission_changed
-                            or entry_readiness_changed
-                            or exit_urgency_changed
-                            or rr_signal_status_changed
-                            or rr_signal_grade_changed
-                            or rr_signal_direction_changed
+                            or execution_state_changed
                         )
                         signal_class = ""
-                        rr_ready_event = bool(
-                            rr_signal_status_changed
-                            and rr_signal_status == "ready"
-                            and rr_signal_grade in {"A+ (Quant)", "A (High Accuracy)", "B (Qualified)"}
-                        )
                         if market_structure_changed or microstructure_changed:
                             signal_class = "price_action"
-                        elif rr_signal_grade_changed or rr_signal_direction_changed:
+                        elif execution_state_changed:
                             signal_class = "execution"
+                        elif warning_changed or event_regime_changed or breakout_bias_changed:
+                            signal_class = "context"
+                        elif verdict_changed or confidence_changed:
+                            signal_class = "diagnostics"
 
                         if not should_alert:
                             last_snapshot = current_snapshot
@@ -3455,7 +3277,7 @@ def _indicator_monitor_loop():
 
                         alert_notification = _build_signal_notification(
                             notification_changes,
-                            rr_signal_payload,
+                            {},
                             market_structure,
                             ta_data=payload.get("TechnicalAnalysis"),
                             payload=payload,
@@ -3482,40 +3304,29 @@ def _indicator_monitor_loop():
 
                         _send_web_push_notifications(
                             changes=notification_changes,
-                            rr_signal=rr_signal_payload,
+                            rr_signal={},
                             market_structure=market_structure,
                             ta_data=payload.get("TechnicalAnalysis"),
                             payload=payload,
                         )
                         _send_telegram_notification(
                             changes=notification_changes,
-                            rr_signal=rr_signal_payload,
+                            rr_signal={},
                             market_structure=market_structure,
                             ta_data=payload.get("TechnicalAnalysis"),
                             payload=payload,
                         )
-                        if rr_ready_event:
-                            _record_rr200_delivery(payload, now_ts)
                         _save_json_file(
                             ALERT_STATE_FILE,
                             {
-                                "last_trade_playbook_stage": trade_playbook_stage,
-                                "last_execution_permission": execution_permission,
                                 "last_market_structure": market_structure,
                                 "last_warning_ladder": warning_ladder,
                                 "last_event_regime": event_regime,
                                 "last_breakout_bias": breakout_bias,
                                 "last_verdict": verdict,
                                 "last_confidence_bucket": confidence_bucket,
-                                "last_entry_readiness": entry_readiness,
-                                "last_exit_urgency": exit_urgency,
-                                "last_rr_signal_status": rr_signal_status,
-                                "last_rr_signal_grade": rr_signal_grade,
-                                "last_rr_signal_direction": rr_signal_direction,
+                                "last_execution_state": execution_state_label,
                                 "last_alert_ts": now_ts,
-                                "last_playbook_alert_ts": (
-                                    now_ts if signal_class == "playbook" else int(alert_state.get("last_playbook_alert_ts", 0) or 0)
-                                ),
                                 "last_context_alert_ts": (
                                     now_ts if signal_class == "context" else int(alert_state.get("last_context_alert_ts", 0) or 0)
                                 ),

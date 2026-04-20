@@ -353,6 +353,14 @@ def _apply_live_price_tick(df, live_price):
     return updated
 
 
+def _market_structure_source_index(frame):
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        return 0
+    if TECHNICAL_BASE_INTERVAL in {"15m", "15min"} and len(frame) >= 2:
+        return len(frame) - 2
+    return len(frame) - 1
+
+
 def _fetch_mtf_trends(td_symbol, h1_trend=None):
     """Fetches multi-timeframe trends strictly from Twelve Data."""
     strategy_params = get_active_strategy_params()
@@ -642,15 +650,15 @@ def _build_technical_analysis_from_frame(
     df["EMA_TREND"] = "Neutral"
     df.loc[(df["Close"] > df["EMA_20"]) & (df["EMA_20"] > df["EMA_50"]), "EMA_TREND"] = "Bullish"
     df.loc[(df["Close"] < df["EMA_20"]) & (df["EMA_20"] < df["EMA_50"]), "EMA_TREND"] = "Bearish"
-    pa_structure, candle_pattern = classify_price_action(df, len(df) - 1)
-
-    rsi_overbought = float(active_strategy_params.get("rsi_overbought", 70))
-    rsi_oversold = float(active_strategy_params.get("rsi_oversold", 20))
-    rsi_signal = "Neutral"
-    if latest['RSI_14'] > rsi_overbought:
-        rsi_signal = "Overbought (Bearish bias)"
-    elif latest['RSI_14'] < rsi_oversold:
-        rsi_signal = "Oversold (Bullish bias)"
+    structure_index = _market_structure_source_index(df)
+    pa_structure, candle_pattern = classify_price_action(df, structure_index)
+    structure_bar = df.iloc[structure_index]
+    structure_bar_dt = pd.to_datetime(structure_bar.name, utc=True, errors="coerce")
+    structure_bar_ts = (
+        structure_bar_dt.isoformat()
+        if not pd.isna(structure_bar_dt)
+        else None
+    )
 
     cmf_strong_buy_threshold = float(active_strategy_params.get("cmf_strong_buy_threshold", 0.10))
     cmf_strong_sell_threshold = float(active_strategy_params.get("cmf_strong_sell_threshold", -0.10))
@@ -680,8 +688,6 @@ def _build_technical_analysis_from_frame(
         "execution_trend": ema_trend,
         "ema_20": round(latest['EMA_20'], 2),
         "ema_50": round(latest['EMA_50'], 2),
-        "rsi_14": round(latest['RSI_14'], 2),
-        "rsi_signal": rsi_signal,
         "volatility_regime": {
             "market_regime": market_regime,
             "adx_14": round(adx_14, 2),
@@ -703,7 +709,13 @@ def _build_technical_analysis_from_frame(
         },
         "price_action": {
             "structure": pa_structure,
-            "latest_candle_pattern": candle_pattern
+            "latest_candle_pattern": candle_pattern,
+            "basis": (
+                "last_closed_15m_bar"
+                if TECHNICAL_BASE_INTERVAL in {"15m", "15min"} and len(df) >= 2
+                else "latest_bar_utc"
+            ),
+            "bar_timestamp_utc": structure_bar_ts,
         },
         "support_resistance": _support_resistance_snapshot(df, latest, prev),
         "event_risk": _event_risk_context(int(time.time())),
@@ -729,6 +741,16 @@ def _build_technical_analysis_from_frame(
         cross_asset_context=cross_asset_context,
     )
     result.update(shared_payload)
+    result["price_action"] = {
+        "structure": pa_structure,
+        "latest_candle_pattern": candle_pattern,
+        "basis": (
+            "last_closed_15m_bar"
+            if TECHNICAL_BASE_INTERVAL in {"15m", "15min"} and len(df) >= 2
+            else "latest_bar_utc"
+        ),
+        "bar_timestamp_utc": structure_bar_ts,
+    }
     result["data_source"] = data_source
     result["base_interval"] = TECHNICAL_BASE_INTERVAL
     result["last_updated_at"] = now_ts
@@ -783,36 +805,6 @@ def _normalize_ta_payload_schema(payload):
         "r2": pivot_levels.get("r2"),
         "s2": pivot_levels.get("s2"),
     }
-
-    round_numbers = support_resistance.get("round_numbers")
-    if not isinstance(round_numbers, dict):
-        round_numbers = support_resistance.get("roundNumbers")
-    if not isinstance(round_numbers, dict):
-        round_numbers = {}
-    support_resistance["round_numbers"] = {
-        "support": round_numbers.get("support"),
-        "resistance": round_numbers.get("resistance"),
-        "majorSupport": round_numbers.get("majorSupport"),
-        "majorResistance": round_numbers.get("majorResistance"),
-        "step": round_numbers.get("step"),
-    }
-
-    active_fvgs = support_resistance.get("active_fvgs")
-    if not isinstance(active_fvgs, dict):
-        active_fvgs = support_resistance.get("activeFvgs")
-    if not isinstance(active_fvgs, dict):
-        active_fvgs = {}
-    support_resistance["active_fvgs"] = {
-        "bullish": active_fvgs.get("bullish"),
-        "bearish": active_fvgs.get("bearish"),
-    }
-    support_resistance["range_zone"] = (
-        support_resistance.get("range_zone")
-        if isinstance(support_resistance.get("range_zone"), dict)
-        else support_resistance.get("rangeZone")
-        if isinstance(support_resistance.get("rangeZone"), dict)
-        else None
-    )
     normalized["support_resistance"] = support_resistance
 
     structure_context = normalized.get("structure_context")
@@ -825,25 +817,6 @@ def _normalize_ta_payload_schema(payload):
         "pivotSupport1": support_resistance["pivot_levels"]["s1"],
         "pivotResistance2": support_resistance["pivot_levels"]["r2"],
         "pivotSupport2": support_resistance["pivot_levels"]["s2"],
-        "roundNumberSupport": support_resistance["round_numbers"]["support"],
-        "roundNumberResistance": support_resistance["round_numbers"]["resistance"],
-        "majorRoundNumberSupport": support_resistance["round_numbers"]["majorSupport"],
-        "majorRoundNumberResistance": support_resistance["round_numbers"]["majorResistance"],
-        "roundNumberStep": support_resistance["round_numbers"]["step"],
-        "roundSupportDistancePct": structure_context.get("roundSupportDistancePct"),
-        "roundResistanceDistancePct": structure_context.get("roundResistanceDistancePct"),
-        "bullishFvg": support_resistance["active_fvgs"]["bullish"],
-        "bearishFvg": support_resistance["active_fvgs"]["bearish"],
-        "bullishFvgDistancePct": structure_context.get("bullishFvgDistancePct"),
-        "bearishFvgDistancePct": structure_context.get("bearishFvgDistancePct"),
-        "inBullishFvg": bool(structure_context.get("inBullishFvg") or 0),
-        "inBearishFvg": bool(structure_context.get("inBearishFvg") or 0),
-        "rangeZone": support_resistance["range_zone"],
-        "rangeZoneActive": bool(structure_context.get("rangeZoneActive") or 0),
-        "inRangeZone": bool(structure_context.get("inRangeZone") or 0),
-        "rangeZoneBreak": structure_context.get("rangeZoneBreak"),
-        "rangeZonePosition": structure_context.get("rangeZonePosition"),
-        "rangeZoneWidthPct": structure_context.get("rangeZoneWidthPct"),
     }
     for key, default_value in structure_defaults.items():
         structure_context.setdefault(key, default_value)
