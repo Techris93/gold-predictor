@@ -1,4 +1,3 @@
-import copy
 import unittest
 from unittest.mock import patch
 
@@ -104,45 +103,88 @@ def _sample_ta_payload():
 
 
 class DashboardPayloadContractTests(unittest.TestCase):
-    def test_build_ta_payload_from_row_preserves_dashboard_fields(self):
+    def test_build_ta_payload_from_row_keeps_core_context(self):
         payload = build_ta_payload_from_row(_sample_row())
 
         self.assertIn("pivot_levels", payload["support_resistance"])
-        self.assertIn("round_numbers", payload["support_resistance"])
-        self.assertIn("active_fvgs", payload["support_resistance"])
-        self.assertIn("range_zone", payload["support_resistance"])
         self.assertIn("openingRangeBreak", payload["structure_context"])
         self.assertIn("distSessionVwapPct", payload["structure_context"])
-        self.assertIn("roundNumberSupport", payload["structure_context"])
-        self.assertIn("bullishFvg", payload["structure_context"])
-        self.assertIn("rangeZone", payload["structure_context"])
+        self.assertIn("pivotPoint", payload["structure_context"])
 
-    def test_normalize_ta_payload_schema_preserves_rsi_and_sr_context(self):
+    def test_normalize_ta_payload_schema_keeps_pivots_and_microstructure(self):
         normalized = _normalize_ta_payload_schema(_sample_ta_payload())
 
-        self.assertEqual(normalized["rsi_14"], 68.2)
-        self.assertEqual(normalized["rsi_signal"], "Overbought (Bearish bias)")
-        self.assertIn("round_numbers", normalized["support_resistance"])
-        self.assertIn("active_fvgs", normalized["support_resistance"])
-        self.assertIn("range_zone", normalized["support_resistance"])
-        self.assertIn("roundNumberSupport", normalized["structure_context"])
-        self.assertIn("bearishFvg", normalized["structure_context"])
-        self.assertIn("rangeZoneBreak", normalized["structure_context"])
+        self.assertIn("pivot_levels", normalized["support_resistance"])
+        self.assertIn("openingRangeBreak", normalized["structure_context"])
+        self.assertIn("distSessionVwapPct", normalized["structure_context"])
+        self.assertIn("pivotPoint", normalized["structure_context"])
 
-    def test_predict_route_returns_full_dashboard_contract(self):
+    def test_sanitize_client_payload_strips_removed_dashboard_fields(self):
         payload = {
             "status": "success",
             "verdict": "Bearish",
             "confidence": 66,
             "TechnicalAnalysis": _sample_ta_payload(),
-            "TradeGuidance": {"summary": "Short setup confirmed.", "buyLevel": "Weak", "sellLevel": "Strong", "exitLevel": "Low"},
-            "MarketState": {"regime": "trend", "action_state": "SHORT_ACTIVE", "action": "sell"},
+            "TradeGuidance": {
+                "summary": "Short setup confirmed.",
+                "buyLevel": "Weak",
+                "sellLevel": "Strong",
+                "exitLevel": "Low",
+            },
+            "MarketState": {"regime": "trend", "action_state": "SHORT_ACTIVE"},
             "RegimeState": {"breakout_bias": "Bearish", "event_regime": "range_expansion"},
             "ForecastState": {"regimeBucket": "active_momentum"},
-            "ExecutionState": {"status": "hold", "title": "Hold Winner", "action": "hold"},
+            "ExecutionState": {"status": "hold", "title": "Hold Winner"},
             "RR200Signal": {"status": "arming"},
             "DecisionStatus": {"status": "sell", "text": "Safer to look for a sell."},
-            "ExecutionPermission": {"status": "entry_allowed", "text": "Execution remains active on the sell side."},
+            "ExecutionPermission": {"status": "entry_allowed"},
+            "TradePlaybook": {"stage": "hold", "title": "Hold Winner"},
+            "DashboardAction": {"label": "Sell", "reason": "Active short remains aligned."},
+        }
+
+        body = app_module._sanitize_client_prediction_payload(payload)
+
+        for key in (
+            "MarketState",
+            "ExecutionPermission",
+            "TradePlaybook",
+            "DashboardAction",
+            "RR200Signal",
+        ):
+            self.assertNotIn(key, body)
+
+        self.assertNotIn("rsi_14", body["TechnicalAnalysis"])
+        self.assertNotIn("rsi_signal", body["TechnicalAnalysis"])
+        self.assertNotIn("round_numbers", body["TechnicalAnalysis"]["support_resistance"])
+        self.assertNotIn("active_fvgs", body["TechnicalAnalysis"]["support_resistance"])
+        self.assertNotIn("range_zone", body["TechnicalAnalysis"]["support_resistance"])
+        self.assertNotIn("roundNumberSupport", body["TechnicalAnalysis"]["structure_context"])
+        self.assertNotIn("bullishFvg", body["TechnicalAnalysis"]["structure_context"])
+        self.assertNotIn("rangeZone", body["TechnicalAnalysis"]["structure_context"])
+        self.assertIn("pivot_levels", body["TechnicalAnalysis"]["support_resistance"])
+        self.assertIn("pivotPoint", body["TechnicalAnalysis"]["structure_context"])
+        self.assertIn("RegimeState", body)
+        self.assertIn("ExecutionState", body)
+
+    def test_predict_route_returns_lean_client_contract(self):
+        payload = {
+            "status": "success",
+            "verdict": "Bearish",
+            "confidence": 66,
+            "TechnicalAnalysis": _sample_ta_payload(),
+            "TradeGuidance": {
+                "summary": "Short setup confirmed.",
+                "buyLevel": "Weak",
+                "sellLevel": "Strong",
+                "exitLevel": "Low",
+            },
+            "MarketState": {"regime": "trend", "action_state": "SHORT_ACTIVE"},
+            "RegimeState": {"breakout_bias": "Bearish", "event_regime": "range_expansion"},
+            "ForecastState": {"regimeBucket": "active_momentum"},
+            "ExecutionState": {"status": "hold", "title": "Hold Winner"},
+            "RR200Signal": {"status": "arming"},
+            "DecisionStatus": {"status": "sell", "text": "Safer to look for a sell."},
+            "ExecutionPermission": {"status": "entry_allowed"},
             "TradePlaybook": {"stage": "hold", "title": "Hold Winner"},
             "DashboardAction": {"label": "Sell", "reason": "Active short remains aligned."},
         }
@@ -155,20 +197,26 @@ class DashboardPayloadContractTests(unittest.TestCase):
         body = response.get_json()
         for key in (
             "TradeGuidance",
-            "MarketState",
             "RegimeState",
-            "ExecutionPermission",
-            "TradePlaybook",
             "ForecastState",
             "ExecutionState",
+            "DecisionStatus",
+        ):
+            self.assertIn(key, body)
+        for key in (
+            "MarketState",
+            "ExecutionPermission",
+            "TradePlaybook",
             "DashboardAction",
             "RR200Signal",
         ):
-            self.assertIn(key, body)
-        self.assertIn("rsi_14", body["TechnicalAnalysis"])
-        self.assertIn("rsi_signal", body["TechnicalAnalysis"])
-        self.assertIn("round_numbers", body["TechnicalAnalysis"]["support_resistance"])
-        self.assertIn("active_fvgs", body["TechnicalAnalysis"]["support_resistance"])
+            self.assertNotIn(key, body)
+        self.assertNotIn("rsi_14", body["TechnicalAnalysis"])
+        self.assertNotIn("rsi_signal", body["TechnicalAnalysis"])
+        self.assertNotIn("round_numbers", body["TechnicalAnalysis"]["support_resistance"])
+        self.assertNotIn("active_fvgs", body["TechnicalAnalysis"]["support_resistance"])
+        self.assertNotIn("range_zone", body["TechnicalAnalysis"]["support_resistance"])
+        self.assertIn("pivot_levels", body["TechnicalAnalysis"]["support_resistance"])
 
     def test_predict_route_returns_error_payload_when_builder_fails(self):
         with patch.object(app_module, "_build_prediction_response", side_effect=RuntimeError("boom")):

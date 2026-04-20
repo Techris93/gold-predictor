@@ -11,12 +11,12 @@ self.addEventListener("push", (event) => {
   try {
     data = event.data ? event.data.json() : {};
   } catch (_) {
-    data = { title: "XAUUSD Execution Permission Changed", body: "Execution permission changed" };
+    data = { title: "XAUUSD Signal Changed", body: "Market signal changed" };
   }
 
-  const title = data.title || "XAUUSD Execution Permission Changed";
+  const title = data.title || "XAUUSD Signal Changed";
   const options = {
-    body: data.body || "Execution permission changed",
+    body: data.body || "Market signal changed",
     icon: "/static/favicon.png",
     badge: "/static/favicon.png",
     data: {

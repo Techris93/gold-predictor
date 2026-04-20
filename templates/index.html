@@ -1115,18 +1115,6 @@
               <span class="metric-label">Pivot Context</span>
               <span class="metric-value compact" id="rs-pivot-context">---</span>
             </div>
-            <div class="metric-row">
-              <span class="metric-label">Round Numbers</span>
-              <span class="metric-value compact" id="rs-rounds">---</span>
-            </div>
-            <div class="metric-row">
-              <span class="metric-label">Nearby S/R</span>
-              <span class="metric-value compact" id="rs-nearby">---</span>
-            </div>
-            <div class="metric-row">
-              <span class="metric-label">FVG / Range Zone</span>
-              <span class="metric-value compact" id="rs-zones">---</span>
-            </div>
           </section>
 
           <section class="section-card card-technical">
@@ -1170,10 +1158,6 @@
                 <span class="metric-value" id="ta-trend">---</span>
               </div>
               <div class="metric-row">
-                <span class="metric-label">RSI Momentum (14)</span>
-                <span class="metric-value" id="ta-rsi">---</span>
-              </div>
-              <div class="metric-row">
                 <span class="metric-label">EMA 20 / EMA 50</span>
                 <span class="metric-value"
                   ><span id="ta-ema20">---</span> /
@@ -1200,165 +1184,6 @@
               <div class="metric-row">
                 <span class="metric-label">Active Params</span>
                 <span class="metric-value compact" id="ta-active-params"
-                  >---</span
-                >
-              </div>
-            </div>
-          </section>
-
-          <section class="section-card card-market">
-            <button
-              type="button"
-              class="section-toggle"
-              id="market-toggle"
-              aria-expanded="false"
-              aria-controls="market-panel"
-              data-expanded-label="Open"
-              data-collapsed-label="Hidden"
-            >
-              <span class="ar-heading-wrap">
-                <span class="section-toggle-label">Market State</span>
-                <span class="section-toggle-subtext"
-                  >Tap to open regime, bias, and execution gating details</span
-                >
-              </span>
-              <span class="ar-toggle-meta">
-                <span class="ar-toggle-badge js-toggle-badge">Hidden</span>
-                <svg
-                  class="ar-chevron"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  aria-hidden="true"
-                >
-                  <path
-                    d="M6 9l6 6 6-6"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  ></path>
-                </svg>
-              </span>
-            </button>
-            <div id="market-panel" hidden>
-              <div class="metric-row">
-                <span class="metric-label">Regime</span>
-                <span class="metric-value" id="ms-regime">---</span>
-              </div>
-              <div class="metric-row">
-                <span class="metric-label">Directional Bias</span>
-                <span class="metric-value" id="ms-bias">---</span>
-              </div>
-              <div class="metric-row">
-                <span class="metric-label">Tradeability</span>
-                <span class="metric-value" id="ms-tradeability">---</span>
-              </div>
-              <div class="metric-row">
-                <span class="metric-label">Action State</span>
-                <span class="metric-value" id="ms-action-state">---</span>
-              </div>
-              <div class="metric-row">
-                <span class="metric-label">Action</span>
-                <span class="metric-value" id="ms-action">---</span>
-              </div>
-              <div class="metric-row">
-                <span class="metric-label">Composite Scores</span>
-                <span class="metric-value compact" id="ms-scores">---</span>
-              </div>
-              <div class="metric-row">
-                <span class="metric-label">Direction Model</span>
-                <span class="metric-value compact" id="ms-direction-model"
-                  >---</span
-                >
-              </div>
-              <div class="metric-row">
-                <span class="metric-label">Timeframe Gate</span>
-                <span class="metric-value compact" id="ms-timeframe-gate"
-                  >---</span
-                >
-              </div>
-            </div>
-          </section>
-
-          <section class="section-card card-rr">
-            <button
-              type="button"
-              class="section-toggle"
-              id="rr-toggle"
-              aria-expanded="false"
-              aria-controls="rr-panel"
-              data-expanded-label="Open"
-              data-collapsed-label="Hidden"
-            >
-              <span class="ar-heading-wrap">
-                <span class="section-toggle-label"
-                  >Adaptive RR Signal (1:2)</span
-                >
-                <span class="section-toggle-subtext"
-                  >Tap to open grade, bucket probability, and level
-                  details</span
-                >
-              </span>
-              <span class="ar-toggle-meta">
-                <span class="ar-toggle-badge js-toggle-badge">Hidden</span>
-                <svg
-                  class="ar-chevron"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  aria-hidden="true"
-                >
-                  <path
-                    d="M6 9l6 6 6-6"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  ></path>
-                </svg>
-              </span>
-            </button>
-            <div id="rr-panel" hidden>
-              <div class="metric-row">
-                <span class="metric-label">Signal Status</span>
-                <span class="metric-value" id="rr-status">---</span>
-              </div>
-              <div class="metric-row">
-                <span class="metric-label">Direction / Grade</span>
-                <span class="metric-value" id="rr-direction-grade">---</span>
-              </div>
-              <div class="metric-row">
-                <span class="metric-label">Timeframe Filter</span>
-                <span class="metric-value compact" id="rr-timeframe-filter"
-                  >---</span
-                >
-              </div>
-              <div class="metric-row">
-                <span class="metric-label">Target Bucket Probability</span>
-                <span class="metric-value" id="rr-probability">---</span>
-              </div>
-              <div class="metric-row">
-                <span class="metric-label">Projected Move / ATR</span>
-                <span class="metric-value" id="rr-projected">---</span>
-              </div>
-              <div class="metric-row">
-                <span class="metric-label">ATR Buckets</span>
-                <span class="metric-value compact" id="rr-buckets">---</span>
-              </div>
-              <div class="metric-row">
-                <span class="metric-label">Entry / SL / TP</span>
-                <span class="metric-value compact" id="rr-levels">---</span>
-              </div>
-              <div class="metric-row">
-                <span class="metric-label">Summary</span>
-                <span class="metric-value compact" id="rr-summary">---</span>
-              </div>
-              <div class="metric-row">
-                <span class="metric-label">Today (A+/A/B)</span>
-                <span class="metric-value compact" id="rr-live-today">---</span>
-              </div>
-              <div class="metric-row">
-                <span class="metric-label">Expected / Day</span>
-                <span class="metric-value compact" id="rr-live-expected"
                   >---</span
                 >
               </div>
@@ -1417,30 +1242,6 @@
                   <span class="metric-label">Summary</span>
                   <span class="metric-value compact" id="tg-summary">---</span>
                 </div>
-                <div class="metric-row">
-                  <span class="metric-label">Dashboard Label</span>
-                  <span class="metric-value" id="tg-dashboard-label">---</span>
-                </div>
-                <div class="metric-row">
-                  <span class="metric-label">Label Basis</span>
-                  <span class="metric-value compact" id="tg-dashboard-reason"
-                    >---</span
-                  >
-                </div>
-                <div class="metric-row">
-                  <span class="metric-label">Action Variant</span>
-                  <span class="metric-value compact" id="tg-dashboard-variant"
-                    >---</span
-                  >
-                </div>
-                <div class="metric-row">
-                  <span class="metric-label">How To Use</span>
-                  <span
-                    class="metric-value compact rule-copy"
-                    id="tg-dashboard-copy"
-                    >---</span
-                  >
-                </div>
               </div>
 
               <div class="decision-card">
@@ -1458,7 +1259,7 @@
                       >Execution Checklist</span
                     >
                     <span class="decision-toggle-subtext"
-                      >Tap to open execution state, playbook, and checklist
+                      >Tap to open execution state, forecast bucket, and checklist
                       rules</span
                     >
                   </span>
@@ -1492,27 +1293,6 @@
                     </div>
                   </div>
                   <div class="decision-status">
-                    <div class="decision-status-label">
-                      Execution Permission
-                    </div>
-                    <div
-                      class="decision-status-value wait"
-                      id="execution-permission"
-                    >
-                      Evaluating market state...
-                    </div>
-                  </div>
-                  <div class="decision-status">
-                    <div class="decision-status-label">Trade Playbook</div>
-                    <div
-                      class="decision-status-value wait"
-                      id="trade-playbook-stage"
-                    >
-                      Building combined entry/exit playbook...
-                    </div>
-                  </div>
-
-                  <div class="metric-row">
                     <span class="metric-label">Forecast Bucket</span>
                     <span class="metric-value" id="forecast-bucket">---</span>
                   </div>
@@ -1525,19 +1305,6 @@
                     <span class="metric-value compact" id="anti-chop-state"
                       >---</span
                     >
-                  </div>
-
-                  <div class="decision-block">
-                    <div class="decision-heading exit">Playbook Read</div>
-                    <div class="metric-value compact" id="trade-playbook-text">
-                      Waiting for event-regime and directional alignment...
-                    </div>
-                    <ul class="playbook-why" id="trade-playbook-why">
-                      <li>
-                        Playbook rationale will appear here once the market
-                        state is loaded.
-                      </li>
-                    </ul>
                   </div>
 
                   <button
@@ -2314,7 +2081,7 @@
         if (entries.length === 0) return "No indicator fields changed.";
 
         const labels = {
-          execution_permission: "Execution Permission",
+          execution_permission: "Execution State",
           verdict: "Verdict",
           confidence: "Confidence",
           confidence_bucket: "Confidence",
@@ -2905,77 +2672,6 @@
         };
       }
 
-      function formatZoneText(zone) {
-        if (!zone || typeof zone !== "object") return null;
-        const low = formatPriceLevel(zone.low);
-        const high = formatPriceLevel(zone.high);
-        if (!low || !high) return null;
-        return `${low}-${high}`;
-      }
-
-      function shortenLevelLabel(label) {
-        const text = String(label || "").trim();
-        if (!text) return "Level";
-        const labelMap = {
-          "Daily Pivot Point": "PP",
-          "Daily Pivot Resistance 1": "R1",
-          "Daily Pivot Support 1": "S1",
-          "Daily Pivot Resistance 2": "R2",
-          "Daily Pivot Support 2": "S2",
-          "Round Number Support": "Round S",
-          "Round Number Resistance": "Round R",
-          "Major Round Number Support": "Major S",
-          "Major Round Number Resistance": "Major R",
-          "Bullish FVG Support": "Bull FVG",
-          "Bullish FVG Lower Edge": "Bull FVG L",
-          "Bullish FVG Upper Edge": "Bull FVG U",
-          "Bearish FVG Resistance": "Bear FVG",
-          "Bearish FVG Lower Edge": "Bear FVG L",
-          "Bearish FVG Upper Edge": "Bear FVG U",
-          "Previous Day High": "PDH",
-          "Previous Day Low": "PDL",
-          "Previous Week High": "PWH",
-          "Previous Week Low": "PWL",
-          "Recent Swing High": "Swing High",
-          "Recent Swing Low": "Swing Low",
-          "Major Swing High": "Major High",
-          "Major Swing Low": "Major Low",
-          "Range Zone High": "Range High",
-          "Range Zone Low": "Range Low",
-        };
-        if (labelMap[text]) return labelMap[text];
-        return text
-          .replace("Resistance", "Res")
-          .replace("Support", "Sup")
-          .replace("Previous", "Prev")
-          .replace("Number", "")
-          .replace(/\s+/g, " ")
-          .trim();
-      }
-
-      function formatNearbyLevelSummary(levels, sideLabel) {
-        if (!Array.isArray(levels) || levels.length === 0) {
-          return `${sideLabel} none`;
-        }
-        const items = levels
-          .slice(0, 2)
-          .map((level) => {
-            const price = formatPriceLevel(level?.price);
-            const label = shortenLevelLabel(level?.label);
-            return price ? `${label} ${price}` : label;
-          })
-          .filter(Boolean);
-        return items.length
-          ? `${sideLabel} ${items.join(", ")}`
-          : `${sideLabel} none`;
-      }
-
-      function getRangeBreakLabel(value, active) {
-        if (value > 0) return "Bull Break";
-        if (value < 0) return "Bear Break";
-        return active ? "Holding" : "Inactive";
-      }
-
       function joinReadableList(items) {
         const filtered = items
           .map((item) => String(item || "").trim())
@@ -2984,344 +2680,6 @@
         if (filtered.length === 1) return filtered[0];
         if (filtered.length === 2) return `${filtered[0]} and ${filtered[1]}`;
         return `${filtered.slice(0, -1).join(", ")}, and ${filtered[filtered.length - 1]}`;
-      }
-
-      function getDashboardActionTone(label) {
-        if (label === "Buy") return "value-bullish";
-        if (label === "Sell") return "value-bearish";
-        if (label === "Exit") return "value-watch";
-        return "";
-      }
-
-      function getDashboardActionVariantFallback(label) {
-        if (label === "Buy") return "General Buy Criteria";
-        if (label === "Sell") return "General Sell Criteria";
-        if (label === "Exit") return "General Exit Criteria";
-        return "General Stand Aside Criteria";
-      }
-
-      function getDashboardActionGuide(label) {
-        if (label === "Buy") {
-          return [
-            "Use Buy when most align:",
-            "- Bullish Breakout, Bullish Structure, Bullish Drift, or Bullish Pressure in Range",
-            "- Breakout Bias Bullish",
-            "- Warning Ladder Directional Expansion Likely or Active Momentum Event",
-            "- Event Regime trend_acceleration, range_expansion, or breakout_watch with bullish bias",
-            "- Bullish microstructure: VWAP Mild Bullish/Bullish, ORB Bullish, or Sweep Bullish",
-            "- Support stronger than resistance",
-            "- Price above or reclaiming PP, S1, round support, or major round support",
-            "- Bullish FVG or range-low hold / Bull Break",
-            "",
-            "Best variants:",
-            "- Bullish Breakout + ORB Bullish",
-            "- Bullish Drift + bullish VWAP + support rejection",
-            "- Bullish Pressure in Range + support hold + Bull Break",
-            "- Active Momentum Event + bullish bias + no nearby heavy resistance",
-          ].join("\n");
-        }
-        if (label === "Sell") {
-          return [
-            "Use Sell when most align:",
-            "- Bearish Breakdown, Bearish Structure, Bearish Drift, or Bearish Pressure in Range",
-            "- Breakout Bias Bearish",
-            "- Warning Ladder Directional Expansion Likely or Active Momentum Event",
-            "- Event Regime trend_acceleration, range_expansion, or breakout_watch with bearish bias",
-            "- Bearish microstructure: VWAP Mild Bearish/Bearish, ORB Bearish, or Sweep Bearish",
-            "- Resistance stronger than support",
-            "- Price below or rejecting PP, R1, round resistance, or major round resistance",
-            "- Bearish FVG or range-high rejection / Bear Break",
-            "",
-            "Best variants:",
-            "- Bearish Breakdown + ORB Bearish",
-            "- Bearish Drift + bearish VWAP + resistance rejection",
-            "- Bearish Pressure in Range + resistance hold + Bear Break",
-            "- Active Momentum Event + bearish bias + no nearby strong support",
-          ].join("\n");
-        }
-        if (label === "Exit") {
-          return [
-            "Use Exit / Reduce when the active trade starts conflicting:",
-            "- Price Action flips against the position",
-            "- Breakout Bias flips against the position",
-            "- VWAP, ORB, or Sweep flips against the position",
-            "- Price reaches a dense opposing S/R cluster",
-            "- Longs into R1/R2/major round resistance or shorts into S1/S2/major round support",
-            "- Event Regime panic_reversal or event_risk",
-            "- Warning Ladder cools while follow-through fades",
-            "- Opposing FVG rejection or consolidation near target",
-            "",
-            "Direct exit variants:",
-            "- Exit Long + Bearish Resistance Rejection",
-            "- Exit Short + Bullish Support Rejection",
-            "- Any position + panic_reversal",
-            "- Any position + opposing FVG rejection",
-          ].join("\n");
-        }
-        return [
-          "Use Stand Aside when the stack is mixed or weak:",
-          "- Price Action Consolidating or mixed",
-          "- Breakout Bias Neutral or conflicting",
-          "- Warning Ladder Normal",
-          "- VWAP Neutral + ORB Neutral + No Sweep",
-          "- Support and resistance both very close",
-          "- Bullish Drift with bearish event/cross-asset bias, or bearish drift with bullish bias",
-          "- Range inactive and no FVG edge",
-          "- High Big Move Risk with no direction",
-          "- Flat + panic_reversal or event_risk",
-          "",
-          "Downgrade rules:",
-          "- One major conflict: prepare only, no full entry",
-          "- Two or more major conflicts: stand aside",
-          "- Existing trade + opposite major conflict: exit / reduce",
-        ].join("\n");
-      }
-
-      function summarizeMicrostructureContext(structureContext) {
-        const vwapBias = getVwapBiasLabel(
-          Number(structureContext?.distSessionVwapPct || 0),
-        );
-        const orbState = getRoundedSignalState(structureContext?.openingRangeBreak);
-        const sweepState = getRoundedSignalState(
-          structureContext?.sweepReclaimSignal,
-        );
-        const parts = [];
-        if (vwapBias !== "Neutral") {
-          parts.push(`VWAP ${vwapBias.toLowerCase()}`);
-        }
-        if (orbState !== 0) {
-          parts.push(`ORB ${getOrbStateLabel(orbState).toLowerCase()}`);
-        }
-        if (sweepState !== 0) {
-          parts.push(`${getSweepStateLabel(sweepState).toLowerCase()} sweep`);
-        }
-        return joinReadableList(parts);
-      }
-
-      function summarizeLevelPressure(supportResistance) {
-        const nearbySupports = getArrayWithFallback(
-          supportResistance?.nearby_supports,
-          supportResistance?.nearbySupports,
-        );
-        const nearbyResistances = getArrayWithFallback(
-          supportResistance?.nearby_resistances,
-          supportResistance?.nearbyResistances,
-        );
-        const supportTone = Number(
-          getFirstDefinedValue(
-            supportResistance?.support_family_confluence,
-            supportResistance?.supportFamilyConfluence,
-            supportResistance?.support_confluence,
-            supportResistance?.supportConfluence,
-          ) ||
-            nearbySupports.length ||
-            0,
-        );
-        const resistanceTone = Number(
-          getFirstDefinedValue(
-            supportResistance?.resistance_family_confluence,
-            supportResistance?.resistanceFamilyConfluence,
-            supportResistance?.resistance_confluence,
-            supportResistance?.resistanceConfluence,
-          ) ||
-            nearbyResistances.length ||
-            0,
-        );
-        const supportDistance = getNullableNumber(
-          supportResistance?.support_distance_pct,
-          supportResistance?.supportDistancePct,
-        );
-        const resistanceDistance = getNullableNumber(
-          supportResistance?.resistance_distance_pct,
-          supportResistance?.resistanceDistancePct,
-        );
-        const hasSupportDistance = Number.isFinite(supportDistance);
-        const hasResistanceDistance = Number.isFinite(resistanceDistance);
-        if (
-          hasSupportDistance &&
-          hasResistanceDistance &&
-          supportDistance + 0.02 < resistanceDistance
-        ) {
-          return supportTone >= resistanceTone
-            ? "support is nearer and denser"
-            : "support is nearer";
-        }
-        if (
-          hasSupportDistance &&
-          hasResistanceDistance &&
-          resistanceDistance + 0.02 < supportDistance
-        ) {
-          return resistanceTone >= supportTone
-            ? "resistance is nearer and denser"
-            : "resistance is nearer";
-        }
-        if (supportTone > resistanceTone) {
-          return hasSupportDistance
-            ? "support cluster is denser nearby"
-            : "support cluster is denser";
-        }
-        if (resistanceTone > supportTone) {
-          return hasResistanceDistance
-            ? "resistance cluster is denser nearby"
-            : "resistance cluster is denser";
-        }
-        return "";
-      }
-
-      function deriveDashboardActionLabel(
-        data,
-        ta,
-        tradeGuidance,
-        checklist,
-        executionPermission,
-        executionState,
-      ) {
-        const marketState =
-          data?.MarketState && typeof data.MarketState === "object"
-            ? data.MarketState
-            : {};
-        const regimeState =
-          data?.RegimeState && typeof data.RegimeState === "object"
-            ? data.RegimeState
-            : {};
-        const structureContext =
-          ta?.structure_context && typeof ta.structure_context === "object"
-            ? ta.structure_context
-            : {};
-        const supportResistance =
-          ta?.support_resistance && typeof ta.support_resistance === "object"
-            ? ta.support_resistance
-            : {};
-        const priceAction =
-          ta?.price_action && typeof ta.price_action === "object"
-            ? ta.price_action
-            : {};
-
-        const structure = safeText(priceAction.structure, "Consolidating");
-        const breakoutBias = String(regimeState.breakout_bias || "Neutral");
-        const crossAssetBias = String(regimeState.cross_asset_bias || "Neutral");
-        const warningLadder = String(regimeState.warning_ladder || "Normal");
-        const actionState = String(
-          marketState.action_state || executionState?.actionState || "WAIT",
-        );
-        const rawAction = String(
-          marketState.action || executionState?.action || "hold",
-        ).toLowerCase();
-        const executionStatus = String(executionState?.status || "stand_aside");
-        const permissionStatus = String(
-          executionPermission?.status || "no_trade",
-        );
-        const directionBias = String(
-          marketState.directional_bias || data?.directionalBias || "Neutral",
-        );
-        const buyLevel = String(tradeGuidance?.buyLevel || "Weak");
-        const sellLevel = String(tradeGuidance?.sellLevel || "Weak");
-        const exitLevel = String(tradeGuidance?.exitLevel || "Low");
-        const summary = String(tradeGuidance?.summary || "").trim();
-
-        const evidence = [];
-        if (structure && structure !== "Consolidating") evidence.push(structure);
-        if (breakoutBias !== "Neutral") {
-          evidence.push(`breakout bias ${breakoutBias.toLowerCase()}`);
-        }
-        if (crossAssetBias !== "Neutral") {
-          evidence.push(`cross-asset ${crossAssetBias.toLowerCase()}`);
-        }
-        if (warningLadder !== "Normal") evidence.push(warningLadder);
-        const microText = summarizeMicrostructureContext(structureContext);
-        if (microText) evidence.push(microText);
-        const levelPressure = summarizeLevelPressure(supportResistance);
-        if (levelPressure) evidence.push(levelPressure);
-        const evidenceText = joinReadableList(evidence);
-
-        const actionableLong =
-          permissionStatus === "entry_allowed" &&
-          (rawAction === "buy" ||
-            actionState === "LONG_ACTIVE" ||
-            (executionStatus === "enter" && directionBias === "Bullish"));
-        const actionableShort =
-          permissionStatus === "entry_allowed" &&
-          (rawAction === "sell" ||
-            actionState === "SHORT_ACTIVE" ||
-            (executionStatus === "enter" && directionBias === "Bearish"));
-        const exitRecommended =
-          permissionStatus === "exit_recommended" ||
-          actionState === "EXIT_RISK" ||
-          executionStatus === "exit";
-        const bullishSetup =
-          actionState === "SETUP_LONG" ||
-          (/watch|strong/i.test(buyLevel) && directionBias === "Bullish");
-        const bearishSetup =
-          actionState === "SETUP_SHORT" ||
-          (/watch|strong/i.test(sellLevel) && directionBias === "Bearish");
-
-        if (exitRecommended) {
-          return {
-            label: "Exit",
-            tone: getDashboardActionTone("Exit"),
-            reason:
-              summary ||
-              "Risk is elevated and the active directional state is deteriorating.",
-          };
-        }
-
-        if (actionableLong) {
-          return {
-            label: "Buy",
-            tone: getDashboardActionTone("Buy"),
-            reason: evidenceText
-              ? `Bullish stack is aligned: ${evidenceText}.`
-              : "Bullish execution is cleared.",
-          };
-        }
-
-        if (actionableShort) {
-          return {
-            label: "Sell",
-            tone: getDashboardActionTone("Sell"),
-            reason: evidenceText
-              ? `Bearish stack is aligned: ${evidenceText}.`
-              : "Bearish execution is cleared.",
-          };
-        }
-
-        if (bullishSetup && !bearishSetup) {
-          return {
-            label: "Stand Aside",
-            tone: getDashboardActionTone("Stand Aside"),
-            reason:
-              summary ||
-              "Bullish conditions are forming, but execution is not cleared yet.",
-          };
-        }
-
-        if (bearishSetup && !bullishSetup) {
-          return {
-            label: "Stand Aside",
-            tone: getDashboardActionTone("Stand Aside"),
-            reason:
-              summary ||
-              "Bearish conditions are forming, but execution is not cleared yet.",
-          };
-        }
-
-        if (checklist?.statusClass === "exit" && exitLevel === "High") {
-          return {
-            label: "Stand Aside",
-            tone: getDashboardActionTone("Stand Aside"),
-            reason:
-              summary ||
-              "Risk or indecision is elevated, so no fresh trade is justified.",
-          };
-        }
-
-        return {
-          label: "Stand Aside",
-          tone: getDashboardActionTone("Stand Aside"),
-          reason:
-            summary ||
-            "Signals are mixed across structure, breakout bias, and microstructure.",
-        };
       }
 
       function evaluateDecisionChecklist(data, ta, tradeGuidance) {
@@ -3470,7 +2828,6 @@
           priceAction.structure,
           "No clear structure",
         );
-        const rsiSignalText = safeText(ta.rsi_signal, "Neutral");
         const priceEl = document.getElementById("current-price");
         const oldPriceText = safeText(priceEl?.innerText, "0").replace("$", "");
         const oldPrice = safeNumber(parseFloat(oldPriceText), 0);
@@ -3536,17 +2893,6 @@
           paStructureEl.className = "metric-value value-bearish";
         else paStructureEl.className = "metric-value";
 
-        const rsiEl = document.getElementById("ta-rsi");
-        if (rsiEl) {
-          rsiEl.innerText = `${safeText(ta.rsi_14, "N/A")} (${rsiSignalText})`;
-          rsiEl.className = `metric-value ${
-            /oversold/i.test(rsiSignalText)
-              ? "value-bullish"
-              : /overbought/i.test(rsiSignalText)
-                ? "value-bearish"
-                : ""
-          }`;
-        }
         document.getElementById("ta-ema20").innerText = safeText(
           ta.ema_20,
           "N/A",
@@ -3587,116 +2933,6 @@
           );
         }
 
-        const marketState =
-          data.MarketState && typeof data.MarketState === "object"
-            ? data.MarketState
-            : {};
-        const marketScores =
-          marketState.scores && typeof marketState.scores === "object"
-            ? marketState.scores
-            : {};
-        const marketRegimeText = marketState.regime || "Unknown";
-        const marketBiasText = marketState.directional_bias || "Neutral";
-        const marketTradeabilityText = marketState.tradeability || "Low";
-        const marketActionStateText = marketState.action_state || "WAIT";
-        const marketActionText = marketState.action || "hold";
-
-        const marketRegimeEl = document.getElementById("ms-regime");
-        marketRegimeEl.innerText = humanizeWords(marketRegimeText);
-        marketRegimeEl.className = `metric-value ${marketRegimeText === "trend" ? "value-bullish" : marketRegimeText === "event-risk" ? "value-bearish" : ""}`;
-
-        const marketBiasEl = document.getElementById("ms-bias");
-        marketBiasEl.innerText = marketBiasText;
-        marketBiasEl.className = `metric-value ${marketBiasText === "Bullish" ? "value-bullish" : marketBiasText === "Bearish" ? "value-bearish" : ""}`;
-
-        const marketTradeabilityEl = document.getElementById("ms-tradeability");
-        marketTradeabilityEl.innerText = marketTradeabilityText;
-        marketTradeabilityEl.className = `metric-value ${marketTradeabilityText === "High" ? "value-bullish" : marketTradeabilityText === "Low" ? "value-bearish" : ""}`;
-
-        const marketActionStateEl = document.getElementById("ms-action-state");
-        marketActionStateEl.innerText = humanizeWords(marketActionStateText);
-        marketActionStateEl.className = `metric-value ${marketActionStateText === "LONG_ACTIVE" ? "value-bullish" : marketActionStateText === "SHORT_ACTIVE" || marketActionStateText === "EXIT_RISK" ? "value-bearish" : ""}`;
-
-        const marketActionEl = document.getElementById("ms-action");
-        marketActionEl.innerText = humanizeWords(marketActionText);
-        marketActionEl.className = `metric-value ${marketActionText === "buy" ? "value-bullish" : marketActionText === "sell" || marketActionText === "exit" ? "value-bearish" : ""}`;
-
-        const marketScoresEl = document.getElementById("ms-scores");
-        marketScoresEl.innerText = `Direction ${Number(marketScores.direction || 0).toFixed(2)} · Tradeability ${Number(marketScores.tradeability || 0).toFixed(2)} · Exit Risk ${Number(marketScores.exit_risk || 0).toFixed(2)} · Stability ${Number(marketScores.stability || 0).toFixed(2)}`;
-        const directionModelEl = document.getElementById("ms-direction-model");
-        const timeframeGateEl = document.getElementById("ms-timeframe-gate");
-        if (directionModelEl) {
-          const directionProbabilities =
-            marketState.direction_probabilities || {};
-          const displayedDirection =
-            marketBiasText === "Bullish" || marketBiasText === "Bearish"
-              ? marketBiasText
-              : String(marketState.probabilistic_direction || "Neutral");
-          const directionKey = displayedDirection === "Bearish" ? "down" : "up";
-          const readDirectionProbability = (key) => {
-            const value = Number(directionProbabilities[key]);
-            return Number.isFinite(value) ? `${(value * 100).toFixed(1)}%` : "n/a";
-          };
-          directionModelEl.innerText = `15m ${readDirectionProbability(
-            `${directionKey}_15m`,
-          )} · 30m ${readDirectionProbability(
-            `${directionKey}_30m`,
-          )} · 60m ${readDirectionProbability(`${directionKey}_60m`)}`;
-          directionModelEl.className = `metric-value compact ${displayedDirection === "Bullish" ? "value-bullish" : displayedDirection === "Bearish" ? "value-bearish" : ""}`;
-        }
-        if (timeframeGateEl) {
-          const directionSource = String(
-            marketState.directional_bias_source || "h1",
-          );
-          const directionTimeframe = String(
-            marketState.direction_timeframe || "1h",
-          ).toUpperCase();
-          const directionOwnerLabel = formatDirectionalOwnerLabel(
-            directionSource,
-            directionTimeframe,
-          );
-          const entryTriggerTimeframe = String(
-            marketState.entry_trigger_timeframe || "15m",
-          ).toUpperCase();
-          const h1Trend = String(marketState.h1_trend || "Neutral");
-          const h4Trend = String(marketState.h4_trend || "Neutral");
-          const m15Trend = String(marketState.m15_trend || "Neutral");
-          const h1Override = Boolean(marketState.h1_neutral_override_active);
-          const h4Opposes = Boolean(marketState.h4_opposes_direction);
-          const m15Aligned = Boolean(marketState.m15_trigger_aligned);
-          const m15Conflict = Boolean(marketState.m15_trigger_conflict);
-          const h1GateLabel =
-            marketBiasText === "Bullish" || marketBiasText === "Bearish"
-              ? h1Trend === marketBiasText
-                ? "pass"
-                : h1Trend === "Neutral"
-                  ? h1Override
-                    ? "neutral override"
-                    : "neutral"
-                  : "oppose"
-              : h1Trend === "Neutral"
-                ? "neutral"
-                : "watch";
-          const h4GateLabel = h4Opposes
-            ? "oppose"
-            : h4Trend === "Neutral"
-              ? "neutral"
-              : "pass";
-          const m15GateLabel = m15Conflict
-            ? "conflict"
-            : m15Aligned
-              ? "aligned"
-              : "waiting";
-          const h1GatePrefix = h1Override ? "Raw H1" : "H1";
-          timeframeGateEl.innerText = `Owner ${directionOwnerLabel} ${marketBiasText} · ${h1GatePrefix} ${h1Trend} ${h1GateLabel} · H4 ${h4Trend} ${h4GateLabel} · M15 ${entryTriggerTimeframe} ${m15Trend} ${m15GateLabel}`;
-          timeframeGateEl.className = `metric-value compact ${h4Opposes || m15Conflict ? "value-bearish" : m15Aligned ? (marketBiasText === "Bullish" ? "value-bullish" : marketBiasText === "Bearish" ? "value-bearish" : "") : ""}`;
-          timeframeGateEl.title = formatDirectionOwnerTitle(
-            directionSource,
-            directionTimeframe,
-            entryTriggerTimeframe,
-          );
-        }
-
         const regimeState =
           data.RegimeState && typeof data.RegimeState === "object"
             ? data.RegimeState
@@ -3709,9 +2945,6 @@
         const regimeContextEl = document.getElementById("rs-context");
         const regimePivotsEl = document.getElementById("rs-pivots");
         const regimePivotContextEl = document.getElementById("rs-pivot-context");
-        const regimeRoundsEl = document.getElementById("rs-rounds");
-        const regimeNearbyEl = document.getElementById("rs-nearby");
-        const regimeZonesEl = document.getElementById("rs-zones");
 
         const bigMoveRisk = Number(regimeState.big_move_risk || 0);
         const breakoutBias = regimeState.breakout_bias || "Neutral";
@@ -3794,14 +3027,6 @@
           supportResistance.pivot_levels,
           supportResistance.pivotLevels,
         );
-        const roundNumbers = getObjectWithFallback(
-          supportResistance.round_numbers,
-          supportResistance.roundNumbers,
-        );
-        const activeFvgs = getObjectWithFallback(
-          supportResistance.active_fvgs,
-          supportResistance.activeFvgs,
-        );
         const sessionContextEl = document.getElementById("rs-session");
         if (sessionContextEl) {
           const session = ta.session_context || {};
@@ -3854,7 +3079,7 @@
           );
           sessionContextEl.className = `metric-value compact ${microstructureTone > 0 ? "value-bullish" : microstructureTone < 0 ? "value-bearish" : ""}`;
         }
-        if (regimePivotsEl || regimePivotContextEl || regimeRoundsEl) {
+        if (regimePivotsEl || regimePivotContextEl) {
           const pivotPoint = getFirstDefinedValue(
             structureContext.pivotPoint,
             structureContext.pivot_point,
@@ -3880,26 +3105,6 @@
             structureContext.pivot_support_2,
             pivotLevels?.s2,
           );
-          const roundSupport = getFirstDefinedValue(
-            structureContext.roundNumberSupport,
-            structureContext.round_number_support,
-            roundNumbers?.support,
-          );
-          const roundResistance = getFirstDefinedValue(
-            structureContext.roundNumberResistance,
-            structureContext.round_number_resistance,
-            roundNumbers?.resistance,
-          );
-          const majorRoundSupport = getFirstDefinedValue(
-            structureContext.majorRoundNumberSupport,
-            structureContext.major_round_number_support,
-            roundNumbers?.majorSupport,
-          );
-          const majorRoundResistance = getFirstDefinedValue(
-            structureContext.majorRoundNumberResistance,
-            structureContext.major_round_number_resistance,
-            roundNumbers?.majorResistance,
-          );
           const pivotParts = [
             formatCompactLevelPair(
               "PP",
@@ -3915,18 +3120,6 @@
               "R2/S2",
               pivotResistance2,
               pivotSupport2,
-            ),
-          ].filter(Boolean);
-          const roundParts = [
-            formatCompactLevelPair(
-              "Round",
-              roundSupport,
-              roundResistance,
-            ),
-            formatCompactLevelPair(
-              "Major",
-              majorRoundSupport,
-              majorRoundResistance,
             ),
           ].filter(Boolean);
           if (regimePivotsEl) {
@@ -3947,292 +3140,6 @@
             regimePivotContextEl.innerText = pivotContext.text;
             regimePivotContextEl.className = `metric-value compact ${pivotContext.tone}`;
           }
-          if (regimeRoundsEl) {
-            regimeRoundsEl.innerText = roundParts.length
-              ? roundParts.join(" · ")
-              : "Unavailable";
-            regimeRoundsEl.className = "metric-value compact";
-          }
-        }
-        if (regimeNearbyEl) {
-          const nearbySupports = getArrayWithFallback(
-            supportResistance.nearby_supports,
-            supportResistance.nearbySupports,
-          );
-          const nearbyResistances = getArrayWithFallback(
-            supportResistance.nearby_resistances,
-            supportResistance.nearbyResistances,
-          );
-          const supportTone = Number(
-            getFirstDefinedValue(
-              supportResistance.support_family_confluence,
-              supportResistance.supportFamilyConfluence,
-              supportResistance.support_confluence,
-              supportResistance.supportConfluence,
-            ) ||
-              nearbySupports.length ||
-              0,
-          );
-          const resistanceTone = Number(
-            getFirstDefinedValue(
-              supportResistance.resistance_family_confluence,
-              supportResistance.resistanceFamilyConfluence,
-              supportResistance.resistance_confluence,
-              supportResistance.resistanceConfluence,
-            ) ||
-              nearbyResistances.length ||
-              0,
-          );
-          regimeNearbyEl.innerText = `${formatNearbyLevelSummary(nearbySupports, "S")} · ${formatNearbyLevelSummary(nearbyResistances, "R")}`;
-          regimeNearbyEl.className = `metric-value compact ${supportTone > resistanceTone ? "value-bullish" : resistanceTone > supportTone ? "value-bearish" : ""}`;
-        }
-        if (regimeZonesEl) {
-          const bullishFvg = getObjectWithFallback(
-            structureContext.bullishFvg,
-            structureContext.bullish_fvg,
-            activeFvgs?.bullish,
-          );
-          const bearishFvg = getObjectWithFallback(
-            structureContext.bearishFvg,
-            structureContext.bearish_fvg,
-            activeFvgs?.bearish,
-          );
-          const rangeZone = getObjectWithFallback(
-            structureContext.rangeZone,
-            structureContext.range_zone,
-            supportResistance.range_zone,
-            supportResistance.rangeZone,
-          );
-          const bullishFvgText = formatZoneText(bullishFvg);
-          const bearishFvgText = formatZoneText(bearishFvg);
-          const rangeZoneText = formatZoneText(rangeZone);
-          const rangeZoneActive = Boolean(
-            getFirstDefinedValue(
-              structureContext.rangeZoneActive,
-              structureContext.range_zone_active,
-            ),
-          );
-          const inRangeZone = Boolean(
-            getFirstDefinedValue(
-              structureContext.inRangeZone,
-              structureContext.in_range_zone,
-            ),
-          );
-          const inBullishFvg = Boolean(
-            getFirstDefinedValue(
-              structureContext.inBullishFvg,
-              structureContext.in_bullish_fvg,
-            ),
-          );
-          const inBearishFvg = Boolean(
-            getFirstDefinedValue(
-              structureContext.inBearishFvg,
-              structureContext.in_bearish_fvg,
-            ),
-          );
-          const rangeBreak = getRoundedSignalState(
-            getFirstDefinedValue(
-              structureContext.rangeZoneBreak,
-              structureContext.range_zone_break,
-            ),
-          );
-          const rangePosition = getNullableNumber(
-            structureContext.rangeZonePosition,
-            structureContext.range_zone_position,
-          );
-          const zoneParts = [
-            `Bull ${bullishFvgText || "none"}${inBullishFvg ? " in" : ""}`,
-            `Bear ${bearishFvgText || "none"}${inBearishFvg ? " in" : ""}`,
-          ];
-          if (rangeZoneText) {
-            const positionText = Number.isFinite(rangePosition)
-              ? ` @ ${(rangePosition * 100).toFixed(0)}%`
-              : "";
-            const rangeState = rangeZoneActive
-              ? "active"
-              : inRangeZone
-                ? "inside"
-                : "tracked";
-            zoneParts.push(
-              `Range ${rangeState} ${rangeZoneText}${positionText} · ${getRangeBreakLabel(rangeBreak, rangeZoneActive || inRangeZone)}`,
-            );
-          } else {
-            zoneParts.push(
-              `Range ${getRangeBreakLabel(rangeBreak, rangeZoneActive || inRangeZone)}`,
-            );
-          }
-          regimeZonesEl.innerText = zoneParts.join(" · ");
-          const zoneTone =
-            rangeBreak > 0 || inBullishFvg
-              ? 1
-              : rangeBreak < 0 || inBearishFvg
-                ? -1
-                : 0;
-          regimeZonesEl.className = `metric-value compact ${zoneTone > 0 ? "value-bullish" : zoneTone < 0 ? "value-bearish" : ""}`;
-        }
-
-        const rrSignal =
-          data.RR200Signal && typeof data.RR200Signal === "object"
-            ? data.RR200Signal
-            : {};
-        const rrStatus = rrSignal.status || "standby";
-        const rrDirection = rrSignal.direction || "Neutral";
-        const rrDisplayedDirection =
-          rrDirection === "Bullish" || rrDirection === "Bearish"
-            ? rrDirection
-            : String(rrSignal.candidateDirection || rrDirection);
-        const rrGrade = rrSignal.grade || "C (Low Confidence)";
-        const rrProbability =
-          Number(
-            getFirstDefinedValue(
-              rrSignal.targetBucketProbability,
-              rrSignal.moveProbability,
-              0,
-            ),
-          ) * 100;
-        const rrProjectedMove = Number(rrSignal.projectedMovePips || 0);
-        const rrTargetMove = Number(rrSignal.targetMovePips || 200);
-        const rrTargetAtr = Number(rrSignal.targetMoveAtr || 0);
-        const rrBucketAtr = Number(
-          getFirstDefinedValue(rrSignal.targetBucketAtr, rrTargetAtr, 0),
-        );
-        const rrBucketIsProxy = Boolean(rrSignal.targetBucketIsProxy);
-        const rrEntry = rrSignal.entryPrice;
-        const rrSl = rrSignal.stopLossPrice;
-        const rrTp = rrSignal.takeProfitPrice;
-        const rrBlockers = Array.isArray(rrSignal.blockers)
-          ? rrSignal.blockers
-          : [];
-
-        const rrStatusEl = document.getElementById("rr-status");
-        const rrDirectionGradeEl =
-          document.getElementById("rr-direction-grade");
-        const rrProbabilityEl = document.getElementById("rr-probability");
-        const rrProjectedEl = document.getElementById("rr-projected");
-        const rrBucketsEl = document.getElementById("rr-buckets");
-        const rrLevelsEl = document.getElementById("rr-levels");
-        const rrSummaryEl = document.getElementById("rr-summary");
-        const rrTimeframeFilterEl = document.getElementById(
-          "rr-timeframe-filter",
-        );
-
-        if (rrStatusEl) {
-          rrStatusEl.innerText = humanizeWords(rrStatus);
-          rrStatusEl.className = `metric-value ${rrStatus === "ready" ? "value-bullish" : rrStatus === "arming" ? "" : "value-bearish"}`;
-        }
-        if (rrDirectionGradeEl) {
-          rrDirectionGradeEl.innerText = `${rrDisplayedDirection} · ${rrGrade}`;
-          rrDirectionGradeEl.className = `metric-value ${rrDisplayedDirection === "Bullish" ? "value-bullish" : rrDisplayedDirection === "Bearish" ? "value-bearish" : ""}`;
-        }
-        if (rrTimeframeFilterEl) {
-          const rrDirectionSource = String(rrSignal.directionSource || "h1");
-          const rrDirectionTf = String(
-            rrSignal.directionTimeframe || "1h",
-          ).toUpperCase();
-          const rrDirectionOwnerLabel = formatDirectionalOwnerLabel(
-            rrDirectionSource,
-            rrDirectionTf,
-          );
-          const rrEntryTf = String(
-            rrSignal.entryTriggerTimeframe || "15m",
-          ).toUpperCase();
-          const rrH1Trend = String(rrSignal.h1Trend || "Neutral");
-          const rrH4Trend = String(rrSignal.h4Trend || "Neutral");
-          const rrM15Trend = String(rrSignal.m15Trend || "Neutral");
-          const rrH1Pass = Boolean(rrSignal.h1DirectionalFilterPass);
-          const rrH4Pass = Boolean(rrSignal.h4DirectionalFilterPass);
-          const rrM15Pass = Boolean(rrSignal.m15TriggerConfirmed);
-          const rrH1GateLabel = rrSignal.h1Neutral
-            ? rrSignal.h1NeutralOverrideActive
-              ? "neutral override"
-              : "neutral"
-            : rrH1Pass
-              ? "pass"
-              : "block";
-          const rrH4GateLabel =
-            rrDisplayedDirection === "Bullish" ||
-            rrDisplayedDirection === "Bearish"
-              ? rrH4Trend === "Neutral"
-                ? "neutral"
-                : rrH4Pass
-                  ? "pass"
-                  : "oppose"
-              : rrH4Trend === "Neutral"
-                ? "neutral"
-                : "watch";
-          const rrH1Prefix = rrSignal.h1NeutralOverrideActive ? "Raw H1" : "H1";
-          rrTimeframeFilterEl.innerText = `Dir ${rrDirectionOwnerLabel} ${rrDisplayedDirection} · ${rrH1Prefix} ${rrH1Trend} ${rrH1GateLabel} · H4 ${rrH4Trend} ${rrH4GateLabel} · M15 ${rrEntryTf} ${rrM15Trend} ${rrM15Pass ? "trigger" : "waiting"}`;
-          rrTimeframeFilterEl.className = `metric-value compact ${(!rrH4Pass && rrDisplayedDirection !== "Neutral") || (!rrH1Pass && !rrSignal.h1Neutral) ? "value-bearish" : rrM15Pass ? (rrDisplayedDirection === "Bullish" ? "value-bullish" : rrDisplayedDirection === "Bearish" ? "value-bearish" : "") : ""}`;
-        }
-        if (rrProbabilityEl) {
-          const rrBucketLabel =
-            rrSignal.targetBucket && String(rrSignal.targetBucket).trim()
-              ? humanizeWords(rrSignal.targetBucket)
-              : `${rrBucketAtr.toFixed(1)} ATR`;
-          rrProbabilityEl.innerText = `${rrBucketLabel}${rrBucketIsProxy ? " proxy" : ""} · ${rrProbability.toFixed(1)}%`;
-          rrProbabilityEl.className = `metric-value ${rrProbability >= 70 ? "value-bullish" : rrProbability >= 55 ? "" : "value-bearish"}`;
-        }
-        if (rrProjectedEl) {
-          rrProjectedEl.innerText = `${rrProjectedMove.toFixed(1)} pips / ${Number(rrSignal.projectedMoveAtr || 0).toFixed(2)} ATR (target ${rrTargetMove.toFixed(0)} pips / ${rrTargetAtr.toFixed(2)} ATR)`;
-          rrProjectedEl.className = `metric-value ${rrProjectedMove >= rrTargetMove ? "value-bullish" : "value-bearish"}`;
-        }
-        if (rrBucketsEl) {
-          const buckets = rrSignal.moveBuckets || {};
-          rrBucketsEl.innerText = `0.5 ${(Number(buckets["0.5_atr"] || 0) * 100).toFixed(0)}% · 1.0 ${(Number(buckets["1.0_atr"] || 0) * 100).toFixed(0)}% · 1.5 ${(Number(buckets["1.5_atr"] || 0) * 100).toFixed(0)}% · 2.0 ${(Number(buckets["2.0_atr"] || 0) * 100).toFixed(0)}%`;
-          rrBucketsEl.className = "metric-value compact";
-        }
-        if (rrLevelsEl) {
-          rrLevelsEl.innerText =
-            rrEntry !== undefined &&
-            rrEntry !== null &&
-            rrSl !== undefined &&
-            rrSl !== null &&
-            rrTp !== undefined &&
-            rrTp !== null
-              ? `${Number(rrEntry).toFixed(2)} / ${Number(rrSl).toFixed(2)} / ${Number(rrTp).toFixed(2)}`
-              : "Awaiting directional setup";
-        }
-        if (rrSummaryEl) {
-          const rrBaseSummary =
-            rrSignal.statusText ||
-            (rrBlockers.length ? rrBlockers[0] : "No RR200 signal yet.");
-          const rrBlockerText = joinReadableList(rrBlockers.slice(0, 2));
-          rrSummaryEl.innerText =
-            rrStatus !== "ready" &&
-            rrBlockerText &&
-            !rrBaseSummary.toLowerCase().includes(rrBlockers[0]?.toLowerCase?.() || "")
-              ? `${rrBaseSummary} Blocked by ${rrBlockerText}.`
-              : rrBaseSummary;
-        }
-        const rrLive =
-          data.RR200LiveCounter && typeof data.RR200LiveCounter === "object"
-            ? data.RR200LiveCounter
-            : {};
-        const rrToday =
-          rrLive.today && typeof rrLive.today === "object" ? rrLive.today : {};
-        const rrTodayTiers =
-          rrToday.tiers && typeof rrToday.tiers === "object"
-            ? rrToday.tiers
-            : {};
-        const rrExpected =
-          rrLive.expected_daily && typeof rrLive.expected_daily === "object"
-            ? rrLive.expected_daily
-            : {};
-        const rrTarget =
-          rrLive.target_daily && typeof rrLive.target_daily === "object"
-            ? rrLive.target_daily
-            : { min: 2, max: 5 };
-        const rrExpectedTiers =
-          rrExpected.tiers && typeof rrExpected.tiers === "object"
-            ? rrExpected.tiers
-            : {};
-        const rrLiveTodayEl = document.getElementById("rr-live-today");
-        const rrLiveExpectedEl = document.getElementById("rr-live-expected");
-        if (rrLiveTodayEl) {
-          rrLiveTodayEl.innerText = `${Number(rrToday.total || 0).toFixed(0)} (${Number(rrTodayTiers["A+ (Quant)"] || 0).toFixed(0)} / ${Number(rrTodayTiers["A (High Accuracy)"] || 0).toFixed(0)} / ${Number(rrTodayTiers["B (Qualified)"] || 0).toFixed(0)})`;
-        }
-        if (rrLiveExpectedEl) {
-          rrLiveExpectedEl.innerText = `${Number(rrExpected.total || 0).toFixed(2)} target ${Number(rrTarget.min || 2).toFixed(0)}-${Number(rrTarget.max || 5).toFixed(0)} (${Number(rrExpectedTiers["A+ (Quant)"] || 0).toFixed(2)} / ${Number(rrExpectedTiers["A (High Accuracy)"] || 0).toFixed(2)} / ${Number(rrExpectedTiers["B (Qualified)"] || 0).toFixed(2)})`;
         }
 
         const tradeGuidance =
@@ -4273,107 +3180,10 @@
           decisionStatusEl.className = `decision-status-value ${checklistClass}`;
         }
 
-        const executionPermissionEl = document.getElementById(
-          "execution-permission",
-        );
         const executionState =
           data.ExecutionState && typeof data.ExecutionState === "object"
             ? data.ExecutionState
             : {};
-        const executionPermission =
-          data.ExecutionPermission &&
-          typeof data.ExecutionPermission === "object"
-            ? data.ExecutionPermission
-            : {};
-        if (executionPermissionEl) {
-          let permissionText = executionPermission.text || "No Trade";
-          let permissionClass = "wait";
-          const permissionStatus = executionPermission.status || "no_trade";
-
-          if (permissionStatus === "entry_allowed") {
-            permissionClass =
-              marketActionStateText === "SHORT_ACTIVE" ? "sell" : "buy";
-          } else if (permissionStatus === "exit_recommended") {
-            permissionClass = "exit";
-          }
-
-          executionPermissionEl.innerText = permissionText;
-          executionPermissionEl.className = `decision-status-value ${permissionClass}`;
-        }
-
-        const dashboardAction =
-          data.DashboardAction && typeof data.DashboardAction === "object"
-            ? {
-                label: String(data.DashboardAction.label || "Stand Aside"),
-                tone: String(data.DashboardAction.tone || ""),
-                reason: String(data.DashboardAction.reason || ""),
-                variant: String(data.DashboardAction.variant || ""),
-              }
-            : deriveDashboardActionLabel(
-                data,
-                ta,
-                tradeGuidance,
-                checklist,
-                executionPermission,
-                executionState,
-              );
-        const dashboardLabelEl = document.getElementById("tg-dashboard-label");
-        if (dashboardLabelEl) {
-          dashboardLabelEl.innerText = dashboardAction.label;
-          dashboardLabelEl.className = `metric-value ${dashboardAction.tone}`;
-        }
-        const dashboardReasonEl = document.getElementById(
-          "tg-dashboard-reason",
-        );
-        if (dashboardReasonEl) {
-          dashboardReasonEl.innerText =
-            dashboardAction.reason ||
-            "No mapped dashboard action is available yet.";
-        }
-        const dashboardVariantEl = document.getElementById(
-          "tg-dashboard-variant",
-        );
-        if (dashboardVariantEl) {
-          dashboardVariantEl.innerText =
-            dashboardAction.variant ||
-            getDashboardActionVariantFallback(dashboardAction.label);
-          dashboardVariantEl.className = `metric-value compact ${dashboardAction.tone}`;
-        }
-        const dashboardCopyEl = document.getElementById("tg-dashboard-copy");
-        if (dashboardCopyEl) {
-          dashboardCopyEl.innerText = getDashboardActionGuide(
-            dashboardAction.label,
-          );
-        }
-
-        const playbook =
-          data.TradePlaybook && typeof data.TradePlaybook === "object"
-            ? data.TradePlaybook
-            : {};
-        const playbookStageEl = document.getElementById("trade-playbook-stage");
-        if (playbookStageEl) {
-          const playbookStage = playbook.stage || "stand_aside";
-          const playbookTitle = playbook.title || "Stand Aside";
-          playbookStageEl.innerText = playbookTitle;
-          playbookStageEl.className = `decision-status-value ${playbookStage}`;
-        }
-
-        const playbookTextEl = document.getElementById("trade-playbook-text");
-        if (playbookTextEl) {
-          playbookTextEl.innerText =
-            playbook.text || "No combined playbook is available yet.";
-        }
-
-        const playbookWhyEl = document.getElementById("trade-playbook-why");
-        if (playbookWhyEl) {
-          const whyItems = Array.isArray(playbook.why) ? playbook.why : [];
-          renderTextList(
-            playbookWhyEl,
-            whyItems,
-            "No playbook rationale is available yet.",
-          );
-        }
-
         const forecastState =
           data.ForecastState && typeof data.ForecastState === "object"
             ? data.ForecastState
@@ -4388,7 +3198,7 @@
         if (executionStateEl) {
           const executionStatus = executionState.status || "stand_aside";
           const executionActionState = String(
-            executionState.actionState || marketActionStateText || "WAIT",
+            executionState.actionState || "WAIT",
           );
           const executionTone =
             executionStatus === "enter"
@@ -4431,10 +3241,6 @@
           "technical-panel",
           false,
         );
-        initCollapsibleSectionToggle("market-toggle", "market-panel");
-        setCollapsibleSectionExpanded("market-toggle", "market-panel", false);
-        initCollapsibleSectionToggle("rr-toggle", "rr-panel");
-        setCollapsibleSectionExpanded("rr-toggle", "rr-panel", false);
         initCollapsibleSectionToggle("guidance-toggle", "guidance-panel");
         setCollapsibleSectionExpanded(
           "guidance-toggle",

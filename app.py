@@ -1,5 +1,6 @@
 from flask import Flask, jsonify, render_template, request, send_from_directory
 from flask_socketio import SocketIO
+import copy
 import json
 import math
 import os
@@ -214,7 +215,7 @@ def _filter_notification_changes(changes):
 
 def _summarize_changes_for_push(changes):
     labels = {
-        "trade_playbook_stage": "Trade Playbook",
+        "trade_playbook_stage": "Trade Setup",
         "warning_ladder": "Warning Ladder",
         "event_regime": "Event Regime",
         "breakout_bias": "Breakout Bias",
@@ -228,7 +229,7 @@ def _summarize_changes_for_push(changes):
         "micro_sweep_state": "Sweep",
         "verdict": "Verdict",
         "confidence_bucket": "AI Confidence",
-        "execution_permission": "Execution Permission",
+        "execution_permission": "Execution State",
         "entry_readiness": "Entry Readiness",
         "exit_urgency": "Exit Urgency",
     }
@@ -242,7 +243,7 @@ def _summarize_changes_for_push(changes):
         parts.append(
             f"{labels.get(key, key)}: {_humanize_alert_value(key, prev)} -> {_humanize_alert_value(key, cur)}"
         )
-    return " | ".join(parts) if parts else "Execution permission changed"
+    return " | ".join(parts) if parts else "Execution state changed"
 
 
 def _notification_title_for_changes(changes):
@@ -274,7 +275,7 @@ def _notification_title_for_changes(changes):
     if has_playbook and (has_breakout_bias or has_entry_readiness or has_exit_urgency) and not has_structure and not has_permission:
         return "XAUUSD Trade Setup Changed"
     if has_playbook and not has_warning and not has_event_regime and not has_structure and not has_permission:
-        return "XAUUSD Trade Playbook Changed"
+        return "XAUUSD Trade Setup Changed"
     if (has_warning or has_event_regime or has_breakout_bias) and not has_structure and not has_permission and not has_verdict and not has_confidence:
         return "XAUUSD Trade Context Changed"
     if has_verdict and not has_structure and not has_permission and not has_confidence:
@@ -288,7 +289,7 @@ def _notification_title_for_changes(changes):
     if has_entry_readiness and not has_structure and not has_permission:
         return "XAUUSD Trade Setup Changed"
     if has_permission and not has_structure:
-        return "XAUUSD Execution Permission Changed"
+        return "XAUUSD Execution State Changed"
     if (has_playbook or has_verdict or has_confidence or has_warning or has_event_regime or has_breakout_bias or has_entry_readiness or has_exit_urgency or has_rr_status or has_rr_grade or has_rr_direction) and not has_structure and not has_permission:
         return "XAUUSD State Changed"
     if has_permission and (has_structure or has_verdict or has_confidence or has_warning or has_event_regime or has_playbook or has_breakout_bias or has_entry_readiness or has_exit_urgency):
@@ -297,7 +298,7 @@ def _notification_title_for_changes(changes):
         return "XAUUSD State Changed"
     if has_microstructure:
         return "XAUUSD Microstructure Changed"
-    return "XAUUSD Execution Permission Changed"
+    return "XAUUSD Execution State Changed"
 
 
 def _effective_rr_direction(rr_signal):
@@ -1646,6 +1647,60 @@ def _align_dashboard_response_contract(payload):
     return payload
 
 
+def _sanitize_client_prediction_payload(payload):
+    if not isinstance(payload, dict):
+        return payload
+
+    sanitized = copy.deepcopy(payload)
+    for key in (
+        "MarketState",
+        "ExecutionPermission",
+        "TradePlaybook",
+        "DashboardAction",
+        "RR200Signal",
+    ):
+        sanitized.pop(key, None)
+
+    technical_analysis = sanitized.get("TechnicalAnalysis")
+    if not isinstance(technical_analysis, dict):
+        return sanitized
+
+    technical_analysis.pop("rsi_14", None)
+    technical_analysis.pop("rsi_signal", None)
+
+    support_resistance = technical_analysis.get("support_resistance")
+    if isinstance(support_resistance, dict):
+        for key in ("round_numbers", "active_fvgs", "range_zone"):
+            support_resistance.pop(key, None)
+
+    structure_context = technical_analysis.get("structure_context")
+    if isinstance(structure_context, dict):
+        for key in (
+            "roundNumberSupport",
+            "roundNumberResistance",
+            "majorRoundNumberSupport",
+            "majorRoundNumberResistance",
+            "roundNumberStep",
+            "roundSupportDistancePct",
+            "roundResistanceDistancePct",
+            "bullishFvg",
+            "bearishFvg",
+            "bullishFvgDistancePct",
+            "bearishFvgDistancePct",
+            "inBullishFvg",
+            "inBearishFvg",
+            "rangeZone",
+            "rangeZoneActive",
+            "inRangeZone",
+            "rangeZoneBreak",
+            "rangeZonePosition",
+            "rangeZoneWidthPct",
+        ):
+            structure_context.pop(key, None)
+
+    return sanitized
+
+
 def _is_rr_signal_actionable(rr_signal):
     rr_signal = rr_signal if isinstance(rr_signal, dict) else {}
     status = str(rr_signal.get("status") or "").strip()
@@ -1666,9 +1721,9 @@ def _build_signal_notification(changes, rr_signal, market_structure, ta_data=Non
     dashboard_label = str(dashboard_action.get("label") or "").strip()
     dashboard_reason = str(dashboard_action.get("reason") or "").strip()
     if dashboard_label:
-        body_lines.append(f"Dashboard Label: {dashboard_label}")
+        body_lines.append(f"Signal Read: {dashboard_label}")
     if dashboard_reason:
-        body_lines.append(f"Label Basis: {dashboard_reason}")
+        body_lines.append(f"Signal Basis: {dashboard_reason}")
     if "market_structure" in changed_keys:
         body_lines.append(f"Market Structure: {_format_market_structure_change(changes, market_structure)}")
 
@@ -3407,6 +3462,7 @@ def _indicator_monitor_loop():
                         )
                         alert_title = alert_notification.get("title") or "XAUUSD Direction / Grade Changed"
                         alert_message = alert_notification.get("body") or ""
+                        client_payload = _sanitize_client_prediction_payload(payload)
 
                         if _monitor_state["clients"] > 0:
                             socketio.emit(
@@ -3414,13 +3470,12 @@ def _indicator_monitor_loop():
                                 {
                                     "message": alert_message,
                                     "title": alert_title,
-                                    "data": payload,
+                                    "data": client_payload,
                                     "changes": notification_changes,
                                     "snapshot": current_snapshot,
                                     "verdict": payload.get("verdict"),
                                     "confidence": payload.get("confidence"),
                                     "decision_status": payload.get("DecisionStatus"),
-                                    "execution_permission": payload.get("ExecutionPermission"),
                                     "timestamp": now_ts,
                                 },
                             )
@@ -3737,7 +3792,7 @@ def get_autoresearch_latest():
 def get_prediction():
     try:
         payload, status_code = _build_prediction_response()
-        return jsonify(payload), status_code
+        return jsonify(_sanitize_client_prediction_payload(payload)), status_code
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
