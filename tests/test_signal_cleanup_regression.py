@@ -1,4 +1,6 @@
 import unittest
+from pathlib import Path
+import tempfile
 from unittest.mock import patch
 
 import pandas as pd
@@ -245,6 +247,36 @@ class DashboardPayloadContractTests(unittest.TestCase):
         self.assertEqual(payload["price_action"]["basis"], "last_closed_15m_bar")
         self.assertEqual(payload["price_action"]["bar_timestamp_utc"], "2026-04-20T16:30:00+00:00")
         self.assertEqual(payload["price_action"]["structure"], "Higher Highs / Higher Lows (Bullish Structure)")
+        self.assertEqual(payload["structure_context"]["openingRangeBreak"], 1)
+
+    def test_signal_notification_omits_execution_and_decision_text(self):
+        notification = app_module._build_signal_notification(
+            {
+                "market_structure": {
+                    "previous": "Consolidating",
+                    "current": "Higher Highs / Higher Lows (Bullish Structure)",
+                },
+                "micro_orb_state": {
+                    "previous": -1,
+                    "current": 1,
+                },
+            },
+            {},
+            "Higher Highs / Higher Lows (Bullish Structure)",
+            ta_data=_sample_ta_payload(),
+            payload={
+                "ExecutionState": {"title": "Stand Aside"},
+                "DecisionStatus": {
+                    "text": "Stand aside. Checklist does not support a clean trade yet."
+                },
+            },
+        )
+
+        self.assertIn("Market Structure:", notification["body"])
+        self.assertIn("Microstructure Change: ORB Bearish -> Bullish", notification["body"])
+        self.assertNotIn("Execution State:", notification["body"])
+        self.assertNotIn("Decision:", notification["body"])
+        self.assertNotIn("Checklist does not support a clean trade yet.", notification["body"])
 
     def test_normalize_ta_payload_schema_keeps_pivots_and_microstructure(self):
         normalized = _normalize_ta_payload_schema(_sample_ta_payload())
@@ -438,7 +470,20 @@ class DashboardPayloadContractTests(unittest.TestCase):
     def test_prediction_builder_aligns_decision_status_with_active_execution_state(self):
         ta_payload = _sample_ta_payload()
 
-        with patch.object(app_module.predict_gold, "get_technical_analysis", return_value=ta_payload):
+        with patch.object(app_module.predict_gold, "get_technical_analysis", return_value=ta_payload), patch.object(
+            app_module,
+            "_evaluate_trade_playbook",
+            return_value={
+                "stage": "hold",
+                "title": "Hold Winner",
+                "text": "Momentum is active and still aligned with the short position.",
+                "directionalBias": "Bearish",
+            },
+        ), patch.object(
+            app_module,
+            "_stabilize_trade_playbook",
+            side_effect=lambda playbook, *_: playbook,
+        ):
             body, status_code = app_module._build_prediction_response()
 
         self.assertEqual(status_code, 200)
@@ -448,6 +493,97 @@ class DashboardPayloadContractTests(unittest.TestCase):
             body["DecisionStatus"]["text"],
             "Safer to look for a sell. Short state is confirmed with acceptable tradeability.",
         )
+
+    def test_prediction_builder_uses_stable_playbook_for_execution_state(self):
+        ta_payload = _sample_ta_payload()
+        prediction_payload = {
+            "verdict": "Bearish",
+            "confidence": 66,
+            "TradeGuidance": {
+                "summary": "Short setup confirmed.",
+                "buyLevel": "Weak",
+                "sellLevel": "Strong",
+                "exitLevel": "Low",
+            },
+            "RegimeState": {"breakout_bias": "Bearish", "event_regime": "range_expansion"},
+            "ForecastState": {"regimeBucket": "active_momentum"},
+            "ExecutionState": {"status": "stand_aside", "title": "Stand Aside", "text": "Raw execution state."},
+            "directionalBias": "Bearish",
+            "tradeability": "High",
+            "regime": "trend",
+            "actionState": "SHORT_ACTIVE",
+            "action": "sell",
+        }
+
+        with patch.object(app_module.predict_gold, "get_technical_analysis", return_value=ta_payload), patch.object(
+            app_module, "compute_prediction_from_ta", return_value=prediction_payload
+        ), patch.object(
+            app_module, "_stabilize_prediction", side_effect=lambda prediction, _: prediction
+        ), patch.object(
+            app_module,
+            "_evaluate_decision_status",
+            return_value={"status": "sell", "text": "Safer to look for a sell.", "buyChecks": [], "sellChecks": [True], "exitChecks": []},
+        ), patch.object(
+            app_module,
+            "_stabilize_decision_status",
+            side_effect=lambda decision: decision,
+        ), patch.object(
+            app_module,
+            "_evaluate_trade_playbook",
+            return_value={
+                "stage": "hold",
+                "title": "Hold Winner",
+                "text": "Momentum is active and still aligned with the short position.",
+                "directionalBias": "Bearish",
+            },
+        ), patch.object(
+            app_module,
+            "_stabilize_trade_playbook",
+            side_effect=lambda playbook, *_: playbook,
+        ):
+            body, status_code = app_module._build_prediction_response()
+
+        self.assertEqual(status_code, 200)
+        self.assertEqual(body["ExecutionState"]["status"], "hold")
+        self.assertEqual(body["ExecutionState"]["title"], "Hold Winner")
+        self.assertEqual(body["ExecutionState"]["actionState"], "SHORT_ACTIVE")
+        self.assertEqual(
+            body["ExecutionState"]["text"],
+            "Momentum is active and still aligned with the short position.",
+        )
+
+    def test_stabilize_decision_status_requires_repeat_for_same_status_detail_changes(self):
+        first_payload = {
+            "status": "wait",
+            "text": "Watchlist Only: buy conditions are mostly aligned, but execution is blocked.",
+            "buyChecks": [True, True, False],
+            "sellChecks": [False, False, False],
+            "exitChecks": [False, False, False],
+        }
+        second_payload = {
+            "status": "wait",
+            "text": "Watchlist Only: sell conditions are mostly aligned, but execution is blocked.",
+            "buyChecks": [False, False, False],
+            "sellChecks": [True, True, False],
+            "exitChecks": [False, False, False],
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir, patch.object(
+            app_module,
+            "DECISION_STATE_FILE",
+            Path(tmpdir) / "decision_state.json",
+        ), patch.object(app_module.time, "time", return_value=1_700_000_000):
+            first = app_module._stabilize_decision_status(first_payload)
+            second = app_module._stabilize_decision_status(second_payload)
+            third = app_module._stabilize_decision_status(second_payload)
+
+        self.assertEqual(first["text"], first_payload["text"])
+        self.assertEqual(second["text"], first_payload["text"])
+        self.assertEqual(second["buyChecks"], first_payload["buyChecks"])
+        self.assertEqual(second["sellChecks"], first_payload["sellChecks"])
+        self.assertEqual(third["text"], second_payload["text"])
+        self.assertEqual(third["buyChecks"], second_payload["buyChecks"])
+        self.assertEqual(third["sellChecks"], second_payload["sellChecks"])
 
     def test_predict_route_returns_error_payload_when_builder_fails(self):
         with patch.object(app_module, "_build_prediction_response", side_effect=RuntimeError("boom")):

@@ -733,9 +733,16 @@ def _build_technical_analysis_from_frame(
     strategy_params = normalize_strategy_params(active_strategy_params)
     enriched = prepare_historical_features(df, strategy_params)
     latest = enriched.iloc[-1]
+    stable_structure_row = enriched.iloc[structure_index]
+    signal_row = latest.copy()
+    # Keep ORB/price-action-derived context pinned to the last closed 15m bar so
+    # intrabar live-price updates do not make the dashboard and alerts wobble.
+    for key in ("PA_STRUCTURE", "CANDLE_PATTERN", "OPENING_RANGE_BREAK"):
+        if key in stable_structure_row.index:
+            signal_row[key] = stable_structure_row.get(key)
     cross_asset_context = _get_cached_cross_asset_context()
     shared_payload = build_ta_payload_from_row(
-        latest,
+        signal_row,
         strategy_params,
         event_risk=result["event_risk"],
         cross_asset_context=cross_asset_context,

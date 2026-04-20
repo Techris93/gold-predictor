@@ -1687,14 +1687,6 @@ def _build_signal_notification(changes, rr_signal, market_structure, ta_data=Non
     changed_keys = set((changes or {}).keys())
     title = _notification_title_for_changes(changes)
     body_lines = []
-    decision_status = payload.get("DecisionStatus") if isinstance(payload, dict) else {}
-    execution_state = payload.get("ExecutionState") if isinstance(payload, dict) else {}
-    decision_text = str((decision_status or {}).get("text") or "").strip()
-    execution_title = str((execution_state or {}).get("title") or "").strip()
-    if execution_title:
-        body_lines.append(f"Execution State: {execution_title}")
-    if decision_text:
-        body_lines.append(f"Decision: {decision_text}")
     if "market_structure" in changed_keys:
         body_lines.append(f"Market Structure: {_format_market_structure_change(changes, market_structure)}")
     micro_change = _format_microstructure_change(changes)
@@ -2672,17 +2664,196 @@ def _stabilize_trade_playbook(trade_playbook, execution_permission, decision_sta
     return stabilized
 
 
+def _build_market_state_from_prediction(prediction):
+    prediction = prediction if isinstance(prediction, dict) else {}
+    return {
+        "regime": str(prediction.get("regime") or "unstable"),
+        "tradeability": str(prediction.get("tradeability") or "Low"),
+        "directional_bias": str(prediction.get("directionalBias") or "Neutral"),
+        "action_state": str(prediction.get("actionState") or "WAIT"),
+        "action": str(prediction.get("action") or "hold"),
+    }
+
+
+def _directional_execution_action_state(direction, setup=False):
+    direction = str(direction or "").strip()
+    if direction == "Bullish":
+        return "SETUP_LONG" if setup else "LONG_ACTIVE"
+    if direction == "Bearish":
+        return "SETUP_SHORT" if setup else "SHORT_ACTIVE"
+    return "WAIT"
+
+
+def _stabilize_execution_state(
+    execution_state,
+    trade_playbook,
+    market_state,
+    execution_permission,
+    decision_status,
+):
+    raw_state = dict(execution_state) if isinstance(execution_state, dict) else {}
+    trade_playbook = dict(trade_playbook) if isinstance(trade_playbook, dict) else {}
+    market_state = dict(market_state) if isinstance(market_state, dict) else {}
+    execution_permission = (
+        dict(execution_permission) if isinstance(execution_permission, dict) else {}
+    )
+    decision_status = dict(decision_status) if isinstance(decision_status, dict) else {}
+
+    stage = str(trade_playbook.get("stage") or "stand_aside").strip()
+    directional_bias = str(
+        market_state.get("directional_bias")
+        or trade_playbook.get("directionalBias")
+        or "Neutral"
+    ).strip()
+
+    stabilized = dict(raw_state)
+    stabilized["tradeability"] = str(
+        raw_state.get("tradeability")
+        or market_state.get("tradeability")
+        or "Low"
+    )
+
+    if stage == "exit":
+        stabilized["status"] = "exit"
+        stabilized["title"] = str(trade_playbook.get("title") or "Exit / Reduce")
+        stabilized["text"] = str(
+            trade_playbook.get("text")
+            or raw_state.get("text")
+            or execution_permission.get("text")
+            or decision_status.get("text")
+            or "Exit Recommended: active position quality is deteriorating."
+        )
+        stabilized["action"] = "exit"
+        stabilized["actionState"] = "EXIT_RISK"
+        stabilized["permissionStatus"] = "exit_recommended"
+        stabilized["entryAllowed"] = False
+        stabilized["exitRecommended"] = True
+        return stabilized
+
+    if stage == "hold":
+        stabilized["status"] = "hold"
+        stabilized["title"] = str(
+            trade_playbook.get("title")
+            or raw_state.get("title")
+            or "Hold Winner"
+        )
+        stabilized["text"] = str(
+            trade_playbook.get("text")
+            or raw_state.get("text")
+            or execution_permission.get("text")
+            or decision_status.get("text")
+            or "Momentum is active and still aligned with the position."
+        )
+        stabilized["action"] = "hold"
+        stabilized["actionState"] = _directional_execution_action_state(
+            directional_bias,
+            setup=False,
+        )
+        stabilized["permissionStatus"] = "entry_allowed"
+        stabilized["entryAllowed"] = True
+        stabilized["exitRecommended"] = False
+        return stabilized
+
+    if stage == "enter":
+        stabilized["status"] = "enter"
+        stabilized["title"] = str(
+            trade_playbook.get("title")
+            or raw_state.get("title")
+            or "Enter"
+        )
+        stabilized["text"] = str(
+            trade_playbook.get("text")
+            or raw_state.get("text")
+            or decision_status.get("text")
+            or execution_permission.get("text")
+            or "The directional engine is clear enough to trade."
+        )
+        stabilized["action"] = (
+            "buy" if directional_bias == "Bullish" else "sell" if directional_bias == "Bearish" else str(raw_state.get("action") or "hold")
+        )
+        stabilized["actionState"] = _directional_execution_action_state(
+            directional_bias,
+            setup=False,
+        )
+        stabilized["permissionStatus"] = "entry_allowed"
+        stabilized["entryAllowed"] = True
+        stabilized["exitRecommended"] = False
+        return stabilized
+
+    if stage in {"prepare", "stalk_entry"}:
+        stabilized["status"] = "prepare"
+        stabilized["title"] = str(
+            trade_playbook.get("title")
+            or raw_state.get("title")
+            or "Prepare"
+        )
+        stabilized["text"] = str(
+            trade_playbook.get("text")
+            or raw_state.get("text")
+            or execution_permission.get("text")
+            or decision_status.get("text")
+            or "The setup is forming, but execution is not confirmed yet."
+        )
+        stabilized["action"] = "hold"
+        stabilized["actionState"] = _directional_execution_action_state(
+            directional_bias,
+            setup=True,
+        )
+        stabilized["permissionStatus"] = "watchlist_only"
+        stabilized["entryAllowed"] = False
+        stabilized["exitRecommended"] = False
+        return stabilized
+
+    stabilized["status"] = "stand_aside"
+    stabilized["title"] = str(
+        trade_playbook.get("title")
+        or raw_state.get("title")
+        or "Stand Aside"
+    )
+    stabilized["text"] = str(
+        trade_playbook.get("text")
+        or raw_state.get("text")
+        or decision_status.get("text")
+        or execution_permission.get("text")
+        or "No trade. Conditions are not clean enough yet."
+    )
+    stabilized["action"] = "hold"
+    stabilized["actionState"] = "WAIT"
+    stabilized["permissionStatus"] = "no_trade"
+    stabilized["entryAllowed"] = False
+    stabilized["exitRecommended"] = False
+    return stabilized
+
+
 def _stabilize_decision_status(decision_status):
     raw_status = str((decision_status or {}).get("status") or "wait")
     raw_text = str((decision_status or {}).get("text") or "Stand aside.")
+    raw_buy_checks = list((decision_status or {}).get("buyChecks") or [])
+    raw_sell_checks = list((decision_status or {}).get("sellChecks") or [])
+    raw_exit_checks = list((decision_status or {}).get("exitChecks") or [])
+    raw_signature = json.dumps(
+        {
+            "text": raw_text,
+            "buyChecks": raw_buy_checks,
+            "sellChecks": raw_sell_checks,
+            "exitChecks": raw_exit_checks,
+        },
+        ensure_ascii=True,
+        sort_keys=True,
+    )
     now_ts = int(time.time())
     state = _load_json_file(
         DECISION_STATE_FILE,
         {
             "stable_status": raw_status,
             "stable_text": raw_text,
+            "stable_buy_checks": raw_buy_checks,
+            "stable_sell_checks": raw_sell_checks,
+            "stable_exit_checks": raw_exit_checks,
             "last_raw_status": raw_status,
             "raw_streak": 1,
+            "last_raw_signature": raw_signature,
+            "raw_signature_streak": 1,
             "last_stable_change_ts": now_ts,
         },
     )
@@ -2694,8 +2865,18 @@ def _stabilize_decision_status(decision_status):
     else:
         raw_streak = 1
 
+    last_raw_signature = str(state.get("last_raw_signature", raw_signature))
+    raw_signature_streak = int(state.get("raw_signature_streak", 0) or 0)
+    if raw_signature == last_raw_signature:
+        raw_signature_streak += 1
+    else:
+        raw_signature_streak = 1
+
     stable_status = str(state.get("stable_status", raw_status))
     stable_text = str(state.get("stable_text", raw_text))
+    stable_buy_checks = list(state.get("stable_buy_checks", raw_buy_checks) or raw_buy_checks)
+    stable_sell_checks = list(state.get("stable_sell_checks", raw_sell_checks) or raw_sell_checks)
+    stable_exit_checks = list(state.get("stable_exit_checks", raw_exit_checks) or raw_exit_checks)
     last_stable_change_ts = int(state.get("last_stable_change_ts", now_ts) or now_ts)
 
     if raw_status == stable_status:
@@ -2713,9 +2894,9 @@ def _stabilize_decision_status(decision_status):
     else:
         required_confirmation = DECISION_CONFIRMATION_COUNT
 
-    if raw_streak >= required_confirmation:
+    if raw_status != stable_status and raw_streak >= required_confirmation:
         can_flip = True
-        if raw_status != stable_status and (now_ts - last_stable_change_ts) < DECISION_FLIP_MIN_HOLD_SECONDS:
+        if (now_ts - last_stable_change_ts) < DECISION_FLIP_MIN_HOLD_SECONDS:
             if stable_status in {"buy", "sell"} and raw_status == "exit":
                 can_flip = False
             elif stable_status == "exit" and raw_status in {"buy", "sell"}:
@@ -2730,13 +2911,35 @@ def _stabilize_decision_status(decision_status):
                 last_stable_change_ts = now_ts
             stable_status = raw_status
             stable_text = raw_text
+            stable_buy_checks = raw_buy_checks
+            stable_sell_checks = raw_sell_checks
+            stable_exit_checks = raw_exit_checks
+    elif raw_status == stable_status and raw_signature != json.dumps(
+        {
+            "text": stable_text,
+            "buyChecks": stable_buy_checks,
+            "sellChecks": stable_sell_checks,
+            "exitChecks": stable_exit_checks,
+        },
+        ensure_ascii=True,
+        sort_keys=True,
+    ) and raw_signature_streak >= 2:
+        stable_text = raw_text
+        stable_buy_checks = raw_buy_checks
+        stable_sell_checks = raw_sell_checks
+        stable_exit_checks = raw_exit_checks
 
     state.update(
         {
             "stable_status": stable_status,
             "stable_text": stable_text,
+            "stable_buy_checks": stable_buy_checks,
+            "stable_sell_checks": stable_sell_checks,
+            "stable_exit_checks": stable_exit_checks,
             "last_raw_status": raw_status,
             "raw_streak": raw_streak,
+            "last_raw_signature": raw_signature,
+            "raw_signature_streak": raw_signature_streak,
             "last_stable_change_ts": last_stable_change_ts,
             "updated_at": now_ts,
         }
@@ -2748,6 +2951,9 @@ def _stabilize_decision_status(decision_status):
     stabilized["rawText"] = raw_text
     stabilized["status"] = stable_status
     stabilized["text"] = stable_text
+    stabilized["buyChecks"] = stable_buy_checks
+    stabilized["sellChecks"] = stable_sell_checks
+    stabilized["exitChecks"] = stable_exit_checks
     stabilized["confirmationCount"] = raw_streak
     stabilized["requiredConfirmation"] = required_confirmation
     stabilized["confirmed"] = raw_streak >= required_confirmation and raw_status == stable_status
@@ -3133,18 +3339,43 @@ def _build_prediction_response():
         raw_prediction,
         ta_data,
     )
+    market_state = _build_market_state_from_prediction(prediction)
+    regime_state = dict(prediction.get("RegimeState", {}) or {})
     forecast_state = dict(prediction.get("ForecastState", {}) or {})
-    execution_state = dict(prediction.get("ExecutionState", {}) or {})
+    raw_execution_state = dict(prediction.get("ExecutionState", {}) or {})
     decision_status = _evaluate_decision_status(
         verdict=prediction["verdict"],
         confidence=int(prediction["confidence"]),
         ta_data=ta_data,
         trade_guidance=prediction["TradeGuidance"],
-        execution_state=execution_state,
+        execution_state=raw_execution_state,
         tradeability=prediction.get("tradeability"),
         regime=prediction.get("regime"),
     )
     decision_status = _stabilize_decision_status(decision_status)
+    execution_permission = _evaluate_execution_permission(
+        decision_status,
+        market_state,
+    )
+    trade_playbook = _evaluate_trade_playbook(
+        decision_status,
+        execution_permission,
+        market_state,
+        regime_state,
+        prediction["TradeGuidance"],
+    )
+    trade_playbook = _stabilize_trade_playbook(
+        trade_playbook,
+        execution_permission,
+        decision_status,
+    )
+    execution_state = _stabilize_execution_state(
+        raw_execution_state,
+        trade_playbook,
+        market_state,
+        execution_permission,
+        decision_status,
+    )
     decision_status = _align_decision_status_with_execution_state(
         decision_status,
         execution_state,
@@ -3173,7 +3404,7 @@ def _build_prediction_response():
         "confidence": prediction["confidence"],
         "TechnicalAnalysis": ta_data,
         "TradeGuidance": prediction["TradeGuidance"],
-        "RegimeState": prediction.get("RegimeState", {}),
+        "RegimeState": regime_state,
         "ForecastState": forecast_state,
         "ExecutionState": execution_state,
         "DecisionStatus": decision_status,
