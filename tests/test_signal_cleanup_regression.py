@@ -102,6 +102,79 @@ def _sample_ta_payload():
 
 
 class DashboardPayloadContractTests(unittest.TestCase):
+    def test_decision_status_uses_execution_state_for_active_short(self):
+        ta = _sample_ta_payload()
+        trade_guidance = {
+            "summary": "Short setup confirmed with acceptable tradeability.",
+            "buyLevel": "Weak",
+            "sellLevel": "Strong",
+            "exitLevel": "Low",
+        }
+
+        decision = app_module._evaluate_decision_status(
+            verdict="Bearish",
+            confidence=66,
+            ta_data=ta,
+            trade_guidance=trade_guidance,
+            execution_state={"actionState": "SHORT_ACTIVE", "status": "enter"},
+        )
+
+        self.assertEqual(decision["status"], "sell")
+        self.assertEqual(
+            decision["text"],
+            "Safer to look for a sell. Short state is confirmed with acceptable tradeability.",
+        )
+
+    def test_decision_status_uses_h1_trend_for_generic_checklist(self):
+        ta = _sample_ta_payload()
+        ta["ema_trend"] = "Bullish"
+        ta["multi_timeframe"]["h1_trend"] = "Bearish"
+        ta["multi_timeframe"]["alignment_label"] = "Strong Bearish Alignment"
+        ta["price_action"]["structure"] = "Bearish Drift"
+        trade_guidance = {
+            "summary": "Sell bias is favored; wait for bearish continuation or rejection confirmation.",
+            "buyLevel": "Weak",
+            "sellLevel": "Strong",
+            "exitLevel": "Low",
+        }
+
+        decision = app_module._evaluate_decision_status(
+            verdict="Bearish",
+            confidence=66,
+            ta_data=ta,
+            trade_guidance=trade_guidance,
+            execution_state={},
+        )
+
+        self.assertEqual(decision["status"], "sell")
+        self.assertEqual(
+            decision["text"],
+            "Safer to look for a sell. Most sell conditions are confirmed.",
+        )
+
+    def test_decision_status_uses_surviving_tradeability_and_regime_for_wait_blockers(self):
+        ta = _sample_ta_payload()
+        trade_guidance = {
+            "summary": "Sell bias is favored, but conditions are not clean enough for execution yet.",
+            "buyLevel": "Weak",
+            "sellLevel": "Strong",
+            "exitLevel": "Low",
+        }
+
+        decision = app_module._evaluate_decision_status(
+            verdict="Bearish",
+            confidence=51,
+            ta_data=ta,
+            trade_guidance=trade_guidance,
+            execution_state={"actionState": "WAIT", "status": "stand_aside", "tradeability": "High"},
+            tradeability="High",
+            regime="range",
+        )
+
+        self.assertEqual(decision["status"], "wait")
+        self.assertIn("execution is blocked because the market regime is range", decision["text"])
+        self.assertNotIn("tradeability is still low", decision["text"])
+
     def test_build_ta_payload_from_row_keeps_core_context(self):
         payload = build_ta_payload_from_row(_sample_row())
 
@@ -337,6 +410,20 @@ class DashboardPayloadContractTests(unittest.TestCase):
             "RR200LiveCounter",
         ):
             self.assertNotIn(key, body)
+
+    def test_prediction_builder_aligns_decision_status_with_active_execution_state(self):
+        ta_payload = _sample_ta_payload()
+
+        with patch.object(app_module.predict_gold, "get_technical_analysis", return_value=ta_payload):
+            body, status_code = app_module._build_prediction_response()
+
+        self.assertEqual(status_code, 200)
+        self.assertEqual(body["ExecutionState"]["actionState"], "SHORT_ACTIVE")
+        self.assertEqual(body["DecisionStatus"]["status"], "sell")
+        self.assertEqual(
+            body["DecisionStatus"]["text"],
+            "Safer to look for a sell. Short state is confirmed with acceptable tradeability.",
+        )
 
     def test_predict_route_returns_error_payload_when_builder_fails(self):
         with patch.object(app_module, "_build_prediction_response", side_effect=RuntimeError("boom")):

@@ -2078,12 +2078,25 @@ def _is_forming_setup_wobble(changes, trade_playbook, execution_permission, deci
     )
 
 
-def _evaluate_decision_status(verdict, confidence, ta_data, trade_guidance):
+def _evaluate_decision_status(
+    verdict,
+    confidence,
+    ta_data,
+    trade_guidance,
+    execution_state=None,
+    tradeability=None,
+    regime=None,
+):
     market_state = (ta_data or {}).get("_prediction_market_state") or {}
-    action_state = str(market_state.get("action_state") or "")
-    trend = str((ta_data or {}).get("ema_trend") or "Neutral")
-    price_action = (ta_data or {}).get("price_action") or {}
+    execution_state = execution_state if isinstance(execution_state, dict) else {}
+    action_state = str(
+        execution_state.get("actionState")
+        or market_state.get("action_state")
+        or ""
+    )
     mtf = (ta_data or {}).get("multi_timeframe") or {}
+    trend = str(mtf.get("h1_trend") or (ta_data or {}).get("ema_trend") or "Neutral")
+    price_action = (ta_data or {}).get("price_action") or {}
     structure = str(price_action.get("structure") or "")
     alignment = str(mtf.get("alignment_label") or "Mixed / Low Alignment")
     summary = str((trade_guidance or {}).get("summary") or "")
@@ -2105,8 +2118,13 @@ def _evaluate_decision_status(verdict, confidence, ta_data, trade_guidance):
     if action_state:
         text = "Stand aside. Checklist does not support a clean trade yet."
         status = "wait"
-        tradeability = str(market_state.get("tradeability") or "Low")
-        regime = str(market_state.get("regime") or "unstable")
+        tradeability = str(
+            tradeability
+            or execution_state.get("tradeability")
+            or market_state.get("tradeability")
+            or "Low"
+        )
+        regime = str(regime or market_state.get("regime") or "unstable")
         blocked_reasons = []
         if tradeability.lower() == "low":
             blocked_reasons.append("tradeability is still low")
@@ -2737,6 +2755,33 @@ def _stabilize_decision_status(decision_status):
     return stabilized
 
 
+def _align_decision_status_with_execution_state(decision_status, execution_state):
+    aligned = dict(decision_status or {})
+    execution_state = execution_state if isinstance(execution_state, dict) else {}
+    action_state = str(execution_state.get("actionState") or "")
+
+    if action_state == "LONG_ACTIVE":
+        aligned["status"] = "buy"
+        aligned["text"] = "Safer to look for a buy. Long state is confirmed with acceptable tradeability."
+        aligned["confirmed"] = True
+    elif action_state == "SHORT_ACTIVE":
+        aligned["status"] = "sell"
+        aligned["text"] = "Safer to look for a sell. Short state is confirmed with acceptable tradeability."
+        aligned["confirmed"] = True
+    elif action_state == "EXIT_RISK":
+        aligned["status"] = "exit"
+        aligned["text"] = "Safer to exit or stand aside. Exit risk is confirmed against the active directional state."
+        aligned["confirmed"] = True
+    elif action_state == "SETUP_LONG":
+        aligned["status"] = "wait"
+        aligned["text"] = "Long setup forming. Bullish bias is developing, but trigger confirmation is still pending."
+    elif action_state == "SETUP_SHORT":
+        aligned["status"] = "wait"
+        aligned["text"] = "Short setup forming. Bearish bias is developing, but trigger confirmation is still pending."
+
+    return aligned
+
+
 def _stabilize_prediction(prediction, ta_data):
     raw_verdict = prediction.get("verdict", "Neutral")
     raw_confidence = int(prediction.get("confidence", 50) or 50)
@@ -3088,15 +3133,22 @@ def _build_prediction_response():
         raw_prediction,
         ta_data,
     )
+    forecast_state = dict(prediction.get("ForecastState", {}) or {})
+    execution_state = dict(prediction.get("ExecutionState", {}) or {})
     decision_status = _evaluate_decision_status(
         verdict=prediction["verdict"],
         confidence=int(prediction["confidence"]),
         ta_data=ta_data,
         trade_guidance=prediction["TradeGuidance"],
+        execution_state=execution_state,
+        tradeability=prediction.get("tradeability"),
+        regime=prediction.get("regime"),
     )
     decision_status = _stabilize_decision_status(decision_status)
-    forecast_state = dict(prediction.get("ForecastState", {}) or {})
-    execution_state = dict(prediction.get("ExecutionState", {}) or {})
+    decision_status = _align_decision_status_with_execution_state(
+        decision_status,
+        execution_state,
+    )
     execution_status = str(execution_state.get("status") or "stand_aside")
     execution_state["status"] = execution_status
     execution_state["title"] = str(
