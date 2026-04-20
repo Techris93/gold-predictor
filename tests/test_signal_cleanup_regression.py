@@ -5,6 +5,7 @@ import pandas as pd
 
 import app as app_module
 from tools import predict_gold
+from tools.event_regime import compute_event_regime_snapshot
 from tools.predict_gold import _normalize_ta_payload_schema
 from tools.signal_engine import build_ta_payload_from_row
 
@@ -258,6 +259,29 @@ class DashboardPayloadContractTests(unittest.TestCase):
         self.assertNotIn("roundNumberSupport", normalized["structure_context"])
         self.assertNotIn("bullishFvg", normalized["structure_context"])
         self.assertNotIn("rangeZone", normalized["structure_context"])
+
+    def test_event_regime_dedupes_next_event_from_near_events(self):
+        snapshot = compute_event_regime_snapshot(
+            _sample_row(),
+            trend="Bearish",
+            alignment_label="Strong Bearish Alignment",
+            market_structure="Bearish Drift",
+            candle_pattern="None",
+            event_risk={
+                "active": False,
+                "minutes_to_next_release": 1909.0,
+                "next_release_event": {"name": "Retail Sales"},
+                "near_releases": [
+                    {"name": "Retail Sales", "minutes": 1909.0},
+                    {"name": "Retail Sales", "minutes": 1909.0},
+                    {"name": "CPI", "minutes": 2600.0},
+                ],
+            },
+            cross_asset_context={},
+        )
+
+        self.assertEqual(snapshot["next_event_name"], "Retail Sales")
+        self.assertEqual(snapshot["near_events"], [{"name": "CPI", "minutes": 2600.0}])
 
     def test_sanitize_client_payload_strips_removed_dashboard_fields(self):
         payload = {

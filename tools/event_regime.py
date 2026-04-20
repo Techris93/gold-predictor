@@ -37,6 +37,12 @@ def _clamp(value: float, low: float = 0.0, high: float = 100.0) -> float:
     return max(low, min(high, float(value)))
 
 
+def _same_named_event(name_a: str, name_b: str) -> bool:
+    normalized_a = " ".join(str(name_a or "").strip().lower().split())
+    normalized_b = " ".join(str(name_b or "").strip().lower().split())
+    return bool(normalized_a) and normalized_a == normalized_b
+
+
 def _normalized_distance(value: float | None, scale: float = 0.35) -> float:
     if value is None:
         return 0.0
@@ -593,7 +599,27 @@ def compute_event_regime_snapshot(
             minutes_val = None
             if minutes_raw is not None:
                 minutes_val = round(_safe_float(minutes_raw, 0.0), 1)
-            near_events.append({"name": name, "minutes": minutes_val})
+            is_duplicate = False
+            if next_event_name and _same_named_event(name, next_event_name):
+                if minutes_to_next_event is None and minutes_val is None:
+                    is_duplicate = True
+                elif minutes_to_next_event is not None and minutes_val is not None:
+                    is_duplicate = abs(minutes_val - round(_safe_float(minutes_to_next_event, 0.0), 1)) <= 0.1
+            if not is_duplicate and any(
+                _same_named_event(name, existing.get("name"))
+                and (
+                    (existing.get("minutes") is None and minutes_val is None)
+                    or (
+                        existing.get("minutes") is not None
+                        and minutes_val is not None
+                        and abs(float(existing.get("minutes")) - minutes_val) <= 0.1
+                    )
+                )
+                for existing in near_events
+            ):
+                is_duplicate = True
+            if not is_duplicate:
+                near_events.append({"name": name, "minutes": minutes_val})
 
     if not near_events and next_event_name and minutes_to_next_event is not None:
         near_events.append(

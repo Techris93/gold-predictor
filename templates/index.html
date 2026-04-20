@@ -2994,6 +2994,35 @@
           ? `${nextEventName} ${minutesText}`
           : minutesText;
         const nearEventsText = nearEvents
+          .filter((item, index, arr) => {
+            const name = String(item?.name || "")
+              .trim()
+              .toLowerCase();
+            const mins = Number(item?.minutes);
+            const duplicateOfNext =
+              name &&
+              nextEventName &&
+              name === nextEventName.trim().toLowerCase() &&
+              Number.isFinite(mins) &&
+              hasUsableMinutes &&
+              Math.abs(mins - minutesRaw) <= 0.1;
+            if (duplicateOfNext) return false;
+            return (
+              arr.findIndex((candidate) => {
+                const candidateName = String(candidate?.name || "")
+                  .trim()
+                  .toLowerCase();
+                const candidateMins = Number(candidate?.minutes);
+                return (
+                  candidateName === name &&
+                  ((Number.isFinite(candidateMins) &&
+                    Number.isFinite(mins) &&
+                    Math.abs(candidateMins - mins) <= 0.1) ||
+                    (!Number.isFinite(candidateMins) && !Number.isFinite(mins)))
+                );
+              }) === index
+            );
+          })
           .slice(0, 2)
           .map((item) => {
             const name = String(item?.name || "").trim();
