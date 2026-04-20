@@ -43,6 +43,10 @@ DEFAULT_STRATEGY_PARAMS = {
     "range_pressure_weight": 0.0,
     "engulfing_weight": 1.0,
     "reversal_candle_weight": 0.6,
+    "rsi_extreme_weight": 1.5,
+    "rsi_warning_weight": 0.6,
+    "rsi_warning_band": 10,
+    "rsi_divergence_weight": 0.9,
     "macd_early_momentum_weight": 0.55,
     "macd_hist_slope_scale": 0.06,
     "volume_spike_trigger_weight": 0.5,
@@ -55,7 +59,14 @@ DEFAULT_STRATEGY_PARAMS = {
     "volume_unavailable_penalty": 5.0,
     "mixed_alignment_penalty": 6.0,
     "neutral_confidence_cap": 63,
+    "sr_reaction_weight": 1.6,
+    "sr_proximity_weight": 0.5,
     "pivot_confluence_weight": 0.35,
+    "round_number_weight": 0.22,
+    "fvg_context_weight": 0.55,
+    "range_zone_weight": 0.45,
+    "range_zone_break_weight": 0.85,
+    "special_sr_confluence_weight": 0.18,
     "trigger_min_score": 1.3,
     "no_trade_adx_threshold": 18,
     "no_trade_confidence_cap": 60,
@@ -210,32 +221,121 @@ def _round_or_none(value, digits=2):
     return round(number, digits)
 
 
-def _distance_pct_from_current(current_price, level_price):
-    price = _optional_float(current_price)
-    level = _optional_float(level_price)
-    if price is None or price <= 0 or level is None:
+def _round_number_step(price):
+    normalized_price = abs(_safe_float(price, 0.0))
+    if normalized_price >= 1000.0:
+        return 5.0
+    if normalized_price >= 100.0:
+        return 1.0
+    if normalized_price >= 10.0:
+        return 0.5
+    return 0.1
+
+
+def _level_family(label):
+    normalized = str(label or "").strip().lower()
+    if "pivot" in normalized:
+        return "pivot"
+    if "round number" in normalized:
+        return "round"
+    if "fvg" in normalized:
+        return "fvg"
+    if "range zone" in normalized:
+        return "range"
+    if "swing" in normalized:
+        return "swing"
+    if "previous" in normalized or "prior" in normalized:
+        return "prior"
+    return "other"
+
+
+def _serialize_zone(low, high, label=None):
+    low_value = _optional_float(low)
+    high_value = _optional_float(high)
+    if low_value is None or high_value is None:
         return None
-    return abs(price - level) / price * 100.0
+    zone_low = min(low_value, high_value)
+    zone_high = max(low_value, high_value)
+    zone = {
+        "low": round(zone_low, 2),
+        "high": round(zone_high, 2),
+        "mid": round((zone_low + zone_high) / 2.0, 2),
+        "width": round(zone_high - zone_low, 2),
+    }
+    if label:
+        zone["label"] = str(label)
+    return zone
 
 
-def _nearest_pivot_distance_pct(current_price, levels, kind):
-    price = _optional_float(current_price)
-    if price is None or price <= 0:
+def _serialize_nearby_level(label, price, current_price):
+    level_price = _optional_float(price)
+    if level_price is None or current_price <= 0:
         return None
+    distance_pct = abs(current_price - level_price) / current_price * 100.0
+    return {
+        "label": str(label),
+        "family": _level_family(label),
+        "price": round(level_price, 2),
+        "distance_pct": round(distance_pct, 3),
+    }
 
+
+def _collect_nearby_levels(levels, current_price, kind, cutoff_pct=0.25, max_items=5):
+    matches = []
+    for label, value, level_kind in levels:
+        if level_kind != kind:
+            continue
+        level_price = _optional_float(value)
+        if level_price is None or current_price <= 0:
+            continue
+        distance_pct = abs(current_price - level_price) / current_price * 100.0
+        if distance_pct <= (cutoff_pct + 1e-9):
+            matches.append((distance_pct, str(label), level_price))
+    matches.sort(key=lambda item: (item[0], abs(current_price - item[2]), item[1]))
+    serialized = []
+    seen = set()
+    for _, label, level_price in matches:
+        dedupe_key = (label, round(level_price, 4))
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        payload = _serialize_nearby_level(label, level_price, current_price)
+        if payload:
+            serialized.append(payload)
+        if len(serialized) >= max_items:
+            break
+    return serialized
+
+
+def _nearest_family_distance_pct(levels, family):
     distances = []
+    target_family = str(family or "")
     for level in levels:
-        pivot = _optional_float(level)
-        if pivot is None:
+        if not isinstance(level, dict):
             continue
-        if kind == "support" and pivot > price:
+        if str(level.get("family") or "") != target_family:
             continue
-        if kind == "resistance" and pivot < price:
-            continue
-        distance_pct = _distance_pct_from_current(price, pivot)
+        distance_pct = _optional_float(level.get("distance_pct"))
         if distance_pct is not None:
             distances.append(distance_pct)
     return min(distances) if distances else None
+
+
+def _round_distance_is_actionable(distance_pct, current_price, round_step):
+    distance_value = _optional_float(distance_pct)
+    price_value = _optional_float(current_price)
+    step_value = _optional_float(round_step)
+    if (
+        distance_value is None
+        or price_value is None
+        or price_value <= 0.0
+        or step_value is None
+        or step_value <= 0.0
+    ):
+        return False
+    distance_price = price_value * (distance_value / 100.0)
+    threshold_price = max(step_value * 0.18, price_value * 0.00008)
+    return distance_price <= (threshold_price + 1e-9)
 
 
 def _coerce_signal_state(value):
@@ -1077,13 +1177,11 @@ def _build_rr_signal_state(
     m15_trend = str(mtf.get("m15_trend") or "Neutral")
     h1_trend = str(mtf.get("h1_trend") or "Neutral")
     h4_trend = str(mtf.get("h4_trend") or "Neutral")
+    support_resistance = ta_data.get("support_resistance", {}) if isinstance(ta_data.get("support_resistance"), dict) else {}
     event_risk = ta_data.get("event_risk", {}) if isinstance(ta_data.get("event_risk"), dict) else {}
     price_action = ta_data.get("price_action", {}) if isinstance(ta_data.get("price_action"), dict) else {}
-    structure_context = ta_data.get("structure_context", {}) if isinstance(ta_data.get("structure_context"), dict) else {}
     pa_structure = str(price_action.get("structure") or "")
     pa_pattern = str(price_action.get("latest_candle_pattern") or "")
-    opening_range_break = _coerce_signal_state(structure_context.get("openingRangeBreak"))
-    sweep_reclaim_signal = _coerce_signal_state(structure_context.get("sweepReclaimSignal"))
     expansion_30m = float(regime_state.get("expansion_probability_30m") or 0.0)
     expansion_60m = float(regime_state.get("expansion_probability_60m") or 0.0)
     big_move_risk = float(regime_state.get("big_move_risk") or 0.0)
@@ -1296,20 +1394,17 @@ def _build_rr_signal_state(
     display_direction = direction if status in {"arming", "ready"} else "Neutral"
 
     trigger = "breakout_continuation"
-    if opening_range_break != 0:
-        trigger = "opening_range_break"
-    elif sweep_reclaim_signal != 0:
-        trigger = "micro_reclaim"
-    elif "Consolidating" in pa_structure:
+    sr_reaction = str(support_resistance.get("reaction") or "None")
+    if "Rejection" in sr_reaction:
+        trigger = "pullback_rejection"
+    elif "Consolidating" in str(ta_data.get("price_action", {}).get("structure", "")):
         trigger = "range_break_pending"
     reentry_eligible = (
         direction in {"Bullish", "Bearish"}
         and tier in {"a_plus", "a", "b"}
         and (
-            (opening_range_break > 0 and direction == "Bullish")
-            or (opening_range_break < 0 and direction == "Bearish")
-            or (sweep_reclaim_signal > 0 and direction == "Bullish")
-            or (sweep_reclaim_signal < 0 and direction == "Bearish")
+            ("Support Rejection" in sr_reaction and direction == "Bullish")
+            or ("Resistance Rejection" in sr_reaction and direction == "Bearish")
             or mtf_directional_matches >= 2
         )
     )
@@ -1543,6 +1638,22 @@ def _price_action_bias(structure, pattern):
     return "Neutral"
 
 
+def _nearby_level_has_family(levels, family):
+    for level in levels:
+        if isinstance(level, dict) and str(level.get("family") or "") == str(family or ""):
+            return True
+    return False
+
+
+def _nearby_level_special_family_count(levels):
+    families = {
+        str(level.get("family") or "")
+        for level in levels
+        if isinstance(level, dict)
+    }
+    return len(families & {"pivot", "round", "fvg", "range"})
+
+
 def _direction_probability_for_label(direction, bullish_prob_30, bearish_prob_30, bullish_prob_60, bearish_prob_60):
     if direction == "Bullish":
         return _safe_float(bullish_prob_30, 0.5), _safe_float(bullish_prob_60, 0.5)
@@ -1683,6 +1794,7 @@ def compute_trade_guidance(ta_data, confidence):
         }
 
     trend = ta_data.get("ema_trend", "Neutral")
+    rsi = float(ta_data.get("rsi_14", 50) or 50)
     regime = (ta_data.get("volatility_regime") or {}).get("market_regime", "Range-Bound")
     alignment = (ta_data.get("multi_timeframe") or {}).get("alignment_label", "Mixed / Low Alignment")
     structure = (ta_data.get("price_action") or {}).get("structure", "Consolidating")
@@ -1714,6 +1826,11 @@ def compute_trade_guidance(ta_data, confidence):
     if "Bearish" in pattern:
         sell_score += 1
     if "Bullish" in pattern:
+        buy_score += 1
+
+    if rsi < 45:
+        sell_score += 1
+    elif rsi > 55:
         buy_score += 1
 
     if confidence >= 75:
@@ -1790,6 +1907,9 @@ def compute_prediction_from_ta(ta_data):
     momentum_features = ta_data.get("momentum_features", {}) if isinstance(ta_data.get("momentum_features"), dict) else {}
     macd_hist = _safe_float(momentum_features.get("macdHistogram"), 0.0)
     macd_hist_slope = _safe_float(momentum_features.get("macdHistogramSlope"), 0.0)
+    rsi_bullish_divergence = bool(int(_safe_float(momentum_features.get("rsiBullishDivergence"), 0.0)))
+    rsi_bearish_divergence = bool(int(_safe_float(momentum_features.get("rsiBearishDivergence"), 0.0)))
+    rsi_divergence_strength = _safe_float(momentum_features.get("rsiDivergenceStrength"), 0.0)
     volume_zscore = _safe_float(momentum_features.get("volumeZScore"), 0.0)
     volume_spike = bool(int(_safe_float(momentum_features.get("volumeSpike"), 0.0)))
     feature_hits = extract_price_action_feature_hits(pa_struct, pa_pattern)
@@ -1802,8 +1922,9 @@ def compute_prediction_from_ta(ta_data):
         memory=regime_memory,
         strategy_params=strategy_params,
     )
-    current_price = _safe_float(ta_data.get("current_price"), 0.0)
+    support_resistance = ta_data.get("support_resistance", {}) if isinstance(ta_data.get("support_resistance"), dict) else {}
     event_risk = ta_data.get("event_risk", {}) if isinstance(ta_data.get("event_risk"), dict) else {}
+    rsi = ta_data.get("rsi_14", 50)
     trend_base_weight = float(strategy_params.get("trend_base_weight", 2.5))
     alignment_weight = float(strategy_params.get("alignment_weight", 1.2))
     trend_regime_bonus = float(strategy_params.get("trend_regime_bonus", 1.0))
@@ -1817,6 +1938,10 @@ def compute_prediction_from_ta(ta_data):
     range_pressure_weight = float(strategy_params.get("range_pressure_weight", structure_weight * 0.2))
     engulfing_weight = float(strategy_params.get("engulfing_weight", 1.0))
     reversal_candle_weight = float(strategy_params.get("reversal_candle_weight", 0.6))
+    rsi_extreme_weight = float(strategy_params.get("rsi_extreme_weight", 1.5))
+    rsi_warning_weight = float(strategy_params.get("rsi_warning_weight", 0.6))
+    rsi_warning_band = float(strategy_params.get("rsi_warning_band", 10))
+    rsi_divergence_weight = float(strategy_params.get("rsi_divergence_weight", 0.9))
     macd_early_momentum_weight = float(strategy_params.get("macd_early_momentum_weight", 0.55))
     macd_hist_slope_scale = float(strategy_params.get("macd_hist_slope_scale", 0.06))
     volume_spike_trigger_weight = float(strategy_params.get("volume_spike_trigger_weight", 0.5))
@@ -1828,7 +1953,14 @@ def compute_prediction_from_ta(ta_data):
     volume_unavailable_penalty = float(strategy_params.get("volume_unavailable_penalty", 5.0))
     mixed_alignment_penalty = float(strategy_params.get("mixed_alignment_penalty", 6.0))
     neutral_confidence_cap = float(strategy_params.get("neutral_confidence_cap", 63))
+    sr_reaction_weight = float(strategy_params.get("sr_reaction_weight", 1.6))
+    sr_proximity_weight = float(strategy_params.get("sr_proximity_weight", 0.5))
     pivot_confluence_weight = float(strategy_params.get("pivot_confluence_weight", 0.35))
+    round_number_weight = float(strategy_params.get("round_number_weight", 0.22))
+    fvg_context_weight = float(strategy_params.get("fvg_context_weight", 0.55))
+    range_zone_weight = float(strategy_params.get("range_zone_weight", 0.45))
+    range_zone_break_weight = float(strategy_params.get("range_zone_break_weight", 0.85))
+    special_sr_confluence_weight = float(strategy_params.get("special_sr_confluence_weight", 0.18))
     trigger_min_score = float(strategy_params.get("trigger_min_score", 1.3))
     no_trade_adx_threshold = float(strategy_params.get("no_trade_adx_threshold", 18))
     no_trade_confidence_cap = float(strategy_params.get("no_trade_confidence_cap", 60))
@@ -1892,29 +2024,40 @@ def compute_prediction_from_ta(ta_data):
     elif cross_asset_bias == "Bearish":
         bear_setup += 0.45
 
+    sr_reaction = str(support_resistance.get("reaction", "None") or "None")
+    support_distance_pct = support_resistance.get("support_distance_pct")
+    resistance_distance_pct = support_resistance.get("resistance_distance_pct")
+    nearby_supports = support_resistance.get("nearby_supports") if isinstance(support_resistance.get("nearby_supports"), list) else []
+    nearby_resistances = support_resistance.get("nearby_resistances") if isinstance(support_resistance.get("nearby_resistances"), list) else []
     opening_range_break = _coerce_signal_state(structure_context.get("openingRangeBreak"))
     sweep_reclaim_signal = _coerce_signal_state(structure_context.get("sweepReclaimSignal"))
     sweep_reclaim_quality = _safe_float(structure_context.get("sweepReclaimQuality"), 0.0)
-    pivot_point = _optional_float(structure_context.get("pivotPoint"))
-    pivot_r1 = _optional_float(structure_context.get("pivotResistance1"))
-    pivot_s1 = _optional_float(structure_context.get("pivotSupport1"))
-    pivot_r2 = _optional_float(structure_context.get("pivotResistance2"))
-    pivot_s2 = _optional_float(structure_context.get("pivotSupport2"))
-    support_pivot_distance_pct = _nearest_pivot_distance_pct(
-        current_price,
-        [pivot_point, pivot_s1, pivot_s2],
-        "support",
-    )
-    resistance_pivot_distance_pct = _nearest_pivot_distance_pct(
-        current_price,
-        [pivot_point, pivot_r1, pivot_r2],
-        "resistance",
-    )
+    range_zone_active = bool(_coerce_signal_state(structure_context.get("rangeZoneActive")))
+    range_zone_break = _coerce_signal_state(structure_context.get("rangeZoneBreak"))
+    range_zone_position = _optional_float(structure_context.get("rangeZonePosition"))
+    in_bullish_fvg = bool(_coerce_signal_state(structure_context.get("inBullishFvg")))
+    in_bearish_fvg = bool(_coerce_signal_state(structure_context.get("inBearishFvg")))
+    bullish_fvg_distance_pct = _optional_float(structure_context.get("bullishFvgDistancePct"))
+    bearish_fvg_distance_pct = _optional_float(structure_context.get("bearishFvgDistancePct"))
+    round_support_distance_pct = _optional_float(structure_context.get("roundSupportDistancePct"))
+    round_resistance_distance_pct = _optional_float(structure_context.get("roundResistanceDistancePct"))
+    round_number_step = _optional_float(structure_context.get("roundNumberStep"))
+    if round_number_step is None:
+        round_numbers = support_resistance.get("round_numbers")
+        if isinstance(round_numbers, dict):
+            round_number_step = _optional_float(round_numbers.get("step"))
+    current_price = _safe_float(ta_data.get("current_price"), 0.0)
+    support_pivot_distance_pct = _nearest_family_distance_pct(nearby_supports, "pivot")
+    resistance_pivot_distance_pct = _nearest_family_distance_pct(nearby_resistances, "pivot")
     sweep_signal_strength = min(max(sweep_reclaim_quality, 0.0), 1.0) if sweep_reclaim_signal != 0 else 0.0
+    support_special_families = _nearby_level_special_family_count(nearby_supports)
+    resistance_special_families = _nearby_level_special_family_count(nearby_resistances)
     bullish_sweep_reversal_context = (
         sweep_reclaim_signal > 0
         and (
-            trend != "Bullish"
+            sr_reaction == "Bullish Support Rejection"
+            or (isinstance(support_distance_pct, (int, float)) and support_distance_pct <= 0.2)
+            or trend != "Bullish"
             or alignment_score <= 0
             or "Bearish" in pa_struct
         )
@@ -1922,7 +2065,9 @@ def compute_prediction_from_ta(ta_data):
     bearish_sweep_reversal_context = (
         sweep_reclaim_signal < 0
         and (
-            trend != "Bearish"
+            sr_reaction == "Bearish Resistance Rejection"
+            or (isinstance(resistance_distance_pct, (int, float)) and resistance_distance_pct <= 0.2)
+            or trend != "Bearish"
             or alignment_score >= 0
             or "Bullish" in pa_struct
         )
@@ -1998,6 +2143,28 @@ def compute_prediction_from_ta(ta_data):
         if trend == "Bearish" or alignment_score < 0:
             bear_setup += event_alignment_boost
 
+    rsi_oversold = float(strategy_params.get("rsi_oversold", 20))
+    rsi_overbought = float(strategy_params.get("rsi_overbought", 70))
+    bullish_rsi_warning = min(rsi_oversold + rsi_warning_band, 50)
+    bearish_rsi_warning = max(rsi_overbought - rsi_warning_band, 50)
+    if rsi < rsi_oversold:
+        bull_trigger += rsi_extreme_weight
+    elif rsi < bullish_rsi_warning:
+        bull_trigger += rsi_warning_weight
+    if rsi > rsi_overbought:
+        bear_trigger += rsi_extreme_weight
+    elif rsi > bearish_rsi_warning:
+        bear_trigger += rsi_warning_weight
+
+    if rsi_bullish_divergence and not rsi_bearish_divergence:
+        bull_trigger += rsi_divergence_weight
+        if rsi_divergence_strength > 0.0:
+            bull_trigger += min(0.35, rsi_divergence_strength * 0.1)
+    elif rsi_bearish_divergence and not rsi_bullish_divergence:
+        bear_trigger += rsi_divergence_weight
+        if rsi_divergence_strength < 0.0:
+            bear_trigger += min(0.35, abs(rsi_divergence_strength) * 0.1)
+
     if abs(macd_hist_slope) >= 0.003:
         slope_strength = _clamp(abs(macd_hist_slope) / max(macd_hist_slope_scale, 1e-4), 0.0, 1.4)
         if macd_hist_slope > 0.0:
@@ -2020,10 +2187,84 @@ def compute_prediction_from_ta(ta_data):
         elif trend == "Bearish" and alignment_score < 0:
             bear_setup += volume_spike_trigger_weight * 0.55 * min(volume_impulse, 1.6)
 
-    if isinstance(support_pivot_distance_pct, (int, float)) and support_pivot_distance_pct <= 0.22:
+    if sr_reaction == "Bullish Support Rejection" or sr_reaction == "Bullish Breakout Through Resistance":
+        bull_trigger += sr_reaction_weight
+    elif sr_reaction == "Bearish Resistance Rejection" or sr_reaction == "Bearish Breakdown Through Support":
+        bear_trigger += sr_reaction_weight
+
+    if isinstance(support_distance_pct, (int, float)) and support_distance_pct <= 0.2:
+        bull_setup += sr_proximity_weight
+    if isinstance(resistance_distance_pct, (int, float)) and resistance_distance_pct <= 0.2:
+        bear_setup += sr_proximity_weight
+
+    if support_special_families >= 2:
+        bull_setup += min(0.55, (support_special_families - 1) * (special_sr_confluence_weight * 2.0))
+    if resistance_special_families >= 2:
+        bear_setup += min(0.55, (resistance_special_families - 1) * (special_sr_confluence_weight * 2.0))
+
+    if (
+        _nearby_level_has_family(nearby_supports, "pivot")
+        and isinstance(support_pivot_distance_pct, (int, float))
+        and support_pivot_distance_pct <= 0.22
+    ):
         bull_setup += pivot_confluence_weight
-    if isinstance(resistance_pivot_distance_pct, (int, float)) and resistance_pivot_distance_pct <= 0.22:
+    if (
+        _nearby_level_has_family(nearby_resistances, "pivot")
+        and isinstance(resistance_pivot_distance_pct, (int, float))
+        and resistance_pivot_distance_pct <= 0.22
+    ):
         bear_setup += pivot_confluence_weight
+
+    if (
+        _nearby_level_has_family(nearby_supports, "round")
+        and _round_distance_is_actionable(round_support_distance_pct, current_price, round_number_step)
+    ):
+        bull_setup += round_number_weight
+    if (
+        _nearby_level_has_family(nearby_resistances, "round")
+        and _round_distance_is_actionable(round_resistance_distance_pct, current_price, round_number_step)
+    ):
+        bear_setup += round_number_weight
+
+    bullish_fvg_context = in_bullish_fvg and (
+        trend == "Bullish"
+        or alignment_score > 0
+        or sweep_reclaim_signal > 0
+        or confirmed_candle_bias == "Bullish"
+    )
+    bearish_fvg_context = in_bearish_fvg and (
+        trend == "Bearish"
+        or alignment_score < 0
+        or sweep_reclaim_signal < 0
+        or confirmed_candle_bias == "Bearish"
+    )
+    if bullish_fvg_context:
+        bull_trigger += fvg_context_weight
+    elif in_bullish_fvg:
+        bull_setup += fvg_context_weight * 0.45
+    elif isinstance(bullish_fvg_distance_pct, (int, float)) and bullish_fvg_distance_pct <= 0.18:
+        bull_setup += fvg_context_weight * 0.40
+
+    if bearish_fvg_context:
+        bear_trigger += fvg_context_weight
+    elif in_bearish_fvg:
+        bear_setup += fvg_context_weight * 0.45
+    elif isinstance(bearish_fvg_distance_pct, (int, float)) and bearish_fvg_distance_pct <= 0.18:
+        bear_setup += fvg_context_weight * 0.40
+
+    if range_zone_break > 0:
+        bull_trigger += range_zone_break_weight
+    elif range_zone_break < 0:
+        bear_trigger += range_zone_break_weight
+    elif range_zone_active and range_zone_position is not None:
+        if range_zone_position <= 0.32:
+            bull_setup += range_zone_weight
+            if _nearby_level_has_family(nearby_supports, "range"):
+                bull_setup += special_sr_confluence_weight
+        elif range_zone_position >= 0.68:
+            bear_setup += range_zone_weight
+            if _nearby_level_has_family(nearby_resistances, "range"):
+                bear_setup += special_sr_confluence_weight
 
     bull_score = bull_setup + bull_trigger
     bear_score = bear_setup + bear_trigger
@@ -2164,6 +2405,7 @@ def compute_prediction_from_ta(ta_data):
         "Doji" in pa_pattern
         and opening_range_break == 0
         and sweep_reclaim_signal == 0
+        and sr_reaction == "None"
     )
 
     if trend == "Bullish" and ("Bearish" in pa_struct or confirmed_candle_bias == "Bearish"):
@@ -2175,6 +2417,8 @@ def compute_prediction_from_ta(ta_data):
     if regime_label in {"event-risk", "unstable"}:
         conflict_count += 1
     elif regime_label == "transition" and _safe_float(regime_probs.get("breakout_transition"), 0.0) < 0.34:
+        conflict_count += 1
+    if rsi_bullish_divergence and rsi_bearish_divergence:
         conflict_count += 1
 
     stability_score = 100.0
@@ -2240,6 +2484,7 @@ def compute_prediction_from_ta(ta_data):
         tradeability_label = "Low"
 
     direction_score = round(max(bull_score, bear_score, bullish_prob_60 * 10.0, bearish_prob_60 * 10.0), 2)
+    exit_risk_score = 0.0
     if verdict == "Bullish":
         exit_risk_score = max(
             bear_trigger + (2.0 if alignment_label == "Mixed / Low Alignment" else 0.0) + (2.0 if "Bearish" in pa_pattern else 0.0),
@@ -2299,8 +2544,6 @@ def compute_prediction_from_ta(ta_data):
     if alignment_label == "Mixed / Low Alignment" and score_margin < (verdict_margin_threshold + anti_chop_margin_buffer) and max(bullish_prob_60, bearish_prob_60) < 0.60:
         anti_chop_reasons.append("Directional edge is still too narrow in mixed alignment.")
     if doji_is_indecision and warning_ladder != "Active Momentum Event":
-        anti_chop_reasons.append("Doji candle is still too indecisive for directional conviction.")
-    if "Doji" in pa_pattern and action_state in {"SETUP_LONG", "SETUP_SHORT"}:
         anti_chop_reasons.append("Indecision candle is weakening the trigger.")
     if (
         action_state in {"SETUP_LONG", "SETUP_SHORT"}
@@ -2839,23 +3082,6 @@ def compute_prediction_from_ta(ta_data):
     }
 
 
-def _build_pivot_levels_from_sources(row, support_resistance=None):
-    support_resistance = support_resistance if isinstance(support_resistance, dict) else {}
-    pivot_levels = support_resistance.get("pivot_levels")
-    if not isinstance(pivot_levels, dict):
-        pivot_levels = support_resistance.get("pivotLevels")
-    if not isinstance(pivot_levels, dict):
-        pivot_levels = {}
-
-    return {
-        "pp": _round_or_none(pivot_levels.get("pp") if pivot_levels.get("pp") is not None else row.get("PIVOT_POINT")),
-        "r1": _round_or_none(pivot_levels.get("r1") if pivot_levels.get("r1") is not None else row.get("PIVOT_R1")),
-        "s1": _round_or_none(pivot_levels.get("s1") if pivot_levels.get("s1") is not None else row.get("PIVOT_S1")),
-        "r2": _round_or_none(pivot_levels.get("r2") if pivot_levels.get("r2") is not None else row.get("PIVOT_R2")),
-        "s2": _round_or_none(pivot_levels.get("s2") if pivot_levels.get("s2") is not None else row.get("PIVOT_S2")),
-    }
-
-
 def _trend_series_from_close(close_series, ema_short, ema_long):
     ema_short_series = ta.trend.EMAIndicator(close_series, window=ema_short).ema_indicator()
     ema_long_series = ta.trend.EMAIndicator(close_series, window=ema_long).ema_indicator()
@@ -2865,6 +3091,195 @@ def _trend_series_from_close(close_series, ema_short, ema_long):
     trend.loc[bull_mask.fillna(False)] = "Bullish"
     trend.loc[bear_mask.fillna(False)] = "Bearish"
     return trend
+
+
+def _build_support_resistance_from_row(row):
+    current_price = _safe_float(row.get("Close"), 0.0)
+    if current_price <= 0:
+        return {
+            "nearest_support": None,
+            "nearest_resistance": None,
+            "support_distance_pct": None,
+            "resistance_distance_pct": None,
+            "reaction": "None",
+            "nearby_supports": [],
+            "nearby_resistances": [],
+            "support_confluence": 0,
+            "resistance_confluence": 0,
+            "support_family_confluence": 0,
+            "resistance_family_confluence": 0,
+            "pivot_levels": {
+                "pp": None,
+                "r1": None,
+                "s1": None,
+                "r2": None,
+                "s2": None,
+            },
+            "round_numbers": {
+                "support": None,
+                "resistance": None,
+                "majorSupport": None,
+                "majorResistance": None,
+                "step": None,
+            },
+            "active_fvgs": {
+                "bullish": None,
+                "bearish": None,
+            },
+            "range_zone": None,
+        }
+
+    levels = []
+    for label, key, kind in [
+        ("Previous Day High", "PRIOR_DAY_HIGH", "resistance"),
+        ("Previous Day Low", "PRIOR_DAY_LOW", "support"),
+        ("Previous Week High", "PRIOR_WEEK_HIGH", "resistance"),
+        ("Previous Week Low", "PRIOR_WEEK_LOW", "support"),
+        ("Recent Swing High", "RECENT_SWING_HIGH_24", "resistance"),
+        ("Recent Swing Low", "RECENT_SWING_LOW_24", "support"),
+        ("Major Swing High", "RECENT_SWING_HIGH_96", "resistance"),
+        ("Major Swing Low", "RECENT_SWING_LOW_96", "support"),
+    ]:
+        value = row.get(key)
+        if isinstance(value, (int, float)) and not pd.isna(value):
+            levels.append((label, float(value), kind))
+
+    pivot_point = _optional_float(row.get("PIVOT_POINT"))
+    pivot_r1 = _optional_float(row.get("PIVOT_R1"))
+    pivot_s1 = _optional_float(row.get("PIVOT_S1"))
+    pivot_r2 = _optional_float(row.get("PIVOT_R2"))
+    pivot_s2 = _optional_float(row.get("PIVOT_S2"))
+    if pivot_point is not None:
+        levels.append(("Daily Pivot Point", pivot_point, "support" if pivot_point <= current_price else "resistance"))
+    if pivot_r1 is not None:
+        levels.append(("Daily Pivot Resistance 1", pivot_r1, "resistance"))
+    if pivot_s1 is not None:
+        levels.append(("Daily Pivot Support 1", pivot_s1, "support"))
+    if pivot_r2 is not None:
+        levels.append(("Daily Pivot Resistance 2", pivot_r2, "resistance"))
+    if pivot_s2 is not None:
+        levels.append(("Daily Pivot Support 2", pivot_s2, "support"))
+
+    round_support = _optional_float(row.get("ROUND_NUMBER_SUPPORT"))
+    round_resistance = _optional_float(row.get("ROUND_NUMBER_RESISTANCE"))
+    major_round_support = _optional_float(row.get("MAJOR_ROUND_NUMBER_SUPPORT"))
+    major_round_resistance = _optional_float(row.get("MAJOR_ROUND_NUMBER_RESISTANCE"))
+    if round_support is not None:
+        levels.append(("Round Number Support", round_support, "support"))
+    if round_resistance is not None:
+        levels.append(("Round Number Resistance", round_resistance, "resistance"))
+    if major_round_support is not None and (round_support is None or abs(major_round_support - round_support) > 1e-6):
+        levels.append(("Major Round Number Support", major_round_support, "support"))
+    if major_round_resistance is not None and (round_resistance is None or abs(major_round_resistance - round_resistance) > 1e-6):
+        levels.append(("Major Round Number Resistance", major_round_resistance, "resistance"))
+
+    range_zone_low = _optional_float(row.get("RANGE_ZONE_LOW"))
+    range_zone_high = _optional_float(row.get("RANGE_ZONE_HIGH"))
+    if range_zone_low is not None:
+        levels.append(("Range Zone Low", range_zone_low, "support"))
+    if range_zone_high is not None:
+        levels.append(("Range Zone High", range_zone_high, "resistance"))
+
+    bullish_fvg_low = _optional_float(row.get("BULLISH_FVG_LOW"))
+    bullish_fvg_high = _optional_float(row.get("BULLISH_FVG_HIGH"))
+    bearish_fvg_low = _optional_float(row.get("BEARISH_FVG_LOW"))
+    bearish_fvg_high = _optional_float(row.get("BEARISH_FVG_HIGH"))
+    if bullish_fvg_low is not None and bullish_fvg_high is not None:
+        levels.append((
+            "Bullish FVG Lower Edge",
+            bullish_fvg_low,
+            "support" if bullish_fvg_low <= current_price else "resistance",
+        ))
+        levels.append((
+            "Bullish FVG Upper Edge",
+            bullish_fvg_high,
+            "support" if bullish_fvg_high <= current_price else "resistance",
+        ))
+    if bearish_fvg_low is not None and bearish_fvg_high is not None:
+        levels.append((
+            "Bearish FVG Lower Edge",
+            bearish_fvg_low,
+            "support" if bearish_fvg_low <= current_price else "resistance",
+        ))
+        levels.append((
+            "Bearish FVG Upper Edge",
+            bearish_fvg_high,
+            "support" if bearish_fvg_high <= current_price else "resistance",
+        ))
+
+    supports = [(name, value) for name, value, kind in levels if kind == "support" and value <= current_price]
+    resistances = [(name, value) for name, value, kind in levels if kind == "resistance" and value >= current_price]
+    nearest_support = max(supports, key=lambda item: item[1]) if supports else None
+    nearest_resistance = min(resistances, key=lambda item: item[1]) if resistances else None
+
+    support_distance_pct = ((current_price - nearest_support[1]) / current_price * 100.0) if nearest_support else None
+    resistance_distance_pct = ((nearest_resistance[1] - current_price) / current_price * 100.0) if nearest_resistance else None
+
+    opening_range_break = _coerce_signal_state(row.get("OPENING_RANGE_BREAK"))
+    sweep_reclaim = _coerce_signal_state(row.get("SWEEP_RECLAIM_SIGNAL"))
+    range_zone_break = _coerce_signal_state(row.get("RANGE_ZONE_BREAK"))
+    range_zone_active = bool(_coerce_signal_state(row.get("RANGE_ZONE_ACTIVE")))
+    range_zone_position = _optional_float(row.get("RANGE_ZONE_POSITION"))
+    in_bullish_fvg = bool(_coerce_signal_state(row.get("IN_BULLISH_FVG")))
+    in_bearish_fvg = bool(_coerce_signal_state(row.get("IN_BEARISH_FVG")))
+    open_price = _optional_float(row.get("Open"))
+    bullish_close = open_price is not None and current_price > open_price
+    bearish_close = open_price is not None and current_price < open_price
+    reaction = "None"
+    if sweep_reclaim > 0:
+        reaction = "Bullish Support Rejection"
+    elif sweep_reclaim < 0:
+        reaction = "Bearish Resistance Rejection"
+    elif range_zone_active and range_zone_position is not None and range_zone_break == 0 and bullish_close and range_zone_position <= 0.25:
+        reaction = "Bullish Support Rejection"
+    elif range_zone_active and range_zone_position is not None and range_zone_break == 0 and bearish_close and range_zone_position >= 0.75:
+        reaction = "Bearish Resistance Rejection"
+    elif in_bullish_fvg and bullish_close:
+        reaction = "Bullish Support Rejection"
+    elif in_bearish_fvg and bearish_close:
+        reaction = "Bearish Resistance Rejection"
+    elif opening_range_break > 0 or range_zone_break > 0:
+        reaction = "Bullish Breakout Through Resistance"
+    elif opening_range_break < 0 or range_zone_break < 0:
+        reaction = "Bearish Breakdown Through Support"
+
+    nearby_supports = _collect_nearby_levels(levels, current_price, "support")
+    nearby_resistances = _collect_nearby_levels(levels, current_price, "resistance")
+    support_families = {level.get("family") for level in nearby_supports if isinstance(level, dict)}
+    resistance_families = {level.get("family") for level in nearby_resistances if isinstance(level, dict)}
+
+    return {
+        "nearest_support": {"label": nearest_support[0], "price": round(nearest_support[1], 2)} if nearest_support else None,
+        "nearest_resistance": {"label": nearest_resistance[0], "price": round(nearest_resistance[1], 2)} if nearest_resistance else None,
+        "support_distance_pct": round(support_distance_pct, 3) if support_distance_pct is not None else None,
+        "resistance_distance_pct": round(resistance_distance_pct, 3) if resistance_distance_pct is not None else None,
+        "reaction": reaction,
+        "nearby_supports": nearby_supports,
+        "nearby_resistances": nearby_resistances,
+        "support_confluence": len(nearby_supports),
+        "resistance_confluence": len(nearby_resistances),
+        "support_family_confluence": len(support_families),
+        "resistance_family_confluence": len(resistance_families),
+        "pivot_levels": {
+            "pp": _round_or_none(pivot_point),
+            "r1": _round_or_none(pivot_r1),
+            "s1": _round_or_none(pivot_s1),
+            "r2": _round_or_none(pivot_r2),
+            "s2": _round_or_none(pivot_s2),
+        },
+        "round_numbers": {
+            "support": _round_or_none(round_support),
+            "resistance": _round_or_none(round_resistance),
+            "majorSupport": _round_or_none(major_round_support),
+            "majorResistance": _round_or_none(major_round_resistance),
+            "step": _round_or_none(row.get("ROUND_NUMBER_STEP")),
+        },
+        "active_fvgs": {
+            "bullish": _serialize_zone(bullish_fvg_low, bullish_fvg_high, label="Bullish FVG"),
+            "bearish": _serialize_zone(bearish_fvg_low, bearish_fvg_high, label="Bearish FVG"),
+        },
+        "range_zone": _serialize_zone(range_zone_low, range_zone_high, label="Range Zone"),
+    }
 
 
 def _ensure_volume_column(frame):
@@ -2945,6 +3360,244 @@ def _annotate_daily_pivot_levels(frame):
     return annotated
 
 
+def _annotate_round_number_levels(frame):
+    annotated = frame.copy()
+    round_columns = [
+        "ROUND_NUMBER_STEP",
+        "ROUND_NUMBER_SUPPORT",
+        "ROUND_NUMBER_RESISTANCE",
+        "MAJOR_ROUND_NUMBER_SUPPORT",
+        "MAJOR_ROUND_NUMBER_RESISTANCE",
+        "ROUND_SUPPORT_DISTANCE_PCT",
+        "ROUND_RESISTANCE_DISTANCE_PCT",
+    ]
+    for column in round_columns:
+        annotated[column] = np.nan
+
+    if annotated.empty:
+        return annotated
+
+    close_series = pd.to_numeric(annotated["Close"], errors="coerce")
+
+    def _levels_for_price(price):
+        numeric_price = _optional_float(price)
+        if numeric_price is None or numeric_price <= 0.0:
+            return (np.nan, np.nan, np.nan, np.nan, np.nan)
+        step = _round_number_step(numeric_price)
+        major_step = step * 2.0
+        support = math.floor(numeric_price / step) * step
+        resistance = math.ceil(numeric_price / step) * step
+        major_support = math.floor(numeric_price / major_step) * major_step
+        major_resistance = math.ceil(numeric_price / major_step) * major_step
+        return (step, support, resistance, major_support, major_resistance)
+
+    levels = close_series.apply(_levels_for_price)
+    level_frame = pd.DataFrame(
+        levels.tolist(),
+        index=annotated.index,
+        columns=[
+            "ROUND_NUMBER_STEP",
+            "ROUND_NUMBER_SUPPORT",
+            "ROUND_NUMBER_RESISTANCE",
+            "MAJOR_ROUND_NUMBER_SUPPORT",
+            "MAJOR_ROUND_NUMBER_RESISTANCE",
+        ],
+    )
+    for column in level_frame.columns:
+        annotated[column] = level_frame[column]
+
+    close_safe = close_series.replace(0, np.nan)
+    annotated["ROUND_SUPPORT_DISTANCE_PCT"] = (
+        (close_series - annotated["ROUND_NUMBER_SUPPORT"]) / close_safe * 100.0
+    ).replace([np.inf, -np.inf], np.nan)
+    annotated["ROUND_RESISTANCE_DISTANCE_PCT"] = (
+        (annotated["ROUND_NUMBER_RESISTANCE"] - close_series) / close_safe * 100.0
+    ).replace([np.inf, -np.inf], np.nan)
+    return annotated
+
+
+def _annotate_fair_value_gaps(frame):
+    annotated = frame.copy()
+    columns = [
+        "BULLISH_FVG_LOW",
+        "BULLISH_FVG_HIGH",
+        "BULLISH_FVG_DISTANCE_PCT",
+        "BEARISH_FVG_LOW",
+        "BEARISH_FVG_HIGH",
+        "BEARISH_FVG_DISTANCE_PCT",
+    ]
+    for column in columns:
+        annotated[column] = np.nan
+    annotated["IN_BULLISH_FVG"] = 0
+    annotated["IN_BEARISH_FVG"] = 0
+
+    if annotated.empty or len(annotated) < 3:
+        return annotated
+
+    highs = pd.to_numeric(annotated["High"], errors="coerce").to_numpy(dtype=float)
+    lows = pd.to_numeric(annotated["Low"], errors="coerce").to_numpy(dtype=float)
+    closes = pd.to_numeric(annotated["Close"], errors="coerce").to_numpy(dtype=float)
+    if "ATR_14" in annotated.columns:
+        atr_values = pd.to_numeric(annotated["ATR_14"], errors="coerce").to_numpy(dtype=float)
+    else:
+        atr_values = np.full(len(annotated), np.nan, dtype=float)
+
+    bullish_low = np.full(len(annotated), np.nan, dtype=float)
+    bullish_high = np.full(len(annotated), np.nan, dtype=float)
+    bullish_distance = np.full(len(annotated), np.nan, dtype=float)
+    bearish_low = np.full(len(annotated), np.nan, dtype=float)
+    bearish_high = np.full(len(annotated), np.nan, dtype=float)
+    bearish_distance = np.full(len(annotated), np.nan, dtype=float)
+    in_bullish = np.zeros(len(annotated), dtype=int)
+    in_bearish = np.zeros(len(annotated), dtype=int)
+
+    active_bullish = []
+    active_bearish = []
+
+    for index in range(len(annotated)):
+        current_low = lows[index]
+        current_high = highs[index]
+        current_close = closes[index]
+
+        if np.isfinite(current_low):
+            active_bullish = [zone for zone in active_bullish if current_low > zone["low"]]
+        if np.isfinite(current_high):
+            active_bearish = [zone for zone in active_bearish if current_high < zone["high"]]
+
+        if index >= 2 and np.isfinite(current_close):
+            gap_threshold = max(
+                max(_safe_float(atr_values[index], 0.0), 0.0) * 0.05,
+                abs(current_close) * 0.00015,
+            )
+            previous_two_high = highs[index - 2]
+            previous_two_low = lows[index - 2]
+
+            if np.isfinite(current_low) and np.isfinite(previous_two_high):
+                bullish_gap = current_low - previous_two_high
+                if bullish_gap > gap_threshold:
+                    active_bullish.append({"low": float(previous_two_high), "high": float(current_low)})
+
+            if np.isfinite(current_high) and np.isfinite(previous_two_low):
+                bearish_gap = previous_two_low - current_high
+                if bearish_gap > gap_threshold:
+                    active_bearish.append({"low": float(current_high), "high": float(previous_two_low)})
+
+        if not np.isfinite(current_close) or current_close <= 0.0:
+            continue
+
+        bullish_zone = None
+        bullish_inside = [zone for zone in active_bullish if zone["low"] <= current_close <= zone["high"]]
+        if bullish_inside:
+            bullish_zone = max(bullish_inside, key=lambda zone: zone["high"])
+        else:
+            bullish_below = [zone for zone in active_bullish if zone["high"] <= current_close]
+            if bullish_below:
+                bullish_zone = max(bullish_below, key=lambda zone: zone["high"])
+
+        if bullish_zone:
+            bullish_low[index] = bullish_zone["low"]
+            bullish_high[index] = bullish_zone["high"]
+            in_bullish[index] = int(bullish_zone["low"] <= current_close <= bullish_zone["high"])
+            if in_bullish[index]:
+                bullish_distance[index] = 0.0
+            else:
+                bullish_distance[index] = ((current_close - bullish_zone["high"]) / current_close) * 100.0
+
+        bearish_zone = None
+        bearish_inside = [zone for zone in active_bearish if zone["low"] <= current_close <= zone["high"]]
+        if bearish_inside:
+            bearish_zone = min(bearish_inside, key=lambda zone: zone["low"])
+        else:
+            bearish_above = [zone for zone in active_bearish if zone["low"] >= current_close]
+            if bearish_above:
+                bearish_zone = min(bearish_above, key=lambda zone: zone["low"])
+
+        if bearish_zone:
+            bearish_low[index] = bearish_zone["low"]
+            bearish_high[index] = bearish_zone["high"]
+            in_bearish[index] = int(bearish_zone["low"] <= current_close <= bearish_zone["high"])
+            if in_bearish[index]:
+                bearish_distance[index] = 0.0
+            else:
+                bearish_distance[index] = ((bearish_zone["low"] - current_close) / current_close) * 100.0
+
+    annotated["BULLISH_FVG_LOW"] = bullish_low
+    annotated["BULLISH_FVG_HIGH"] = bullish_high
+    annotated["BULLISH_FVG_DISTANCE_PCT"] = bullish_distance
+    annotated["BEARISH_FVG_LOW"] = bearish_low
+    annotated["BEARISH_FVG_HIGH"] = bearish_high
+    annotated["BEARISH_FVG_DISTANCE_PCT"] = bearish_distance
+    annotated["IN_BULLISH_FVG"] = in_bullish
+    annotated["IN_BEARISH_FVG"] = in_bearish
+    return annotated
+
+
+def _annotate_range_zones(frame, window=12):
+    annotated = frame.copy()
+    columns = [
+        "RANGE_ZONE_LOW",
+        "RANGE_ZONE_HIGH",
+        "RANGE_ZONE_POSITION",
+        "RANGE_ZONE_WIDTH_PCT",
+        "RANGE_ZONE_TOUCH_SCORE",
+    ]
+    for column in columns:
+        annotated[column] = np.nan
+    annotated["RANGE_ZONE_ACTIVE"] = 0
+    annotated["RANGE_ZONE_BREAK"] = 0
+    annotated["IN_RANGE_ZONE"] = 0
+
+    if annotated.empty:
+        return annotated
+
+    range_high = annotated["High"].rolling(window, min_periods=6).max().shift(1)
+    range_low = annotated["Low"].rolling(window, min_periods=6).min().shift(1)
+    range_width = range_high - range_low
+    atr_reference = pd.to_numeric(annotated.get("ATR_14"), errors="coerce")
+    compression_ratio = pd.to_numeric(annotated.get("COMPRESSION_RATIO"), errors="coerce")
+    squeeze_on = pd.to_numeric(annotated.get("SQUEEZE_ON"), errors="coerce").fillna(0.0)
+    adx_values = pd.to_numeric(annotated.get("ADX_14"), errors="coerce")
+    width_atr = range_width / atr_reference.replace(0, np.nan)
+    tolerance = pd.Series(
+        np.maximum(range_width.fillna(0.0) * 0.18, atr_reference.fillna(0.0) * 0.18),
+        index=annotated.index,
+    )
+    lower_touch = (annotated["Low"].shift(1) <= (range_low + tolerance)).fillna(False)
+    upper_touch = (annotated["High"].shift(1) >= (range_high - tolerance)).fillna(False)
+    lower_touch_count = lower_touch.rolling(window, min_periods=6).sum()
+    upper_touch_count = upper_touch.rolling(window, min_periods=6).sum()
+    active_zone = (
+        range_width.notna()
+        & (range_width > 0.0)
+        & width_atr.between(0.9, 4.5)
+        & (lower_touch_count >= 2)
+        & (upper_touch_count >= 2)
+        & ((compression_ratio <= 0.90) | (squeeze_on >= 1.0) | (adx_values <= 22.0))
+    )
+    breakout_buffer = pd.Series(
+        np.maximum(atr_reference.fillna(0.0) * 0.08, annotated["Close"].abs().fillna(0.0) * 0.0002),
+        index=annotated.index,
+    )
+    prior_active_zone = active_zone.shift(1).fillna(False)
+    break_up = prior_active_zone & (annotated["Close"] > (range_high + breakout_buffer))
+    break_down = prior_active_zone & (annotated["Close"] < (range_low - breakout_buffer))
+    zone_context = active_zone | prior_active_zone | break_up | break_down
+    zone_position = ((annotated["Close"] - range_low) / range_width.replace(0, np.nan)).replace([np.inf, -np.inf], np.nan)
+
+    annotated["RANGE_ZONE_ACTIVE"] = active_zone.astype(int)
+    annotated.loc[break_up, "RANGE_ZONE_BREAK"] = 1
+    annotated.loc[break_down, "RANGE_ZONE_BREAK"] = -1
+    annotated["RANGE_ZONE_LOW"] = range_low.where(zone_context)
+    annotated["RANGE_ZONE_HIGH"] = range_high.where(zone_context)
+    annotated["RANGE_ZONE_POSITION"] = zone_position.where(zone_context)
+    annotated["RANGE_ZONE_WIDTH_PCT"] = (
+        range_width / annotated["Close"].replace(0, np.nan) * 100.0
+    ).where(zone_context)
+    annotated["RANGE_ZONE_TOUCH_SCORE"] = pd.concat([lower_touch_count, upper_touch_count], axis=1).min(axis=1).where(zone_context)
+    annotated["IN_RANGE_ZONE"] = (zone_context & zone_position.between(0.0, 1.0, inclusive="both")).astype(int)
+    return annotated
+
+
 def _annotate_rsi_divergence(frame, rsi_col="RSI_14", pivot_max_spacing=72):
     lows = pd.to_numeric(frame.get("Low"), errors="coerce").to_numpy(dtype=float)
     highs = pd.to_numeric(frame.get("High"), errors="coerce").to_numpy(dtype=float)
@@ -2996,6 +3649,9 @@ def _annotate_rsi_divergence(frame, rsi_col="RSI_14", pivot_max_spacing=72):
     bearish_series = pd.Series(bearish_strength, index=frame.index)
     frame["RSI_BULLISH_DIVERGENCE"] = (bullish_series.rolling(4, min_periods=1).max() > 0.0).astype(int)
     frame["RSI_BEARISH_DIVERGENCE"] = (bearish_series.rolling(4, min_periods=1).max() > 0.0).astype(int)
+    frame["RSI_DIVERGENCE_STRENGTH"] = (
+        bullish_series.rolling(3, min_periods=1).mean() - bearish_series.rolling(3, min_periods=1).mean()
+    ).fillna(0.0)
     return frame
 
 
@@ -3043,7 +3699,6 @@ def prepare_historical_features(df, params=None):
     frame["VOLUME_ZSCORE"] = ((frame["Volume"] - volume_mean) / volume_std).replace([np.inf, -np.inf], np.nan).fillna(0.0)
     frame["VOLUME_SPIKE"] = (frame["VOLUME_ZSCORE"] >= volume_spike_threshold).astype(int)
     frame = _annotate_rsi_divergence(frame, rsi_col="RSI_14")
-    frame = frame.drop(columns=["RSI_14"], errors="ignore")
 
     frame["EMA_TREND"] = _trend_series_from_close(frame["Close"], ema_short, ema_long)
 
@@ -3115,6 +3770,9 @@ def prepare_historical_features(df, params=None):
     frame = annotate_price_action(frame)
     frame = annotate_event_regime_features(frame)
     frame = _annotate_daily_pivot_levels(frame)
+    frame = _annotate_round_number_levels(frame)
+    frame = _annotate_fair_value_gaps(frame)
+    frame = _annotate_range_zones(frame)
     smooth_adx_center = float(strategy_params.get("smooth_adx_center", 20.0))
     smooth_adx_scale = float(strategy_params.get("smooth_adx_scale", 2.6))
     smooth_atr_center = float(strategy_params.get("smooth_atr_percent_center", 0.24))
@@ -3145,7 +3803,7 @@ def build_ta_payload_from_row(
     bar_ts = bar_dt.isoformat() if bar_dt else None
     bar_session_context = _build_session_context_from_datetime(bar_dt)
     current_session_context = _build_session_context_from_datetime(datetime.now(timezone.utc))
-    pivot_levels = _build_pivot_levels_from_sources(row, support_resistance=support_resistance)
+    support_resistance = support_resistance if isinstance(support_resistance, dict) else _build_support_resistance_from_row(row)
     event_risk_context = event_risk if isinstance(event_risk, dict) else {
         "active": bool(row.get("EVENT_ACTIVE", 0)),
     }
@@ -3155,6 +3813,7 @@ def build_ta_payload_from_row(
         "ema_trend": row.get("EMA_TREND", "Neutral"),
         "ema_20": round(float(row.get("EMA_20", 0.0)), 2),
         "ema_50": round(float(row.get("EMA_50", 0.0)), 2),
+        "rsi_14": round(float(row.get("RSI_14", 50.0)), 2),
         "volatility_regime": {
             "market_regime": row.get("MARKET_REGIME", "Range-Bound"),
             "adx_14": round(float(row.get("ADX_14", 0.0)), 2),
@@ -3177,9 +3836,7 @@ def build_ta_payload_from_row(
             "structure": row.get("PA_STRUCTURE", "Consolidating"),
             "latest_candle_pattern": row.get("CANDLE_PATTERN", "None"),
         },
-        "support_resistance": {
-            "pivot_levels": pivot_levels,
-        },
+        "support_resistance": support_resistance,
         "volume_analysis": {
             "cmf_14": round(float(row.get("CMF_14", 0.0)), 4),
             "obv_trend": "Rising" if row.get("OBV", 0.0) > row.get("OBV_PREV", row.get("OBV", 0.0)) else "Falling",
@@ -3190,6 +3847,9 @@ def build_ta_payload_from_row(
             "macdSignal": round(_safe_float(row.get("MACD_SIGNAL"), 0.0), 6),
             "macdHistogram": round(_safe_float(row.get("MACD_HIST"), 0.0), 6),
             "macdHistogramSlope": round(_safe_float(row.get("MACD_HIST_SLOPE"), 0.0), 6),
+            "rsiBullishDivergence": int(_safe_float(row.get("RSI_BULLISH_DIVERGENCE"), 0.0)),
+            "rsiBearishDivergence": int(_safe_float(row.get("RSI_BEARISH_DIVERGENCE"), 0.0)),
+            "rsiDivergenceStrength": round(_safe_float(row.get("RSI_DIVERGENCE_STRENGTH"), 0.0), 4),
             "volumeZScore": round(_safe_float(row.get("VOLUME_ZSCORE"), 0.0), 4),
             "volumeSpike": int(_safe_float(row.get("VOLUME_SPIKE"), 0.0)),
         },
@@ -3224,11 +3884,30 @@ def build_ta_payload_from_row(
             "distSessionVwapPct": round(_safe_float(row.get("DIST_SESSION_VWAP_PCT"), 0.0), 4),
             "recentSwingHigh": round(_safe_float(row.get("RECENT_SWING_HIGH_24"), 0.0), 2),
             "recentSwingLow": round(_safe_float(row.get("RECENT_SWING_LOW_24"), 0.0), 2),
-            "pivotPoint": pivot_levels["pp"],
-            "pivotResistance1": pivot_levels["r1"],
-            "pivotSupport1": pivot_levels["s1"],
-            "pivotResistance2": pivot_levels["r2"],
-            "pivotSupport2": pivot_levels["s2"],
+            "pivotPoint": _round_or_none(row.get("PIVOT_POINT")),
+            "pivotResistance1": _round_or_none(row.get("PIVOT_R1")),
+            "pivotSupport1": _round_or_none(row.get("PIVOT_S1")),
+            "pivotResistance2": _round_or_none(row.get("PIVOT_R2")),
+            "pivotSupport2": _round_or_none(row.get("PIVOT_S2")),
+            "roundNumberSupport": _round_or_none(row.get("ROUND_NUMBER_SUPPORT")),
+            "roundNumberResistance": _round_or_none(row.get("ROUND_NUMBER_RESISTANCE")),
+            "majorRoundNumberSupport": _round_or_none(row.get("MAJOR_ROUND_NUMBER_SUPPORT")),
+            "majorRoundNumberResistance": _round_or_none(row.get("MAJOR_ROUND_NUMBER_RESISTANCE")),
+            "roundNumberStep": _round_or_none(row.get("ROUND_NUMBER_STEP"), 2),
+            "roundSupportDistancePct": _round_or_none(row.get("ROUND_SUPPORT_DISTANCE_PCT"), 3),
+            "roundResistanceDistancePct": _round_or_none(row.get("ROUND_RESISTANCE_DISTANCE_PCT"), 3),
+            "bullishFvg": _serialize_zone(row.get("BULLISH_FVG_LOW"), row.get("BULLISH_FVG_HIGH"), label="Bullish FVG"),
+            "bearishFvg": _serialize_zone(row.get("BEARISH_FVG_LOW"), row.get("BEARISH_FVG_HIGH"), label="Bearish FVG"),
+            "bullishFvgDistancePct": _round_or_none(row.get("BULLISH_FVG_DISTANCE_PCT"), 3),
+            "bearishFvgDistancePct": _round_or_none(row.get("BEARISH_FVG_DISTANCE_PCT"), 3),
+            "inBullishFvg": bool(_coerce_signal_state(row.get("IN_BULLISH_FVG"))),
+            "inBearishFvg": bool(_coerce_signal_state(row.get("IN_BEARISH_FVG"))),
+            "rangeZone": _serialize_zone(row.get("RANGE_ZONE_LOW"), row.get("RANGE_ZONE_HIGH"), label="Range Zone"),
+            "rangeZoneActive": bool(_coerce_signal_state(row.get("RANGE_ZONE_ACTIVE"))),
+            "inRangeZone": bool(_coerce_signal_state(row.get("IN_RANGE_ZONE"))),
+            "rangeZoneBreak": _coerce_signal_state(row.get("RANGE_ZONE_BREAK")),
+            "rangeZonePosition": _round_or_none(row.get("RANGE_ZONE_POSITION"), 4),
+            "rangeZoneWidthPct": _round_or_none(row.get("RANGE_ZONE_WIDTH_PCT"), 3),
         },
         "volatility_features": {
             "realizedVol8": round(_safe_float(row.get("REALIZED_VOL_8"), 0.0), 6),

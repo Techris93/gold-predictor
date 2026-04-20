@@ -75,6 +75,7 @@ NOTIFY_EXIT_READS = _read_bool_env("NOTIFY_EXIT_READS", True)
 RR200_MAX_SIGNALS_PER_DAY = _read_int_env("RR200_MAX_SIGNALS_PER_DAY", 5, 1)
 RR200_MIN_SIGNAL_SPACING_SECONDS = _read_int_env("RR200_MIN_SIGNAL_SPACING_SECONDS", 2700, 0)
 PUSH_EXCLUDED_FIELDS = {
+    "rsi_14",
     "ema_20",
     "ema_50",
     "adx_14",
@@ -548,6 +549,42 @@ def _summarize_microstructure_context(ta_data):
     return _join_readable_list(parts)
 
 
+def _summarize_level_pressure(ta_data):
+    ta_data = ta_data if isinstance(ta_data, dict) else {}
+    support_resistance = (
+        ta_data.get("support_resistance")
+        if isinstance(ta_data.get("support_resistance"), dict)
+        else {}
+    )
+    nearby_supports = (
+        list(support_resistance.get("nearby_supports"))
+        if isinstance(support_resistance.get("nearby_supports"), list)
+        else []
+    )
+    nearby_resistances = (
+        list(support_resistance.get("nearby_resistances"))
+        if isinstance(support_resistance.get("nearby_resistances"), list)
+        else []
+    )
+    support_tone = int(
+        support_resistance.get("support_family_confluence")
+        or support_resistance.get("support_confluence")
+        or len(nearby_supports)
+        or 0
+    )
+    resistance_tone = int(
+        support_resistance.get("resistance_family_confluence")
+        or support_resistance.get("resistance_confluence")
+        or len(nearby_resistances)
+        or 0
+    )
+    if support_tone > resistance_tone:
+        return "support is closer and cleaner"
+    if resistance_tone > support_tone:
+        return "resistance is closer and cleaner"
+    return ""
+
+
 def _coerce_float(value, default=None):
     try:
         if value is None or value == "":
@@ -573,6 +610,52 @@ def _level_is_near(current_price, level_price, threshold_pct=0.08):
     if price <= 0.0 or level is None:
         return False
     return abs(price - level) / price * 100.0 <= threshold_pct + 1e-9
+
+
+def _zone_distance_pct(zone, current_price):
+    zone = zone if isinstance(zone, dict) else {}
+    price = _coerce_float(current_price, 0.0) or 0.0
+    low = _coerce_float(zone.get("low"), None)
+    high = _coerce_float(zone.get("high"), None)
+    if price <= 0.0 or low is None or high is None:
+        return None
+    zone_low = min(low, high)
+    zone_high = max(low, high)
+    if zone_low <= price <= zone_high:
+        return 0.0
+    if price < zone_low:
+        return (zone_low - price) / price * 100.0
+    return (price - zone_high) / price * 100.0
+
+
+def _levels_have_family(levels, families, max_distance_pct=None):
+    target_families = {str(family) for family in (families or set())}
+    for level in levels if isinstance(levels, list) else []:
+        if not isinstance(level, dict):
+            continue
+        family = str(level.get("family") or "")
+        if family not in target_families:
+            continue
+        distance_pct = _coerce_float(level.get("distance_pct"), None)
+        if max_distance_pct is None or (
+            distance_pct is not None and distance_pct <= max_distance_pct + 1e-9
+        ):
+            return True
+    return False
+
+
+def _nearest_level_distance_pct(levels, families=None):
+    candidates = []
+    target_families = {str(family) for family in (families or set())}
+    for level in levels if isinstance(levels, list) else []:
+        if not isinstance(level, dict):
+            continue
+        if target_families and str(level.get("family") or "") not in target_families:
+            continue
+        distance_pct = _coerce_float(level.get("distance_pct"), None)
+        if distance_pct is not None:
+            candidates.append(distance_pct)
+    return min(candidates) if candidates else None
 
 
 def _dedupe_preserve_order(items):
@@ -609,6 +692,11 @@ def _derive_dashboard_action(payload, ta_data=None):
         if isinstance(payload.get("TradeGuidance"), dict)
         else {}
     )
+    decision_status = (
+        payload.get("DecisionStatus")
+        if isinstance(payload.get("DecisionStatus"), dict)
+        else {}
+    )
     execution_permission = (
         payload.get("ExecutionPermission")
         if isinstance(payload.get("ExecutionPermission"), dict)
@@ -629,10 +717,11 @@ def _derive_dashboard_action(payload, ta_data=None):
         if isinstance(ta_data.get("structure_context"), dict)
         else {}
     )
-    support_resistance = ta_data.get("support_resistance")
-    support_resistance = support_resistance if isinstance(support_resistance, dict) else {}
-    pivot_levels = support_resistance.get("pivot_levels")
-    pivot_levels = pivot_levels if isinstance(pivot_levels, dict) else {}
+    support_resistance = (
+        ta_data.get("support_resistance")
+        if isinstance(ta_data.get("support_resistance"), dict)
+        else {}
+    )
 
     current_price = _coerce_float(ta_data.get("current_price"), 0.0) or 0.0
     structure = str(price_action.get("structure") or "Consolidating").strip()
@@ -646,6 +735,9 @@ def _derive_dashboard_action(payload, ta_data=None):
         or execution_state.get("actionState")
         or "WAIT"
     ).strip()
+    raw_action = str(
+        market_state.get("action") or execution_state.get("action") or "hold"
+    ).strip().lower()
     execution_status = str(execution_state.get("status") or "stand_aside").strip()
     permission_status = str(execution_permission.get("status") or "no_trade").strip()
     direction_bias = str(
@@ -655,7 +747,61 @@ def _derive_dashboard_action(payload, ta_data=None):
     ).strip()
     buy_level = str(trade_guidance.get("buyLevel") or "Weak").strip()
     sell_level = str(trade_guidance.get("sellLevel") or "Weak").strip()
+    exit_level = str(trade_guidance.get("exitLevel") or "Low").strip()
     summary = str(trade_guidance.get("summary") or "").strip()
+    sr_reaction = str(support_resistance.get("reaction") or "None").strip()
+
+    nearby_supports = (
+        list(support_resistance.get("nearby_supports"))
+        if isinstance(support_resistance.get("nearby_supports"), list)
+        else []
+    )
+    nearby_resistances = (
+        list(support_resistance.get("nearby_resistances"))
+        if isinstance(support_resistance.get("nearby_resistances"), list)
+        else []
+    )
+    support_tone = int(
+        support_resistance.get("support_family_confluence")
+        or support_resistance.get("support_confluence")
+        or len(nearby_supports)
+        or 0
+    )
+    resistance_tone = int(
+        support_resistance.get("resistance_family_confluence")
+        or support_resistance.get("resistance_confluence")
+        or len(nearby_resistances)
+        or 0
+    )
+    support_distance_pct = _coerce_float(
+        support_resistance.get("support_distance_pct"),
+        None,
+    )
+    resistance_distance_pct = _coerce_float(
+        support_resistance.get("resistance_distance_pct"),
+        None,
+    )
+
+    pivot_levels = (
+        support_resistance.get("pivot_levels")
+        if isinstance(support_resistance.get("pivot_levels"), dict)
+        else {}
+    )
+    round_numbers = (
+        support_resistance.get("round_numbers")
+        if isinstance(support_resistance.get("round_numbers"), dict)
+        else {}
+    )
+    active_fvgs = (
+        support_resistance.get("active_fvgs")
+        if isinstance(support_resistance.get("active_fvgs"), dict)
+        else {}
+    )
+    range_zone = (
+        support_resistance.get("range_zone")
+        if isinstance(support_resistance.get("range_zone"), dict)
+        else {}
+    )
 
     pivot_point = _coerce_float(
         _first_non_empty(
@@ -692,6 +838,75 @@ def _derive_dashboard_action(payload, ta_data=None):
         ),
         None,
     )
+    round_support = _coerce_float(
+        _first_non_empty(
+            structure_context.get("roundNumberSupport"),
+            round_numbers.get("support"),
+        ),
+        None,
+    )
+    round_resistance = _coerce_float(
+        _first_non_empty(
+            structure_context.get("roundNumberResistance"),
+            round_numbers.get("resistance"),
+        ),
+        None,
+    )
+    major_round_support = _coerce_float(
+        _first_non_empty(
+            structure_context.get("majorRoundNumberSupport"),
+            round_numbers.get("majorSupport"),
+        ),
+        None,
+    )
+    major_round_resistance = _coerce_float(
+        _first_non_empty(
+            structure_context.get("majorRoundNumberResistance"),
+            round_numbers.get("majorResistance"),
+        ),
+        None,
+    )
+    bullish_fvg = (
+        structure_context.get("bullishFvg")
+        if isinstance(structure_context.get("bullishFvg"), dict)
+        else active_fvgs.get("bullish")
+        if isinstance(active_fvgs.get("bullish"), dict)
+        else {}
+    )
+    bearish_fvg = (
+        structure_context.get("bearishFvg")
+        if isinstance(structure_context.get("bearishFvg"), dict)
+        else active_fvgs.get("bearish")
+        if isinstance(active_fvgs.get("bearish"), dict)
+        else {}
+    )
+    if not range_zone:
+        range_zone = (
+            structure_context.get("rangeZone")
+            if isinstance(structure_context.get("rangeZone"), dict)
+            else {}
+        )
+
+    bullish_fvg_distance_pct = _coerce_float(
+        _first_non_empty(
+            structure_context.get("bullishFvgDistancePct"),
+            _zone_distance_pct(bullish_fvg, current_price),
+        ),
+        None,
+    )
+    bearish_fvg_distance_pct = _coerce_float(
+        _first_non_empty(
+            structure_context.get("bearishFvgDistancePct"),
+            _zone_distance_pct(bearish_fvg, current_price),
+        ),
+        None,
+    )
+    in_bullish_fvg = bool(structure_context.get("inBullishFvg") or 0)
+    in_bearish_fvg = bool(structure_context.get("inBearishFvg") or 0)
+    range_zone_active = bool(structure_context.get("rangeZoneActive") or 0)
+    in_range_zone = bool(structure_context.get("inRangeZone") or 0)
+    range_zone_break = int(round(_coerce_float(structure_context.get("rangeZoneBreak"), 0.0) or 0.0))
+    range_zone_position = _coerce_float(structure_context.get("rangeZonePosition"), None)
 
     vwap_delta = _coerce_float(structure_context.get("distSessionVwapPct"), 0.0) or 0.0
     vwap_bias = _vwap_bias_label(vwap_delta)
@@ -719,6 +934,14 @@ def _derive_dashboard_action(payload, ta_data=None):
         )
     )
     consolidating = "Consolidating" in structure
+    bullish_reaction = sr_reaction in {
+        "Bullish Support Rejection",
+        "Bullish Breakout Through Resistance",
+    }
+    bearish_reaction = sr_reaction in {
+        "Bearish Resistance Rejection",
+        "Bearish Breakdown Through Support",
+    }
     event_direction = (
         breakout_bias
         if breakout_bias in {"Bullish", "Bearish"}
@@ -739,71 +962,184 @@ def _derive_dashboard_action(payload, ta_data=None):
         "Active Momentum Event",
     }
     hard_risk_regime = event_regime in {"panic_reversal", "event_risk"}
+    support_pressure = support_tone > resistance_tone
+    resistance_pressure = resistance_tone > support_tone
+    support_cluster_dense_near = bool(
+        support_tone >= 2
+        and support_distance_pct is not None
+        and support_distance_pct <= 0.08
+    )
+    resistance_cluster_dense_near = bool(
+        resistance_tone >= 2
+        and resistance_distance_pct is not None
+        and resistance_distance_pct <= 0.08
+    )
+    both_sides_tight = bool(
+        support_distance_pct is not None
+        and resistance_distance_pct is not None
+        and support_distance_pct <= 0.08
+        and resistance_distance_pct <= 0.08
+    )
 
-    bullish_pivot_context = bool(
+    pivot_or_round_support_near = _levels_have_family(
+        nearby_supports,
+        {"pivot", "round"},
+        max_distance_pct=0.10,
+    )
+    pivot_or_round_resistance_near = _levels_have_family(
+        nearby_resistances,
+        {"pivot", "round"},
+        max_distance_pct=0.10,
+    )
+    range_or_fvg_support_near = _levels_have_family(
+        nearby_supports,
+        {"range", "fvg"},
+        max_distance_pct=0.10,
+    )
+    range_or_fvg_resistance_near = _levels_have_family(
+        nearby_resistances,
+        {"range", "fvg"},
+        max_distance_pct=0.10,
+    )
+
+    bullish_pivot_round = bool(
         (pivot_point is not None and current_price >= pivot_point)
+        or (bullish_reaction and pivot_or_round_support_near)
         or _level_is_near(current_price, pivot_s1, threshold_pct=0.10)
-        or _level_is_near(current_price, pivot_s2, threshold_pct=0.10)
+        or _level_is_near(current_price, round_support, threshold_pct=0.10)
+        or _level_is_near(current_price, major_round_support, threshold_pct=0.10)
     )
-    bearish_pivot_context = bool(
+    bearish_pivot_round = bool(
         (pivot_point is not None and current_price <= pivot_point)
-        or _level_is_near(current_price, pivot_r1, threshold_pct=0.10)
-        or _level_is_near(current_price, pivot_r2, threshold_pct=0.10)
+        or (
+            bearish_reaction
+            and (
+                pivot_or_round_resistance_near
+                or _level_is_near(current_price, pivot_r1, threshold_pct=0.10)
+                or _level_is_near(current_price, round_resistance, threshold_pct=0.10)
+                or _level_is_near(current_price, major_round_resistance, threshold_pct=0.10)
+            )
+        )
     )
-    bullish_pivot_conflict = bool(
+    bullish_pivot_round_conflict = bool(
         (pivot_point is not None and current_price < pivot_point)
-        or _level_is_near(current_price, pivot_r1, threshold_pct=0.08)
+        or (
+            bearish_reaction
+            and (
+                pivot_or_round_resistance_near
+                or _level_is_near(current_price, pivot_r1, threshold_pct=0.10)
+                or _level_is_near(current_price, round_resistance, threshold_pct=0.10)
+                or _level_is_near(current_price, major_round_resistance, threshold_pct=0.10)
+            )
+        )
     )
-    bearish_pivot_conflict = bool(
+    bearish_pivot_round_conflict = bool(
         (pivot_point is not None and current_price > pivot_point)
-        or _level_is_near(current_price, pivot_s1, threshold_pct=0.08)
+        or (
+            bullish_reaction
+            and (
+                pivot_or_round_support_near
+                or _level_is_near(current_price, pivot_s1, threshold_pct=0.10)
+                or _level_is_near(current_price, round_support, threshold_pct=0.10)
+                or _level_is_near(current_price, major_round_support, threshold_pct=0.10)
+            )
+        )
+    )
+    bullish_fvg_range = bool(
+        in_bullish_fvg
+        or (
+            bullish_fvg_distance_pct is not None
+            and bullish_fvg_distance_pct <= 0.08
+        )
+        or range_zone_break > 0
+        or (
+            range_zone_active
+            and range_zone_position is not None
+            and range_zone_position <= 0.35
+        )
+        or (bullish_reaction and range_or_fvg_support_near)
+    )
+    bearish_fvg_range = bool(
+        in_bearish_fvg
+        or (
+            bearish_fvg_distance_pct is not None
+            and bearish_fvg_distance_pct <= 0.08
+        )
+        or range_zone_break < 0
+        or (
+            range_zone_active
+            and range_zone_position is not None
+            and range_zone_position >= 0.65
+        )
+        or (bearish_reaction and range_or_fvg_resistance_near)
+    )
+    no_fvg_edge = bool(
+        not bullish_fvg_range
+        and not bearish_fvg_range
+        and not range_zone_active
+        and not in_range_zone
     )
 
     bullish_variant = ""
-    if "Bullish Breakout" in structure and orb_state > 0:
+    if (
+        ("Bullish Breakout" in structure or sr_reaction == "Bullish Breakout Through Resistance")
+        and orb_state > 0
+    ):
         bullish_variant = "Bullish Breakout + ORB Bullish"
     elif (
         "Bullish Drift" in structure
         and vwap_bias in {"Mild Bullish", "Bullish"}
+        and sr_reaction == "Bullish Support Rejection"
     ):
-        bullish_variant = "Bullish Drift + bullish VWAP"
+        bullish_variant = "Bullish Drift + bullish VWAP + support rejection"
+    elif (
+        "Bullish Pressure in Range" in structure
+        and sr_reaction == "Bullish Support Rejection"
+        and range_zone_break > 0
+    ):
+        bullish_variant = "Bullish Pressure in Range + support hold + Bull Break"
     elif (
         warning_ladder == "Active Momentum Event"
         and breakout_bias == "Bullish"
-        and not bullish_pivot_conflict
+        and not resistance_cluster_dense_near
     ):
-        bullish_variant = "Active Momentum Event + bullish bias + pivots aligned"
+        bullish_variant = "Active Momentum Event + bullish bias + no nearby heavy resistance"
 
     bearish_variant = ""
-    if "Bearish Breakdown" in structure and orb_state < 0:
+    if (
+        ("Bearish Breakdown" in structure or sr_reaction == "Bearish Breakdown Through Support")
+        and orb_state < 0
+    ):
         bearish_variant = "Bearish Breakdown + ORB Bearish"
     elif (
         "Bearish Drift" in structure
         and vwap_bias in {"Mild Bearish", "Bearish"}
+        and sr_reaction == "Bearish Resistance Rejection"
     ):
-        bearish_variant = "Bearish Drift + bearish VWAP"
+        bearish_variant = "Bearish Drift + bearish VWAP + resistance rejection"
+    elif (
+        "Bearish Pressure in Range" in structure
+        and sr_reaction == "Bearish Resistance Rejection"
+        and range_zone_break < 0
+    ):
+        bearish_variant = "Bearish Pressure in Range + resistance hold + Bear Break"
     elif (
         warning_ladder == "Active Momentum Event"
         and breakout_bias == "Bearish"
-        and not bearish_pivot_conflict
+        and not support_cluster_dense_near
     ):
-        bearish_variant = "Active Momentum Event + bearish bias + pivots aligned"
+        bearish_variant = "Active Momentum Event + bearish bias + no nearby strong support"
 
     bullish_evidence = []
     bearish_evidence = []
-    micro_context = _summarize_microstructure_context(ta_data)
-    if bullish_structure:
-        bullish_evidence.append(structure)
-    if bearish_structure:
-        bearish_evidence.append(structure)
+    if bullish_structure or bullish_reaction:
+        bullish_evidence.append(structure if bullish_structure else sr_reaction)
+    if bearish_structure or bearish_reaction:
+        bearish_evidence.append(structure if bearish_structure else sr_reaction)
     if breakout_bias == "Bullish":
         bullish_evidence.append("breakout bias is bullish")
     elif breakout_bias == "Bearish":
         bearish_evidence.append("breakout bias is bearish")
-    elif direction_bias == "Bullish":
-        bullish_evidence.append("directional bias is bullish")
-    elif direction_bias == "Bearish":
-        bearish_evidence.append("directional bias is bearish")
     if directional_warning:
         if breakout_bias == "Bullish":
             bullish_evidence.append(warning_ladder)
@@ -814,13 +1150,21 @@ def _derive_dashboard_action(payload, ta_data=None):
     if bearish_event:
         bearish_evidence.append(f"event regime is {_humanize_words(event_regime)}")
     if micro_bull_count >= 1:
-        bullish_evidence.append(micro_context or "microstructure is bullish")
+        bullish_evidence.append(_summarize_microstructure_context(ta_data) or "microstructure is bullish")
     if micro_bear_count >= 1:
-        bearish_evidence.append(micro_context or "microstructure is bearish")
-    if bullish_pivot_context:
-        bullish_evidence.append("pivot levels support the long side")
-    if bearish_pivot_context:
-        bearish_evidence.append("pivot levels support the short side")
+        bearish_evidence.append(_summarize_microstructure_context(ta_data) or "microstructure is bearish")
+    if support_pressure:
+        bullish_evidence.append("support cluster is stronger than resistance")
+    if resistance_pressure:
+        bearish_evidence.append("resistance cluster is stronger than support")
+    if bullish_pivot_round:
+        bullish_evidence.append("pivot and round levels support the long side")
+    if bearish_pivot_round:
+        bearish_evidence.append("pivot and round levels support the short side")
+    if bullish_fvg_range:
+        bullish_evidence.append("bullish FVG or range-zone edge is active")
+    if bearish_fvg_range:
+        bearish_evidence.append("bearish FVG or range-zone edge is active")
 
     bullish_major_conflicts = []
     bearish_major_conflicts = []
@@ -842,20 +1186,46 @@ def _derive_dashboard_action(payload, ta_data=None):
     if bullish_structure and not bearish_structure:
         bearish_major_conflicts.append(f"price action is {structure.lower()}")
 
-    if micro_bear_count >= 2:
-        bullish_major_conflicts.append("microstructure has turned bearish")
-    if micro_bull_count >= 2:
-        bearish_major_conflicts.append("microstructure has turned bullish")
+    if bearish_reaction or micro_bear_count >= 2:
+        bullish_major_conflicts.append(
+            sr_reaction.lower() if bearish_reaction else "microstructure has turned bearish"
+        )
+    if bullish_reaction or micro_bull_count >= 2:
+        bearish_major_conflicts.append(
+            sr_reaction.lower() if bullish_reaction else "microstructure has turned bullish"
+        )
 
-    if bullish_pivot_conflict:
-        bullish_major_conflicts.append("price is below or pressing pivot resistance")
-    if bearish_pivot_conflict:
-        bearish_major_conflicts.append("price is above or pressing pivot support")
+    if resistance_cluster_dense_near or (
+        resistance_pressure
+        and resistance_distance_pct is not None
+        and resistance_distance_pct <= 0.10
+    ):
+        bullish_major_conflicts.append("dense nearby resistance is overhead")
+    if support_cluster_dense_near or (
+        support_pressure
+        and support_distance_pct is not None
+        and support_distance_pct <= 0.10
+    ):
+        bearish_major_conflicts.append("dense nearby support is underneath")
+
+    if bullish_pivot_round_conflict:
+        bullish_major_conflicts.append("price is below or rejecting pivot/round resistance")
+    if bearish_pivot_round_conflict:
+        bearish_major_conflicts.append("price is above or reclaiming pivot/round support")
+
+    if bearish_fvg_range:
+        bullish_major_conflicts.append("bearish FVG or range resistance is active")
+    if bullish_fvg_range:
+        bearish_major_conflicts.append("bullish FVG or range support is active")
 
     if cross_asset_bias == "Bearish":
         bullish_soft_conflicts.append("cross-asset context is bearish")
     elif cross_asset_bias == "Bullish":
         bearish_soft_conflicts.append("cross-asset context is bullish")
+
+    if both_sides_tight:
+        bullish_soft_conflicts.append("support and resistance are both very close")
+        bearish_soft_conflicts.append("support and resistance are both very close")
 
     if consolidating:
         bullish_soft_conflicts.append("price action is consolidating")
@@ -882,24 +1252,36 @@ def _derive_dashboard_action(payload, ta_data=None):
     if event_regime == "event_risk":
         long_exit_reasons.append("event risk is active")
         short_exit_reasons.append("event risk is active")
+    if active_long and sr_reaction == "Bearish Resistance Rejection":
+        long_exit_reasons.append("long position faces bearish resistance rejection")
+    if active_short and sr_reaction == "Bullish Support Rejection":
+        short_exit_reasons.append("short position faces bullish support rejection")
+    if active_long and resistance_cluster_dense_near:
+        long_exit_reasons.append("price has reached a dense nearby resistance cluster")
+    if active_short and support_cluster_dense_near:
+        short_exit_reasons.append("price has reached a dense nearby support cluster")
     if active_long and any(
         _level_is_near(current_price, level, threshold_pct=0.06)
-        for level in (pivot_r1, pivot_r2)
+        for level in (pivot_r1, pivot_r2, major_round_resistance)
     ):
-        long_exit_reasons.append("price is pressing into R1/R2 pivot resistance")
+        long_exit_reasons.append("price is pressing into R1/R2 or major round resistance")
     if active_short and any(
         _level_is_near(current_price, level, threshold_pct=0.06)
-        for level in (pivot_s1, pivot_s2)
+        for level in (pivot_s1, pivot_s2, major_round_support)
     ):
-        short_exit_reasons.append("price is pressing into S1/S2 pivot support")
+        short_exit_reasons.append("price is pressing into S1/S2 or major round support")
     if active_long and warning_ladder in {"Normal", "Expansion Watch"} and micro_bear_count >= 1:
         long_exit_reasons.append("follow-through has faded while risk conditions cooled")
     if active_short and warning_ladder in {"Normal", "Expansion Watch"} and micro_bull_count >= 1:
         short_exit_reasons.append("follow-through has faded while risk conditions cooled")
-    if active_long and consolidating and bullish_pivot_conflict:
-        long_exit_reasons.append("price has gone back to consolidation under pivot resistance")
-    if active_short and consolidating and bearish_pivot_conflict:
-        short_exit_reasons.append("price has gone back to consolidation above pivot support")
+    if active_long and consolidating and resistance_cluster_dense_near:
+        long_exit_reasons.append("price has gone back to consolidation near resistance")
+    if active_short and consolidating and support_cluster_dense_near:
+        short_exit_reasons.append("price has gone back to consolidation near support")
+    if active_long and in_bearish_fvg and bearish_reaction:
+        long_exit_reasons.append("opposing bearish FVG rejection is active")
+    if active_short and in_bullish_fvg and bullish_reaction:
+        short_exit_reasons.append("opposing bullish FVG rejection is active")
 
     long_exit_reasons = _dedupe_preserve_order(long_exit_reasons)
     short_exit_reasons = _dedupe_preserve_order(short_exit_reasons)
@@ -1149,7 +1531,7 @@ def _derive_dashboard_action(payload, ta_data=None):
             "bearish_soft_conflicts": bearish_soft_conflicts,
         }
 
-    if bullish_score and bearish_score:
+    if both_sides_tight or no_fvg_edge or (bullish_score and bearish_score):
         mixed_parts = []
         if bullish_evidence:
             mixed_parts.append(f"bullish: {_join_readable_list(bullish_evidence[:2])}")
@@ -1264,89 +1646,6 @@ def _align_dashboard_response_contract(payload):
     return payload
 
 
-def _sanitize_client_prediction_payload(payload):
-    if not isinstance(payload, dict):
-        return payload
-
-    sanitized = dict(payload)
-    ta_data = sanitized.get("TechnicalAnalysis")
-    if isinstance(ta_data, dict):
-        ta_sanitized = dict(ta_data)
-        ta_sanitized.pop("rsi_14", None)
-        ta_sanitized.pop("rsi_signal", None)
-        support_resistance = ta_sanitized.get("support_resistance")
-        structure_context = ta_sanitized.get("structure_context")
-
-        momentum_features = ta_sanitized.get("momentum_features")
-        if isinstance(momentum_features, dict):
-            sanitized_momentum_features = dict(momentum_features)
-            for key in (
-                "rsiBullishDivergence",
-                "rsiBearishDivergence",
-                "rsiDivergenceStrength",
-            ):
-                sanitized_momentum_features.pop(key, None)
-            ta_sanitized["momentum_features"] = sanitized_momentum_features
-
-        raw_pivot_levels = {}
-        if isinstance(support_resistance, dict):
-            raw_pivot_levels = support_resistance.get("pivot_levels")
-            if not isinstance(raw_pivot_levels, dict):
-                raw_pivot_levels = support_resistance.get("pivotLevels")
-        if not isinstance(raw_pivot_levels, dict):
-            raw_pivot_levels = {}
-
-        structure_context_map = dict(structure_context) if isinstance(structure_context, dict) else {}
-        pivot_levels = {
-            "pp": raw_pivot_levels.get("pp", structure_context_map.get("pivotPoint")),
-            "r1": raw_pivot_levels.get("r1", structure_context_map.get("pivotResistance1")),
-            "s1": raw_pivot_levels.get("s1", structure_context_map.get("pivotSupport1")),
-            "r2": raw_pivot_levels.get("r2", structure_context_map.get("pivotResistance2")),
-            "s2": raw_pivot_levels.get("s2", structure_context_map.get("pivotSupport2")),
-        }
-        ta_sanitized["support_resistance"] = {
-            "pivot_levels": pivot_levels,
-        }
-
-        ta_sanitized["structure_context"] = {
-            key: value
-            for key, value in {
-                "openingRangeBreak": structure_context_map.get("openingRangeBreak"),
-                "sweepReclaimSignal": structure_context_map.get("sweepReclaimSignal"),
-                "sweepReclaimQuality": structure_context_map.get("sweepReclaimQuality"),
-                "sessionVwap": structure_context_map.get("sessionVwap"),
-                "distSessionVwapPct": structure_context_map.get("distSessionVwapPct"),
-                "recentSwingHigh": structure_context_map.get("recentSwingHigh"),
-                "recentSwingLow": structure_context_map.get("recentSwingLow"),
-                "pivotPoint": pivot_levels["pp"],
-                "pivotResistance1": pivot_levels["r1"],
-                "pivotSupport1": pivot_levels["s1"],
-                "pivotResistance2": pivot_levels["r2"],
-                "pivotSupport2": pivot_levels["s2"],
-            }.items()
-            if value is not None
-        }
-
-        ta_sanitized.pop("_prediction_market_state", None)
-        sanitized["TechnicalAnalysis"] = ta_sanitized
-
-    for key in (
-        "TradeGuidance",
-        "MarketState",
-        "RR200Signal",
-        "RR200LiveCounter",
-        "DecisionStatus",
-        "ExecutionPermission",
-        "TradePlaybook",
-        "ForecastState",
-        "ExecutionState",
-        "DashboardAction",
-    ):
-        sanitized.pop(key, None)
-
-    return sanitized
-
-
 def _is_rr_signal_actionable(rr_signal):
     rr_signal = rr_signal if isinstance(rr_signal, dict) else {}
     status = str(rr_signal.get("status") or "").strip()
@@ -1364,6 +1663,12 @@ def _build_signal_notification(changes, rr_signal, market_structure, ta_data=Non
     title = _notification_title_for_changes(changes)
     body_lines = []
     dashboard_action = _derive_dashboard_action(payload, ta_data=ta_data)
+    dashboard_label = str(dashboard_action.get("label") or "").strip()
+    dashboard_reason = str(dashboard_action.get("reason") or "").strip()
+    if dashboard_label:
+        body_lines.append(f"Dashboard Label: {dashboard_label}")
+    if dashboard_reason:
+        body_lines.append(f"Label Basis: {dashboard_reason}")
     if "market_structure" in changed_keys:
         body_lines.append(f"Market Structure: {_format_market_structure_change(changes, market_structure)}")
 
@@ -1639,6 +1944,7 @@ def _is_material_change(changes):
         "micro_sweep_state",
     }
     numeric_thresholds = {
+        "rsi_14": 0.6,
         "ema_20": 0.25,
         "ema_50": 0.25,
         "adx_14": 0.4,
@@ -3103,17 +3409,18 @@ def _indicator_monitor_loop():
                         alert_message = alert_notification.get("body") or ""
 
                         if _monitor_state["clients"] > 0:
-                            client_payload = _sanitize_client_prediction_payload(payload)
                             socketio.emit(
                                 "indicator_change",
                                 {
                                     "message": alert_message,
                                     "title": alert_title,
-                                    "data": client_payload,
+                                    "data": payload,
                                     "changes": notification_changes,
                                     "snapshot": current_snapshot,
                                     "verdict": payload.get("verdict"),
                                     "confidence": payload.get("confidence"),
+                                    "decision_status": payload.get("DecisionStatus"),
+                                    "execution_permission": payload.get("ExecutionPermission"),
                                     "timestamp": now_ts,
                                 },
                             )
@@ -3430,7 +3737,7 @@ def get_autoresearch_latest():
 def get_prediction():
     try:
         payload, status_code = _build_prediction_response()
-        return jsonify(_sanitize_client_prediction_payload(payload)), status_code
+        return jsonify(payload), status_code
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 

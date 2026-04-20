@@ -68,6 +68,9 @@ DEFAULT_STRATEGY_PARAMS = {
     "range_pressure_weight": 0.0,
     "engulfing_weight": 1.0,
     "reversal_candle_weight": 0.6,
+    "rsi_extreme_weight": 1.5,
+    "rsi_warning_weight": 0.6,
+    "rsi_warning_band": 10,
     "verdict_margin_threshold": 1.2,
     "confidence_margin_multiplier": 8.0,
     "confidence_evidence_multiplier": 1.4,
@@ -505,6 +508,67 @@ def _event_risk_context(now_ts):
         "calendar_sparse": calendar_sparse,
         "now_utc": datetime.now(timezone.utc).isoformat(),
     }
+
+
+def _support_resistance_snapshot(df, latest, prev):
+    if df.empty:
+        return {
+            "nearest_support": None,
+            "nearest_resistance": None,
+            "support_distance_pct": None,
+            "resistance_distance_pct": None,
+            "reaction": "None",
+        }
+
+    latest_close = float(latest["Close"])
+    price_levels = []
+
+    by_day = df[["High", "Low"]].copy()
+    by_day["session_day"] = by_day.index.date
+    daily = by_day.groupby("session_day").agg({"High": "max", "Low": "min"})
+    if len(daily) >= 2:
+        previous_day = daily.iloc[-2]
+        price_levels.append(("Previous Day High", float(previous_day["High"]), "resistance"))
+        price_levels.append(("Previous Day Low", float(previous_day["Low"]), "support"))
+
+    lookback = df.iloc[-24:] if len(df) >= 24 else df
+    if not lookback.empty:
+        price_levels.append(("Recent Swing High", float(lookback["High"].max()), "resistance"))
+        price_levels.append(("Recent Swing Low", float(lookback["Low"].min()), "support"))
+
+    supports = [(name, value) for name, value, kind in price_levels if kind == "support" and value <= latest_close]
+    resistances = [(name, value) for name, value, kind in price_levels if kind == "resistance" and value >= latest_close]
+    nearest_support = max(supports, key=lambda item: item[1]) if supports else None
+    nearest_resistance = min(resistances, key=lambda item: item[1]) if resistances else None
+
+    support_distance_pct = ((latest_close - nearest_support[1]) / latest_close * 100.0) if nearest_support else None
+    resistance_distance_pct = ((nearest_resistance[1] - latest_close) / latest_close * 100.0) if nearest_resistance else None
+
+    reaction = "None"
+    candle_range = max(float(latest["High"] - latest["Low"]), 1e-8)
+    bullish_close = latest["Close"] > latest["Open"] and latest["Close"] > prev["Close"]
+    bearish_close = latest["Close"] < latest["Open"] and latest["Close"] < prev["Close"]
+
+    if nearest_support and support_distance_pct is not None and support_distance_pct <= 0.18 and bullish_close:
+        reaction = "Bullish Support Rejection"
+    elif nearest_resistance and resistance_distance_pct is not None and resistance_distance_pct <= 0.18 and bearish_close:
+        reaction = "Bearish Resistance Rejection"
+    elif candle_range > 0:
+        breakout_up = nearest_resistance and latest["Close"] > nearest_resistance[1] and latest["Close"] > latest["Open"]
+        breakout_down = nearest_support and latest["Close"] < nearest_support[1] and latest["Close"] < latest["Open"]
+        if breakout_up:
+            reaction = "Bullish Breakout Through Resistance"
+        elif breakout_down:
+            reaction = "Bearish Breakdown Through Support"
+
+    return {
+        "nearest_support": {"label": nearest_support[0], "price": round(nearest_support[1], 2)} if nearest_support else None,
+        "nearest_resistance": {"label": nearest_resistance[0], "price": round(nearest_resistance[1], 2)} if nearest_resistance else None,
+        "support_distance_pct": round(support_distance_pct, 3) if support_distance_pct is not None else None,
+        "resistance_distance_pct": round(resistance_distance_pct, 3) if resistance_distance_pct is not None else None,
+        "reaction": reaction,
+    }
+
 def _build_technical_analysis_from_frame(
     df,
     td_symbol,
@@ -532,12 +596,14 @@ def _build_technical_analysis_from_frame(
     active_strategy_params = get_active_strategy_params()
     ema_short = int(active_strategy_params.get("ema_short", 20))
     ema_long = int(active_strategy_params.get("ema_long", 50))
+    rsi_window = int(active_strategy_params.get("rsi_window", 14))
     atr_window = int(active_strategy_params.get("atr_window", 14))
     adx_window = int(active_strategy_params.get("adx_window", 14))
     cmf_window = int(active_strategy_params.get("cmf_window", 14))
 
     df['EMA_20'] = ta.trend.EMAIndicator(df['Close'], window=ema_short).ema_indicator()
     df['EMA_50'] = ta.trend.EMAIndicator(df['Close'], window=ema_long).ema_indicator()
+    df['RSI_14'] = ta.momentum.RSIIndicator(df['Close'], window=rsi_window).rsi()
     df['ATR_14'] = ta.volatility.AverageTrueRange(df['High'], df['Low'], df['Close'], window=atr_window).average_true_range()
     df['ADX_14'] = ta.trend.ADXIndicator(df['High'], df['Low'], df['Close'], window=adx_window).adx()
 
@@ -578,6 +644,14 @@ def _build_technical_analysis_from_frame(
     df.loc[(df["Close"] < df["EMA_20"]) & (df["EMA_20"] < df["EMA_50"]), "EMA_TREND"] = "Bearish"
     pa_structure, candle_pattern = classify_price_action(df, len(df) - 1)
 
+    rsi_overbought = float(active_strategy_params.get("rsi_overbought", 70))
+    rsi_oversold = float(active_strategy_params.get("rsi_oversold", 20))
+    rsi_signal = "Neutral"
+    if latest['RSI_14'] > rsi_overbought:
+        rsi_signal = "Overbought (Bearish bias)"
+    elif latest['RSI_14'] < rsi_oversold:
+        rsi_signal = "Oversold (Bullish bias)"
+
     cmf_strong_buy_threshold = float(active_strategy_params.get("cmf_strong_buy_threshold", 0.10))
     cmf_strong_sell_threshold = float(active_strategy_params.get("cmf_strong_sell_threshold", -0.10))
     volume_signal = "Neutral"
@@ -606,6 +680,8 @@ def _build_technical_analysis_from_frame(
         "execution_trend": ema_trend,
         "ema_20": round(latest['EMA_20'], 2),
         "ema_50": round(latest['EMA_50'], 2),
+        "rsi_14": round(latest['RSI_14'], 2),
+        "rsi_signal": rsi_signal,
         "volatility_regime": {
             "market_regime": market_regime,
             "adx_14": round(adx_14, 2),
@@ -629,6 +705,7 @@ def _build_technical_analysis_from_frame(
             "structure": pa_structure,
             "latest_candle_pattern": candle_pattern
         },
+        "support_resistance": _support_resistance_snapshot(df, latest, prev),
         "event_risk": _event_risk_context(int(time.time())),
         "volume_analysis": {
             "cmf_14": round(latest['CMF_14'], 4) if has_volume else "N/A",
@@ -670,64 +747,106 @@ def _normalize_ta_payload_schema(payload):
         return payload
 
     normalized = dict(payload)
-    normalized.pop("rsi_14", None)
-    normalized.pop("rsi_signal", None)
-
-    momentum_features = normalized.get("momentum_features")
-    if isinstance(momentum_features, dict):
-        sanitized_momentum_features = dict(momentum_features)
-        for key in (
-            "rsiBullishDivergence",
-            "rsiBearishDivergence",
-            "rsiDivergenceStrength",
-        ):
-            sanitized_momentum_features.pop(key, None)
-        normalized["momentum_features"] = sanitized_momentum_features
-
-    original_structure_context = normalized.get("structure_context")
-    if not isinstance(original_structure_context, dict):
-        original_structure_context = {}
-
     support_resistance = normalized.get("support_resistance")
     if not isinstance(support_resistance, dict):
         support_resistance = {}
     support_resistance = dict(support_resistance)
+    support_resistance.setdefault("nearest_support", None)
+    support_resistance.setdefault("nearest_resistance", None)
+    support_resistance.setdefault("support_distance_pct", None)
+    support_resistance.setdefault("resistance_distance_pct", None)
+    support_resistance.setdefault("reaction", "None")
+    support_resistance["nearby_supports"] = (
+        list(support_resistance.get("nearby_supports"))
+        if isinstance(support_resistance.get("nearby_supports"), list)
+        else []
+    )
+    support_resistance["nearby_resistances"] = (
+        list(support_resistance.get("nearby_resistances"))
+        if isinstance(support_resistance.get("nearby_resistances"), list)
+        else []
+    )
+    support_resistance["support_confluence"] = int(support_resistance.get("support_confluence") or 0)
+    support_resistance["resistance_confluence"] = int(support_resistance.get("resistance_confluence") or 0)
+    support_resistance["support_family_confluence"] = int(support_resistance.get("support_family_confluence") or 0)
+    support_resistance["resistance_family_confluence"] = int(support_resistance.get("resistance_family_confluence") or 0)
 
     pivot_levels = support_resistance.get("pivot_levels")
     if not isinstance(pivot_levels, dict):
         pivot_levels = support_resistance.get("pivotLevels")
     if not isinstance(pivot_levels, dict):
         pivot_levels = {}
-
-    pivot_levels = {
-        "pp": pivot_levels.get("pp", original_structure_context.get("pivotPoint")),
-        "r1": pivot_levels.get("r1", original_structure_context.get("pivotResistance1")),
-        "s1": pivot_levels.get("s1", original_structure_context.get("pivotSupport1")),
-        "r2": pivot_levels.get("r2", original_structure_context.get("pivotResistance2")),
-        "s2": pivot_levels.get("s2", original_structure_context.get("pivotSupport2")),
-    }
-    normalized["support_resistance"] = {
-        "pivot_levels": pivot_levels,
+    support_resistance["pivot_levels"] = {
+        "pp": pivot_levels.get("pp"),
+        "r1": pivot_levels.get("r1"),
+        "s1": pivot_levels.get("s1"),
+        "r2": pivot_levels.get("r2"),
+        "s2": pivot_levels.get("s2"),
     }
 
-    structure_context = {}
-    for key, default_value in {
-        "openingRangeBreak": original_structure_context.get("openingRangeBreak"),
-        "sweepReclaimSignal": original_structure_context.get("sweepReclaimSignal"),
-        "sweepReclaimQuality": original_structure_context.get("sweepReclaimQuality"),
-        "sessionVwap": original_structure_context.get("sessionVwap"),
-        "distSessionVwapPct": original_structure_context.get("distSessionVwapPct"),
-        "recentSwingHigh": original_structure_context.get("recentSwingHigh"),
-        "recentSwingLow": original_structure_context.get("recentSwingLow"),
-        "pivotPoint": pivot_levels["pp"],
-        "pivotResistance1": pivot_levels["r1"],
-        "pivotSupport1": pivot_levels["s1"],
-        "pivotResistance2": pivot_levels["r2"],
-        "pivotSupport2": pivot_levels["s2"],
-    }.items():
-        if default_value is not None:
-            structure_context[key] = default_value
+    round_numbers = support_resistance.get("round_numbers")
+    if not isinstance(round_numbers, dict):
+        round_numbers = support_resistance.get("roundNumbers")
+    if not isinstance(round_numbers, dict):
+        round_numbers = {}
+    support_resistance["round_numbers"] = {
+        "support": round_numbers.get("support"),
+        "resistance": round_numbers.get("resistance"),
+        "majorSupport": round_numbers.get("majorSupport"),
+        "majorResistance": round_numbers.get("majorResistance"),
+        "step": round_numbers.get("step"),
+    }
 
+    active_fvgs = support_resistance.get("active_fvgs")
+    if not isinstance(active_fvgs, dict):
+        active_fvgs = support_resistance.get("activeFvgs")
+    if not isinstance(active_fvgs, dict):
+        active_fvgs = {}
+    support_resistance["active_fvgs"] = {
+        "bullish": active_fvgs.get("bullish"),
+        "bearish": active_fvgs.get("bearish"),
+    }
+    support_resistance["range_zone"] = (
+        support_resistance.get("range_zone")
+        if isinstance(support_resistance.get("range_zone"), dict)
+        else support_resistance.get("rangeZone")
+        if isinstance(support_resistance.get("rangeZone"), dict)
+        else None
+    )
+    normalized["support_resistance"] = support_resistance
+
+    structure_context = normalized.get("structure_context")
+    if not isinstance(structure_context, dict):
+        structure_context = {}
+    structure_context = dict(structure_context)
+    structure_defaults = {
+        "pivotPoint": support_resistance["pivot_levels"]["pp"],
+        "pivotResistance1": support_resistance["pivot_levels"]["r1"],
+        "pivotSupport1": support_resistance["pivot_levels"]["s1"],
+        "pivotResistance2": support_resistance["pivot_levels"]["r2"],
+        "pivotSupport2": support_resistance["pivot_levels"]["s2"],
+        "roundNumberSupport": support_resistance["round_numbers"]["support"],
+        "roundNumberResistance": support_resistance["round_numbers"]["resistance"],
+        "majorRoundNumberSupport": support_resistance["round_numbers"]["majorSupport"],
+        "majorRoundNumberResistance": support_resistance["round_numbers"]["majorResistance"],
+        "roundNumberStep": support_resistance["round_numbers"]["step"],
+        "roundSupportDistancePct": structure_context.get("roundSupportDistancePct"),
+        "roundResistanceDistancePct": structure_context.get("roundResistanceDistancePct"),
+        "bullishFvg": support_resistance["active_fvgs"]["bullish"],
+        "bearishFvg": support_resistance["active_fvgs"]["bearish"],
+        "bullishFvgDistancePct": structure_context.get("bullishFvgDistancePct"),
+        "bearishFvgDistancePct": structure_context.get("bearishFvgDistancePct"),
+        "inBullishFvg": bool(structure_context.get("inBullishFvg") or 0),
+        "inBearishFvg": bool(structure_context.get("inBearishFvg") or 0),
+        "rangeZone": support_resistance["range_zone"],
+        "rangeZoneActive": bool(structure_context.get("rangeZoneActive") or 0),
+        "inRangeZone": bool(structure_context.get("inRangeZone") or 0),
+        "rangeZoneBreak": structure_context.get("rangeZoneBreak"),
+        "rangeZonePosition": structure_context.get("rangeZonePosition"),
+        "rangeZoneWidthPct": structure_context.get("rangeZoneWidthPct"),
+    }
+    for key, default_value in structure_defaults.items():
+        structure_context.setdefault(key, default_value)
     normalized["structure_context"] = structure_context
     return normalized
 
