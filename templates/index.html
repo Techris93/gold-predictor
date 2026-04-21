@@ -1116,7 +1116,7 @@
                 Background push: not enabled
               </div>
               <div class="socket-state status-pill" id="alert-policy-state">
-                Alerts: price action only
+                Alerts: structure + VWAP / ORB / sweep only
               </div>
             </div>
           </div>
@@ -2129,6 +2129,21 @@
         document.getElementById("verdict-badge").innerText = "ERROR";
         document.getElementById("verdict-badge").className = "badge bearish";
         document.getElementById("current-price").innerText = "---";
+        updatePreviewState(
+          "technical-preview",
+          "Refresh failed · technical preview may be stale",
+          "preview-watch",
+        );
+        updatePreviewState(
+          "guidance-preview",
+          "Refresh failed · guidance preview may be stale",
+          "preview-watch",
+        );
+        updatePreviewState(
+          "execution-preview",
+          "Refresh failed · execution preview may be stale",
+          "preview-watch",
+        );
 
         let sourceEl = document.getElementById("price-source");
         if (!sourceEl) {
