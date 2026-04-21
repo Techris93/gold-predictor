@@ -84,6 +84,7 @@ PUSH_EXCLUDED_FIELDS = {
     "adx_14",
     "atr_percent",
     "micro_vwap_band",
+    "execution_state",
 }
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -114,7 +115,6 @@ CHANGE_SUMMARY_ORDER = [
     "micro_sweep_state",
     "verdict",
     "confidence_bucket",
-    "execution_state",
 ]
 def _load_subscriptions():
     if not SUBSCRIPTIONS_FILE.exists():
@@ -324,7 +324,7 @@ def _should_suppress_duplicate_alert(alert_state, fingerprint, signal_class, now
 
 
 def _notification_title_for_changes(changes):
-    changed_keys = set((changes or {}).keys())
+    changed_keys = set(_filter_notification_changes(changes).keys())
     has_structure = "market_structure" in changed_keys
     has_warning = "warning_ladder" in changed_keys
     has_event_regime = "event_regime" in changed_keys
@@ -1886,6 +1886,7 @@ def _is_rr_signal_actionable(rr_signal):
 
 
 def _build_signal_notification(changes, rr_signal, market_structure, ta_data=None, payload=None):
+    changes = _filter_notification_changes(changes)
     changed_keys = set((changes or {}).keys())
     title = _notification_title_for_changes(changes)
     fingerprint = _notification_fingerprint(changes)
@@ -2140,7 +2141,6 @@ def _is_material_change(changes):
         "event_regime",
         "breakout_bias",
         "market_structure",
-        "execution_state",
         "micro_vwap_bias",
         "micro_orb_state",
         "micro_sweep_state",

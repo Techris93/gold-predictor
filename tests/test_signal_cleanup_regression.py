@@ -403,6 +403,40 @@ class DashboardPayloadContractTests(unittest.TestCase):
         self.assertNotIn("Decision:", notification["body"])
         self.assertNotIn("Checklist does not support a clean trade yet.", notification["body"])
 
+    def test_notification_filter_excludes_execution_state(self):
+        changes = {
+            "execution_state": {
+                "previous": "Watchlist Only",
+                "current": "No Trade",
+            },
+            "market_structure": {
+                "previous": "Bearish Drift",
+                "current": "Higher Highs / Higher Lows (Bullish Structure)",
+            },
+        }
+
+        filtered = app_module._filter_notification_changes(changes)
+
+        self.assertNotIn("execution_state", filtered)
+        self.assertIn("market_structure", filtered)
+
+    def test_execution_state_change_cannot_restore_old_alert_title(self):
+        notification = app_module._build_signal_notification(
+            {
+                "execution_state": {
+                    "previous": "Watchlist Only",
+                    "current": "No Trade",
+                },
+            },
+            {},
+            "Bearish Drift",
+            ta_data=_sample_ta_payload(),
+            payload={},
+        )
+
+        self.assertEqual(notification["title"], "XAUUSD Signal Changed")
+        self.assertNotEqual(notification["title"], "XAUUSD Execution State Changed")
+
     def test_notification_fingerprint_ignores_body_clock_drift(self):
         changes = {
             "execution_state": {
