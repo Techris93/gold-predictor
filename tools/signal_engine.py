@@ -1,6 +1,7 @@
 import json
 import math
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
+from functools import lru_cache
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -14,6 +15,13 @@ from tools.price_action import annotate_price_action, extract_price_action_featu
 FRANKFURT_TZ = ZoneInfo("Europe/Berlin")
 LONDON_TZ = ZoneInfo("Europe/London")
 NEW_YORK_TZ = ZoneInfo("America/New_York")
+CHICAGO_TZ = ZoneInfo("America/Chicago")
+XAU_SESSION_OPEN_HOUR_CT = 17
+XAU_SESSION_CLOSE_HOUR_CT = 16
+XAU_ROLLOVER_PAUSE_START_HOUR_CT = 16
+XAU_ROLLOVER_PAUSE_END_HOUR_CT = 17
+XAU_WEEKLY_SCHEDULE_UTC = "Sun 17:00 CT → Fri 16:00 CT · Daily pause 16:00-17:00 CT"
+XAU_HOLIDAY_SCHEDULE_SOURCE = "CME holiday schedule"
 
 
 DEFAULT_STRATEGY_PARAMS = {
@@ -377,10 +385,338 @@ def _format_utc_time_label(session_dt):
     return session_dt.astimezone(timezone.utc).strftime("%H:%M UTC")
 
 
+def _format_utc_day_time_label(session_dt):
+    if not isinstance(session_dt, datetime):
+        return None
+    return session_dt.astimezone(timezone.utc).strftime("%a %H:%M UTC")
+
+
+def _combine_chicago_datetime(local_date, hour=0, minute=0):
+    if not isinstance(local_date, date):
+        raise TypeError("local_date must be a date")
+    return datetime(
+        local_date.year,
+        local_date.month,
+        local_date.day,
+        hour,
+        minute,
+        tzinfo=CHICAGO_TZ,
+    )
+
+
+def _observed_weekday_holiday(local_date):
+    if not isinstance(local_date, date):
+        raise TypeError("local_date must be a date")
+    if local_date.weekday() == 5:
+        return local_date - timedelta(days=1)
+    if local_date.weekday() == 6:
+        return local_date + timedelta(days=1)
+    return local_date
+
+
+def _nth_weekday_of_month(year, month, weekday, occurrence):
+    first_day = date(year, month, 1)
+    offset = (weekday - first_day.weekday()) % 7
+    return first_day + timedelta(days=offset + ((occurrence - 1) * 7))
+
+
+def _last_weekday_of_month(year, month, weekday):
+    if month == 12:
+        next_month = date(year + 1, 1, 1)
+    else:
+        next_month = date(year, month + 1, 1)
+    last_day = next_month - timedelta(days=1)
+    offset = (last_day.weekday() - weekday) % 7
+    return last_day - timedelta(days=offset)
+
+
+def _calculate_easter_sunday(year):
+    # Anonymous Gregorian computus.
+    a = year % 19
+    b = year // 100
+    c = year % 100
+    d = b // 4
+    e = b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = ((19 * a) + b - d - g + 15) % 30
+    i = c // 4
+    k = c % 4
+    l = (32 + (2 * e) + (2 * i) - h - k) % 7
+    m = (a + (11 * h) + (22 * l)) // 451
+    month = (h + l - (7 * m) + 114) // 31
+    day = ((h + l - (7 * m) + 114) % 31) + 1
+    return date(year, month, day)
+
+
+@lru_cache(maxsize=32)
+def _build_xau_holiday_calendar(year):
+    calendar = {}
+
+    def _record(local_date, name, *, full_close=False):
+        if not isinstance(local_date, date):
+            return
+        existing = calendar.get(local_date)
+        if existing and existing.get("fullClose") and not full_close:
+            return
+        calendar[local_date] = {
+            "name": name,
+            "fullClose": bool(full_close),
+            "source": XAU_HOLIDAY_SCHEDULE_SOURCE,
+        }
+
+    good_friday = _calculate_easter_sunday(year) - timedelta(days=2)
+    new_years_day = _observed_weekday_holiday(date(year, 1, 1))
+    christmas_day = _observed_weekday_holiday(date(year, 12, 25))
+    mlk_day = _nth_weekday_of_month(year, 1, 0, 3)
+    presidents_day = _nth_weekday_of_month(year, 2, 0, 3)
+    memorial_day = _last_weekday_of_month(year, 5, 0)
+    juneteenth = _observed_weekday_holiday(date(year, 6, 19))
+    independence_day = _observed_weekday_holiday(date(year, 7, 4))
+    labor_day = _nth_weekday_of_month(year, 9, 0, 1)
+    thanksgiving_day = _nth_weekday_of_month(year, 11, 3, 4)
+    christmas_eve = date(year, 12, 24)
+    new_years_eve = date(year, 12, 31)
+
+    _record(good_friday, "Good Friday", full_close=True)
+    _record(new_years_day, "New Year's Day", full_close=True)
+    _record(christmas_day, "Christmas Day", full_close=True)
+
+    for local_date, name in (
+        (mlk_day, "Martin Luther King Jr. Day"),
+        (presidents_day, "Presidents Day"),
+        (memorial_day, "Memorial Day"),
+        (juneteenth, "Juneteenth"),
+        (independence_day, "Independence Day"),
+        (labor_day, "Labor Day"),
+        (thanksgiving_day, "Thanksgiving Day"),
+    ):
+        _record(local_date, name, full_close=False)
+
+    if christmas_eve.weekday() < 5:
+        _record(christmas_eve, "Christmas Eve", full_close=False)
+    if new_years_eve.weekday() < 5:
+        _record(new_years_eve, "New Year's Eve", full_close=False)
+
+    return calendar
+
+
+def _get_xau_holiday_context(local_date):
+    if not isinstance(local_date, date):
+        return {}
+    for year in (local_date.year - 1, local_date.year, local_date.year + 1):
+        context = _build_xau_holiday_calendar(year).get(local_date)
+        if context:
+            return dict(context)
+    return {}
+
+
+def _next_regular_xau_open(chicago_dt):
+    chicago_dt = (
+        chicago_dt.astimezone(CHICAGO_TZ)
+        if isinstance(chicago_dt, datetime)
+        else _combine_chicago_datetime(datetime.now(CHICAGO_TZ).date(), XAU_SESSION_OPEN_HOUR_CT, 0)
+    )
+    chicago_dt = chicago_dt.replace(second=0, microsecond=0)
+    weekday = chicago_dt.weekday()
+    current_minutes = (chicago_dt.hour * 60) + chicago_dt.minute
+    session_open_minutes = XAU_SESSION_OPEN_HOUR_CT * 60
+    session_close_minutes = XAU_SESSION_CLOSE_HOUR_CT * 60
+
+    if weekday == 6 and current_minutes < session_open_minutes:
+        next_open_date = chicago_dt.date()
+    elif weekday in {0, 1, 2, 3} and current_minutes < session_open_minutes:
+        next_open_date = chicago_dt.date()
+    elif weekday == 4:
+        next_open_date = chicago_dt.date() + timedelta(days=2)
+    elif weekday == 5:
+        next_open_date = chicago_dt.date() + timedelta(days=1)
+    else:
+        next_open_date = chicago_dt.date() + timedelta(days=1)
+
+    candidate = _combine_chicago_datetime(next_open_date, XAU_SESSION_OPEN_HOUR_CT, 0)
+    if weekday in {0, 1, 2, 3} and current_minutes < session_close_minutes:
+        candidate = _combine_chicago_datetime(chicago_dt.date(), XAU_SESSION_OPEN_HOUR_CT, 0)
+    if weekday in {0, 1, 2, 3} and current_minutes >= session_open_minutes:
+        candidate = _combine_chicago_datetime(chicago_dt.date() + timedelta(days=1), XAU_SESSION_OPEN_HOUR_CT, 0)
+    return candidate
+
+
+def _build_open_market_hours_context(holiday_context=None):
+    holiday_name = str((holiday_context or {}).get("name") or "").strip()
+    holiday_note = (
+        f"{holiday_name} holiday schedule in effect; session hours and liquidity may be reduced."
+        if holiday_name
+        else None
+    )
+    return {
+        "isMarketOpen": True,
+        "isMarketClosed": False,
+        "isWeekendClosed": False,
+        "isDailyRolloverPause": False,
+        "isHolidayClosed": False,
+        "isHolidaySchedule": bool(holiday_name),
+        "marketStatus": "holiday_schedule" if holiday_name else "open",
+        "marketStatusLabel": "Holiday Schedule" if holiday_name else "Market Open",
+        "closedReason": "",
+        "nextOpenUtc": None,
+        "nextOpenTimeDisplayUtc": None,
+        "lastCloseUtc": None,
+        "lastCloseTimeDisplayUtc": None,
+        "weeklyScheduleUtc": XAU_WEEKLY_SCHEDULE_UTC,
+        "holidayName": holiday_name or None,
+        "holidayScheduleNote": holiday_note,
+        "holidayScheduleSource": XAU_HOLIDAY_SCHEDULE_SOURCE if holiday_name else None,
+    }
+
+
+def _build_closed_market_hours_context(
+    *,
+    market_status,
+    market_status_label,
+    closed_reason,
+    next_open_dt,
+    last_close_dt,
+    holiday_context=None,
+    is_weekend_closed=False,
+    is_daily_rollover_pause=False,
+    is_holiday_closed=False,
+):
+    holiday_name = str((holiday_context or {}).get("name") or "").strip()
+    holiday_note = (
+        f"{holiday_name} holiday schedule in effect; session hours and liquidity may be reduced."
+        if holiday_name
+        else None
+    )
+    return {
+        "isMarketOpen": False,
+        "isMarketClosed": True,
+        "isWeekendClosed": bool(is_weekend_closed),
+        "isDailyRolloverPause": bool(is_daily_rollover_pause),
+        "isHolidayClosed": bool(is_holiday_closed),
+        "isHolidaySchedule": bool(holiday_name),
+        "marketStatus": market_status,
+        "marketStatusLabel": market_status_label,
+        "closedReason": closed_reason,
+        "nextOpenUtc": next_open_dt.astimezone(timezone.utc).isoformat() if isinstance(next_open_dt, datetime) else None,
+        "nextOpenTimeDisplayUtc": _format_utc_day_time_label(next_open_dt),
+        "lastCloseUtc": last_close_dt.astimezone(timezone.utc).isoformat() if isinstance(last_close_dt, datetime) else None,
+        "lastCloseTimeDisplayUtc": _format_utc_day_time_label(last_close_dt),
+        "weeklyScheduleUtc": XAU_WEEKLY_SCHEDULE_UTC,
+        "holidayName": holiday_name or None,
+        "holidayScheduleNote": holiday_note,
+        "holidayScheduleSource": XAU_HOLIDAY_SCHEDULE_SOURCE if holiday_name else None,
+    }
+
+
+def _build_market_hours_context(normalized_dt):
+    normalized_dt = _coerce_utc_datetime(normalized_dt) or datetime.now(timezone.utc)
+    chicago_dt = normalized_dt.astimezone(CHICAGO_TZ)
+    local_date = chicago_dt.date()
+    weekday = int(chicago_dt.weekday())
+    current_minutes = (chicago_dt.hour * 60) + chicago_dt.minute
+    rollover_start_minutes = XAU_ROLLOVER_PAUSE_START_HOUR_CT * 60
+    rollover_end_minutes = XAU_ROLLOVER_PAUSE_END_HOUR_CT * 60
+    session_close_minutes = XAU_SESSION_CLOSE_HOUR_CT * 60
+    session_open_minutes = XAU_SESSION_OPEN_HOUR_CT * 60
+    current_holiday = _get_xau_holiday_context(local_date)
+    next_day_holiday = _get_xau_holiday_context(local_date + timedelta(days=1))
+
+    if current_holiday.get("fullClose"):
+        holiday_reopen_dt = _next_regular_xau_open(_combine_chicago_datetime(local_date, 0, 0))
+        if chicago_dt < holiday_reopen_dt:
+            return _build_closed_market_hours_context(
+                market_status="holiday_closed",
+                market_status_label=f"Holiday Closed ({current_holiday['name']})",
+                closed_reason=f"XAUUSD market is closed for {current_holiday['name']}.",
+                next_open_dt=holiday_reopen_dt,
+                last_close_dt=_combine_chicago_datetime(local_date, 0, 0),
+                holiday_context=current_holiday,
+                is_holiday_closed=True,
+            )
+
+    is_weekend_closed = (
+        (weekday == 4 and current_minutes >= session_close_minutes)
+        or weekday == 5
+        or (weekday == 6 and current_minutes < session_open_minutes)
+    )
+    if is_weekend_closed:
+        if weekday == 4:
+            last_close_dt = _combine_chicago_datetime(local_date, XAU_SESSION_CLOSE_HOUR_CT, 0)
+            next_open_dt = _combine_chicago_datetime(local_date + timedelta(days=2), XAU_SESSION_OPEN_HOUR_CT, 0)
+        elif weekday == 5:
+            last_close_dt = _combine_chicago_datetime(local_date - timedelta(days=1), XAU_SESSION_CLOSE_HOUR_CT, 0)
+            next_open_dt = _combine_chicago_datetime(local_date + timedelta(days=1), XAU_SESSION_OPEN_HOUR_CT, 0)
+        else:
+            last_close_dt = _combine_chicago_datetime(local_date - timedelta(days=2), XAU_SESSION_CLOSE_HOUR_CT, 0)
+            next_open_dt = _combine_chicago_datetime(local_date, XAU_SESSION_OPEN_HOUR_CT, 0)
+        return _build_closed_market_hours_context(
+            market_status="weekend_closed",
+            market_status_label="Weekend Closed",
+            closed_reason="XAUUSD market is closed for the weekend.",
+            next_open_dt=next_open_dt,
+            last_close_dt=last_close_dt,
+            holiday_context=current_holiday,
+            is_weekend_closed=True,
+        )
+
+    in_rollover_pause = (
+        weekday in {0, 1, 2, 3}
+        and rollover_start_minutes <= current_minutes < rollover_end_minutes
+    )
+    if in_rollover_pause:
+        if next_day_holiday.get("fullClose"):
+            holiday_reopen_dt = _next_regular_xau_open(
+                _combine_chicago_datetime(local_date + timedelta(days=1), 0, 0)
+            )
+            return _build_closed_market_hours_context(
+                market_status="holiday_closed",
+                market_status_label=f"Holiday Closed ({next_day_holiday['name']})",
+                closed_reason=f"XAUUSD market is closed ahead of {next_day_holiday['name']}.",
+                next_open_dt=holiday_reopen_dt,
+                last_close_dt=_combine_chicago_datetime(local_date, XAU_ROLLOVER_PAUSE_START_HOUR_CT, 0),
+                holiday_context=next_day_holiday,
+                is_holiday_closed=True,
+            )
+        return _build_closed_market_hours_context(
+            market_status="rollover_pause",
+            market_status_label="Daily Rollover Pause",
+            closed_reason="XAUUSD market is in the daily rollover pause.",
+            next_open_dt=_combine_chicago_datetime(local_date, XAU_SESSION_OPEN_HOUR_CT, 0),
+            last_close_dt=_combine_chicago_datetime(local_date, XAU_ROLLOVER_PAUSE_START_HOUR_CT, 0),
+            holiday_context=current_holiday,
+            is_daily_rollover_pause=True,
+        )
+
+    return _build_open_market_hours_context(current_holiday)
+
+
 def _build_session_context_from_datetime(session_dt):
     normalized_dt = _coerce_utc_datetime(session_dt) or datetime.now(timezone.utc)
     hour = int(normalized_dt.hour)
     minute = int(normalized_dt.minute)
+    market_hours = _build_market_hours_context(normalized_dt)
+    if market_hours["isMarketClosed"]:
+        return {
+            "label": market_hours["marketStatusLabel"],
+            "hour": hour,
+            "minute": minute,
+            "quality": 0.0,
+            "isSydneyOpen": False,
+            "isTokyoOpen": False,
+            "isAsiaOpen": False,
+            "isFrankfurtOpen": False,
+            "isLondonOpen": False,
+            "isNewYorkOpen": False,
+            "isComexOpen": False,
+            "isFixWindow": False,
+            "isOverlap": False,
+            "timestampUtc": normalized_dt.isoformat(),
+            "timeDisplayUtc": _format_utc_time_label(normalized_dt),
+            "timezone": "UTC",
+            **market_hours,
+        }
+
     london_dt = normalized_dt.astimezone(LONDON_TZ)
     frankfurt_dt = normalized_dt.astimezone(FRANKFURT_TZ)
     new_york_dt = normalized_dt.astimezone(NEW_YORK_TZ)
@@ -460,6 +796,7 @@ def _build_session_context_from_datetime(session_dt):
         "timestampUtc": normalized_dt.isoformat(),
         "timeDisplayUtc": _format_utc_time_label(normalized_dt),
         "timezone": "UTC",
+        **market_hours,
     }
 
 
@@ -468,8 +805,21 @@ def _resolve_bar_datetime(ta_data):
     return _coerce_utc_datetime(bar_ts) or datetime.now(timezone.utc)
 
 
-def _build_session_context(ta_data):
-    return _build_session_context_from_datetime(_resolve_bar_datetime(ta_data))
+def _build_session_context(ta_data, basis="current"):
+    ta_data = ta_data if isinstance(ta_data, dict) else {}
+    session = ta_data.get("session_context") if isinstance(ta_data.get("session_context"), dict) else {}
+    if basis == "bar":
+        source_dt = _coerce_utc_datetime(
+            session.get("barTimestampUtc")
+            or ((session.get("bar_session") or {}).get("timestampUtc") if isinstance(session.get("bar_session"), dict) else None)
+            or ta_data.get("bar_timestamp_utc")
+        ) or _resolve_bar_datetime(ta_data)
+    else:
+        source_dt = _coerce_utc_datetime(
+            session.get("currentTimestampUtc")
+            or ((session.get("current_session") or {}).get("timestampUtc") if isinstance(session.get("current_session"), dict) else None)
+        ) or datetime.now(timezone.utc)
+    return _build_session_context_from_datetime(source_dt)
 
 
 def _alignment_quality_score(alignment_score, alignment_label):
@@ -1914,6 +2264,7 @@ def compute_prediction_from_ta(ta_data):
     )
     support_resistance = ta_data.get("support_resistance", {}) if isinstance(ta_data.get("support_resistance"), dict) else {}
     event_risk = ta_data.get("event_risk", {}) if isinstance(ta_data.get("event_risk"), dict) else {}
+    current_session_context = _build_session_context(ta_data, basis="current")
     trend_base_weight = float(strategy_params.get("trend_base_weight", 2.5))
     alignment_weight = float(strategy_params.get("alignment_weight", 1.2))
     trend_regime_bonus = float(strategy_params.get("trend_regime_bonus", 1.0))
@@ -1973,6 +2324,20 @@ def compute_prediction_from_ta(ta_data):
     bear_trigger = 0.0
     no_trade_reasons = []
     hard_no_trade_reasons = []
+    market_closed_now = bool(current_session_context.get("isMarketClosed", False))
+    market_reopen_text = str(
+        current_session_context.get("nextOpenTimeDisplayUtc")
+        or current_session_context.get("nextOpenUtc")
+        or ""
+    ).strip()
+    if market_closed_now:
+        close_message = str(
+            current_session_context.get("closedReason")
+            or "XAUUSD market is currently closed."
+        ).strip()
+        if market_reopen_text:
+            close_message = f"{close_message} Reopens {market_reopen_text}."
+        hard_no_trade_reasons.append(close_message)
 
     if trend == "Bullish":
         bull_setup += trend_base_weight
@@ -2810,7 +3175,7 @@ def compute_prediction_from_ta(ta_data):
             trade_guidance["summary"] = "Short setup confirmed with acceptable tradeability."
     elif action_state == "EXIT_RISK":
         trade_guidance["summary"] = "Exit risk is elevated; the active directional state is deteriorating."
-    elif action_state == "WAIT" and directional_bias in {"Bullish", "Bearish"}:
+    elif action_state == "WAIT" and directional_bias in {"Bullish", "Bearish"} and not market_closed_now:
         blockers = []
         if tradeability_label == "Low":
             blockers.append("tradeability is low")
@@ -2841,13 +3206,23 @@ def compute_prediction_from_ta(ta_data):
             or breakout_one_atr_probability < breakout_setup_one_atr_probability_floor
         )
     )
-    if late_breakout_chase:
+    if late_breakout_chase and not market_closed_now:
         trade_guidance["summary"] = (
             f"{directional_bias} breakout is already extended; do not chase here. "
             "Wait for a pullback, reset, or fresh H1 confirmation."
         )
 
-    if warning_ladder == "Expansion Watch":
+    if market_closed_now:
+        trade_guidance["buyLevel"] = "Weak"
+        trade_guidance["sellLevel"] = "Weak"
+        trade_guidance["summary"] = (
+            f"{current_session_context.get('closedReason') or 'XAUUSD market is currently closed.'} "
+            f"No new entries should be evaluated until {market_reopen_text}."
+            if market_reopen_text
+            else f"{current_session_context.get('closedReason') or 'XAUUSD market is currently closed.'} "
+            "No new entries should be evaluated until the next active session."
+        )
+    elif warning_ladder == "Expansion Watch":
         trade_guidance["summary"] += " Expansion watch is active."
     elif warning_ladder == "High Breakout Risk":
         trade_guidance["summary"] += " High breakout risk is building."
@@ -3612,6 +3987,22 @@ def build_ta_payload_from_row(
             "currentLabel": current_session_context.get("label", "Off"),
             "currentTimestampUtc": current_session_context.get("timestampUtc"),
             "currentTimeDisplayUtc": current_session_context.get("timeDisplayUtc"),
+            "marketStatus": current_session_context.get("marketStatus", "open"),
+            "marketStatusLabel": current_session_context.get("marketStatusLabel", "Market Open"),
+            "isMarketClosed": bool(current_session_context.get("isMarketClosed", False)),
+            "isWeekendClosed": bool(current_session_context.get("isWeekendClosed", False)),
+            "isDailyRolloverPause": bool(current_session_context.get("isDailyRolloverPause", False)),
+            "isHolidayClosed": bool(current_session_context.get("isHolidayClosed", False)),
+            "isHolidaySchedule": bool(current_session_context.get("isHolidaySchedule", False)),
+            "closedReason": current_session_context.get("closedReason"),
+            "nextOpenUtc": current_session_context.get("nextOpenUtc"),
+            "nextOpenTimeDisplayUtc": current_session_context.get("nextOpenTimeDisplayUtc"),
+            "lastCloseUtc": current_session_context.get("lastCloseUtc"),
+            "lastCloseTimeDisplayUtc": current_session_context.get("lastCloseTimeDisplayUtc"),
+            "weeklyScheduleUtc": current_session_context.get("weeklyScheduleUtc"),
+            "holidayName": current_session_context.get("holidayName"),
+            "holidayScheduleNote": current_session_context.get("holidayScheduleNote"),
+            "holidayScheduleSource": current_session_context.get("holidayScheduleSource"),
             "bar_session": bar_session_context,
             "current_session": current_session_context,
         },

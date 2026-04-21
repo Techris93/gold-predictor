@@ -19,6 +19,8 @@ self.addEventListener("push", (event) => {
     body: data.body || "Market signal changed",
     icon: "/static/favicon.png",
     badge: "/static/favicon.png",
+    tag: data.tag || "xauusd-alert",
+    renotify: false,
     data: {
       url: data.url || "/",
     },

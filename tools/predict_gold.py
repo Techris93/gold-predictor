@@ -204,18 +204,78 @@ def _attach_freshness_metadata(result, df, now_ts):
     freshness_limit_seconds = max(_interval_seconds(TECHNICAL_BASE_INTERVAL) + 120, int(_interval_seconds(TECHNICAL_BASE_INTERVAL) * 1.35))
     result["bar_age_seconds"] = bar_age_seconds
     result["freshness_limit_seconds"] = freshness_limit_seconds
+    session = result.get("session_context") if isinstance(result.get("session_context"), dict) else {}
+    current_session = session.get("current_session") if isinstance(session.get("current_session"), dict) else {}
+    market_closed = bool(current_session.get("isMarketClosed") or session.get("isMarketClosed"))
+    is_rollover_pause = bool(
+        current_session.get("isDailyRolloverPause")
+        or session.get("isDailyRolloverPause")
+    )
+    is_holiday_closed = bool(
+        current_session.get("isHolidayClosed")
+        or session.get("isHolidayClosed")
+    )
+    is_holiday_schedule = bool(
+        current_session.get("isHolidaySchedule")
+        or session.get("isHolidaySchedule")
+    )
+    next_open_utc = current_session.get("nextOpenUtc") or session.get("nextOpenUtc")
+    next_open_display = current_session.get("nextOpenTimeDisplayUtc") or session.get("nextOpenTimeDisplayUtc")
+    closed_reason = str(
+        current_session.get("closedReason")
+        or session.get("closedReason")
+        or ""
+    ).strip()
+    result["market_closed"] = market_closed
+    result["market_is_daily_rollover_pause"] = is_rollover_pause
+    result["market_is_holiday_closed"] = is_holiday_closed
+    result["market_is_holiday_schedule"] = is_holiday_schedule
+    result["market_status"] = str(
+        current_session.get("marketStatus")
+        or session.get("marketStatus")
+        or ("closed" if market_closed else "open")
+    )
+    result["market_status_label"] = str(
+        current_session.get("marketStatusLabel")
+        or session.get("marketStatusLabel")
+        or ("Market Closed" if market_closed else "Market Open")
+    )
+    result["market_closed_reason"] = closed_reason or None
+    result["market_next_open_utc"] = next_open_utc
+    result["market_next_open_display_utc"] = next_open_display
+    result["market_holiday_name"] = (
+        current_session.get("holidayName")
+        or session.get("holidayName")
+        or None
+    )
+    result["market_holiday_schedule_note"] = (
+        current_session.get("holidayScheduleNote")
+        or session.get("holidayScheduleNote")
+        or None
+    )
 
     if bar_age_seconds is None or bar_age_seconds > freshness_limit_seconds:
         result["stale_data"] = True
+        stale_warning = (
+            (
+                f"{closed_reason} Reopens {next_open_display or next_open_utc}."
+                if (next_open_display or next_open_utc)
+                else (closed_reason or "XAUUSD market is currently closed.")
+            )
+            if market_closed
+            else f"Latest {TECHNICAL_BASE_INTERVAL.upper()} bar is {bar_age_seconds if bar_age_seconds is not None else 'unknown'}s old."
+        )
         result["data_warning"] = _merge_data_warning(
             result.get("data_warning"),
-            f"Latest {TECHNICAL_BASE_INTERVAL.upper()} bar is {bar_age_seconds if bar_age_seconds is not None else 'unknown'}s old.",
+            stale_warning,
         )
         if "Real-Time" in str(result.get("data_source") or ""):
             result["data_source"] = "Twelve Data (Delayed Series)"
 
     live_tick_age_seconds = result.get("live_price_tick_age_seconds")
     if (
+        not market_closed
+        and
         result.get("live_price_applied")
         and isinstance(live_tick_age_seconds, int)
         and live_tick_age_seconds > LIVE_PRICE_HARD_STALE_SECONDS

@@ -9,7 +9,10 @@ import app as app_module
 from tools import predict_gold
 from tools.event_regime import compute_event_regime_snapshot
 from tools.predict_gold import _normalize_ta_payload_schema
-from tools.signal_engine import build_ta_payload_from_row
+from tools.signal_engine import (
+    _build_session_context_from_datetime,
+    build_ta_payload_from_row,
+)
 
 
 def _sample_row():
@@ -93,6 +96,10 @@ def _sample_row():
 
 def _sample_ta_payload():
     payload = build_ta_payload_from_row(_sample_row())
+    current_session = _build_session_context_from_datetime(
+        pd.Timestamp("2026-04-21T12:00:00Z")
+    )
+    _apply_current_session(payload, current_session)
     payload["support_resistance"]["nearest_support"] = {
         "label": "Previous Day Low",
         "price": 4833.88,
@@ -104,7 +111,75 @@ def _sample_ta_payload():
     return payload
 
 
+def _apply_current_session(payload, current_session):
+    payload["session_context"]["current_session"] = current_session
+    payload["session_context"]["currentLabel"] = current_session["label"]
+    payload["session_context"]["currentTimestampUtc"] = current_session["timestampUtc"]
+    payload["session_context"]["currentTimeDisplayUtc"] = current_session["timeDisplayUtc"]
+    payload["session_context"]["marketStatus"] = current_session["marketStatus"]
+    payload["session_context"]["marketStatusLabel"] = current_session["marketStatusLabel"]
+    payload["session_context"]["isMarketClosed"] = current_session["isMarketClosed"]
+    payload["session_context"]["isWeekendClosed"] = current_session["isWeekendClosed"]
+    payload["session_context"]["isDailyRolloverPause"] = current_session["isDailyRolloverPause"]
+    payload["session_context"]["isHolidayClosed"] = current_session["isHolidayClosed"]
+    payload["session_context"]["isHolidaySchedule"] = current_session["isHolidaySchedule"]
+    payload["session_context"]["closedReason"] = current_session["closedReason"]
+    payload["session_context"]["nextOpenUtc"] = current_session["nextOpenUtc"]
+    payload["session_context"]["nextOpenTimeDisplayUtc"] = current_session["nextOpenTimeDisplayUtc"]
+    payload["session_context"]["lastCloseUtc"] = current_session["lastCloseUtc"]
+    payload["session_context"]["lastCloseTimeDisplayUtc"] = current_session["lastCloseTimeDisplayUtc"]
+    payload["session_context"]["weeklyScheduleUtc"] = current_session["weeklyScheduleUtc"]
+    payload["session_context"]["holidayName"] = current_session["holidayName"]
+    payload["session_context"]["holidayScheduleNote"] = current_session["holidayScheduleNote"]
+    payload["session_context"]["holidayScheduleSource"] = current_session["holidayScheduleSource"]
+    return payload
+
+
 class DashboardPayloadContractTests(unittest.TestCase):
+    def test_session_context_marks_weekend_closed_and_next_open(self):
+        weekend_session = _build_session_context_from_datetime(
+            pd.Timestamp("2026-04-25T12:00:00Z")
+        )
+
+        self.assertTrue(weekend_session["isMarketClosed"])
+        self.assertTrue(weekend_session["isWeekendClosed"])
+        self.assertEqual(weekend_session["label"], "Weekend Closed")
+        self.assertEqual(weekend_session["nextOpenTimeDisplayUtc"], "Sun 22:00 UTC")
+        self.assertEqual(weekend_session["marketStatus"], "weekend_closed")
+
+    def test_session_context_marks_rollover_pause_and_next_open(self):
+        rollover_session = _build_session_context_from_datetime(
+            pd.Timestamp("2026-04-21T21:30:00Z")
+        )
+
+        self.assertTrue(rollover_session["isMarketClosed"])
+        self.assertTrue(rollover_session["isDailyRolloverPause"])
+        self.assertEqual(rollover_session["label"], "Daily Rollover Pause")
+        self.assertEqual(rollover_session["nextOpenTimeDisplayUtc"], "Tue 22:00 UTC")
+        self.assertEqual(rollover_session["marketStatus"], "rollover_pause")
+
+    def test_session_context_marks_good_friday_holiday_close(self):
+        holiday_session = _build_session_context_from_datetime(
+            pd.Timestamp("2026-04-03T12:00:00Z")
+        )
+
+        self.assertTrue(holiday_session["isMarketClosed"])
+        self.assertTrue(holiday_session["isHolidayClosed"])
+        self.assertTrue(holiday_session["isHolidaySchedule"])
+        self.assertEqual(holiday_session["holidayName"], "Good Friday")
+        self.assertEqual(holiday_session["marketStatus"], "holiday_closed")
+        self.assertEqual(holiday_session["nextOpenTimeDisplayUtc"], "Sun 22:00 UTC")
+
+    def test_session_context_marks_memorial_day_holiday_schedule(self):
+        holiday_schedule_session = _build_session_context_from_datetime(
+            pd.Timestamp("2026-05-25T14:00:00Z")
+        )
+
+        self.assertFalse(holiday_schedule_session["isMarketClosed"])
+        self.assertTrue(holiday_schedule_session["isHolidaySchedule"])
+        self.assertEqual(holiday_schedule_session["holidayName"], "Memorial Day")
+        self.assertEqual(holiday_schedule_session["marketStatus"], "holiday_schedule")
+
     def test_decision_status_uses_execution_state_for_active_short(self):
         ta = _sample_ta_payload()
         trade_guidance = {
@@ -177,6 +252,56 @@ class DashboardPayloadContractTests(unittest.TestCase):
         self.assertEqual(decision["status"], "wait")
         self.assertIn("execution is blocked because the market regime is range", decision["text"])
         self.assertNotIn("tradeability is still low", decision["text"])
+
+    def test_decision_status_stands_aside_when_market_is_weekend_closed(self):
+        ta = _sample_ta_payload()
+        closed_session = _build_session_context_from_datetime(
+            pd.Timestamp("2026-04-25T12:00:00Z")
+        )
+        _apply_current_session(ta, closed_session)
+
+        decision = app_module._evaluate_decision_status(
+            verdict="Bearish",
+            confidence=66,
+            ta_data=ta,
+            trade_guidance={
+                "summary": "Short setup confirmed with acceptable tradeability.",
+                "buyLevel": "Weak",
+                "sellLevel": "Strong",
+                "exitLevel": "Low",
+            },
+            execution_state={},
+        )
+
+        self.assertEqual(decision["status"], "wait")
+        self.assertTrue(decision["marketClosed"])
+        self.assertIn("closed for the weekend", decision["text"])
+        self.assertIn("Sun 22:00 UTC", decision["text"])
+
+    def test_decision_status_stands_aside_when_market_is_rollover_paused(self):
+        ta = _sample_ta_payload()
+        rollover_session = _build_session_context_from_datetime(
+            pd.Timestamp("2026-04-21T21:30:00Z")
+        )
+        _apply_current_session(ta, rollover_session)
+
+        decision = app_module._evaluate_decision_status(
+            verdict="Bearish",
+            confidence=66,
+            ta_data=ta,
+            trade_guidance={
+                "summary": "Short setup confirmed with acceptable tradeability.",
+                "buyLevel": "Weak",
+                "sellLevel": "Strong",
+                "exitLevel": "Low",
+            },
+            execution_state={},
+        )
+
+        self.assertEqual(decision["status"], "wait")
+        self.assertTrue(decision["marketClosed"])
+        self.assertIn("daily rollover pause", decision["text"].lower())
+        self.assertIn("Tue 22:00 UTC", decision["text"])
 
     def test_build_ta_payload_from_row_keeps_core_context(self):
         payload = build_ta_payload_from_row(_sample_row())
@@ -277,6 +402,106 @@ class DashboardPayloadContractTests(unittest.TestCase):
         self.assertNotIn("Execution State:", notification["body"])
         self.assertNotIn("Decision:", notification["body"])
         self.assertNotIn("Checklist does not support a clean trade yet.", notification["body"])
+
+    def test_notification_fingerprint_ignores_body_clock_drift(self):
+        changes = {
+            "execution_state": {
+                "previous": "Watchlist Only",
+                "current": "No Trade",
+            },
+        }
+
+        first = app_module._build_signal_notification(
+            changes,
+            {},
+            "Bearish Drift",
+            ta_data=_sample_ta_payload(),
+            payload={},
+        )
+        second = app_module._build_signal_notification(
+            changes,
+            {},
+            "Bearish Drift",
+            ta_data=_sample_ta_payload(),
+            payload={},
+        )
+
+        self.assertEqual(
+            first["notification_fingerprint"],
+            second["notification_fingerprint"],
+        )
+        self.assertEqual(first["notification_tag"], second["notification_tag"])
+
+    def test_duplicate_alert_suppression_uses_fingerprint_and_class_cooldown(self):
+        fingerprint = app_module._notification_fingerprint(
+            {
+                "warning_ladder": {
+                    "previous": "Expansion Watch",
+                    "current": "High Breakout Risk",
+                },
+            }
+        )
+        alert_state = {
+            "last_alert_ts": 1000,
+            "last_alert_fingerprint": fingerprint,
+            "last_context_alert_ts": 1000,
+            "last_context_alert_fingerprint": fingerprint,
+        }
+
+        self.assertTrue(
+            app_module._should_suppress_duplicate_alert(
+                alert_state,
+                fingerprint,
+                "context",
+                1000 + min(app_module.ALERT_COOLDOWN_SECONDS, app_module.ALERT_CONTEXT_COOLDOWN_SECONDS) - 1,
+            )
+        )
+        self.assertFalse(
+            app_module._should_suppress_duplicate_alert(
+                alert_state,
+                "different-fingerprint",
+                "context",
+                1001,
+            )
+        )
+
+    def test_bar_session_formatter_reports_weekend_closure(self):
+        ta = _sample_ta_payload()
+        closed_session = _build_session_context_from_datetime(
+            pd.Timestamp("2026-04-25T12:00:00Z")
+        )
+        _apply_current_session(ta, closed_session)
+
+        summary = app_module._format_bar_session_microstructure(ta)
+
+        self.assertIn("Weekend Closed", summary)
+        self.assertIn("Reopens Sun 22:00 UTC", summary)
+        self.assertIn("Microstructure is frozen until reopen", summary)
+
+    def test_bar_session_formatter_reports_rollover_pause(self):
+        ta = _sample_ta_payload()
+        rollover_session = _build_session_context_from_datetime(
+            pd.Timestamp("2026-04-21T21:30:00Z")
+        )
+        _apply_current_session(ta, rollover_session)
+
+        summary = app_module._format_bar_session_microstructure(ta)
+
+        self.assertIn("Daily Rollover Pause", summary)
+        self.assertIn("Reopens Tue 22:00 UTC", summary)
+        self.assertIn("Microstructure is frozen until reopen", summary)
+
+    def test_bar_session_formatter_appends_holiday_schedule_when_open(self):
+        ta = _sample_ta_payload()
+        holiday_schedule_session = _build_session_context_from_datetime(
+            pd.Timestamp("2026-05-25T14:00:00Z")
+        )
+        _apply_current_session(ta, holiday_schedule_session)
+
+        summary = app_module._format_bar_session_microstructure(ta)
+
+        self.assertIn("Holiday schedule Memorial Day", summary)
+        self.assertNotIn("frozen until reopen", summary)
 
     def test_normalize_ta_payload_schema_keeps_pivots_and_microstructure(self):
         normalized = _normalize_ta_payload_schema(_sample_ta_payload())

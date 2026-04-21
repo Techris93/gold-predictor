@@ -1108,7 +1108,7 @@
               <span class="metric-value compact" id="rs-session">---</span>
             </div>
             <div class="metric-row">
-              <span class="metric-label">Daily Pivots</span>
+              <span class="metric-label">Prior-Day Pivots (UTC)</span>
               <span class="metric-value compact" id="rs-pivots">---</span>
             </div>
             <div class="metric-row">
@@ -1524,6 +1524,10 @@
       let pendingIndicatorPayload = null;
       let viewportSyncBound = false;
       const ALERTS_ENABLED_STORAGE_KEY = "gold_predictor_push_enabled";
+      const UI_NOTIFICATION_DEDUPE_WINDOW_MS = 15 * 60 * 1000;
+      let backgroundPushEnabled = hasPersistedPushEnable();
+      let lastUiNotificationKey = "";
+      let lastUiNotificationAt = 0;
 
       function syncViewportHeight() {
         const visualHeight =
@@ -1563,6 +1567,7 @@
       }
 
       function markPushAlertsEnabled(enabled) {
+        backgroundPushEnabled = Boolean(enabled);
         try {
           if (enabled) {
             window.localStorage.setItem(ALERTS_ENABLED_STORAGE_KEY, "1");
@@ -1829,6 +1834,21 @@
       let priceFlashTimer = null;
       let suppressNextUiChangeNotification = false;
 
+      function shouldSuppressUiNotification(key) {
+        const normalizedKey = String(key || "").trim();
+        const now = Date.now();
+        if (
+          normalizedKey &&
+          lastUiNotificationKey === normalizedKey &&
+          now - lastUiNotificationAt < UI_NOTIFICATION_DEDUPE_WINDOW_MS
+        ) {
+          return true;
+        }
+        lastUiNotificationKey = normalizedKey;
+        lastUiNotificationAt = now;
+        return false;
+      }
+
       function _flushQueuedIndicatorPayload() {
         if (predictionRequestInFlight || !pendingIndicatorPayload) return;
         const queuedPayload = pendingIndicatorPayload;
@@ -1842,12 +1862,28 @@
           typeof payload?.message === "string" && payload.message.trim()
             ? payload.message
             : summarizeChanges(payload?.changes || {});
+        const notificationTag = String(
+          payload?.notification_tag || `${title}|${body}`,
+        ).trim();
+        const suppressDuplicateUiAlert = shouldSuppressUiNotification(
+          notificationTag,
+        );
 
-        showPushToast(title, body);
+        if (!suppressDuplicateUiAlert) {
+          showPushToast(title, body);
+        }
 
-        if ("Notification" in window && Notification.permission === "granted") {
+        if (
+          !suppressDuplicateUiAlert &&
+          !backgroundPushEnabled &&
+          document.visibilityState !== "visible" &&
+          "Notification" in window &&
+          Notification.permission === "granted"
+        ) {
           new Notification(title, {
             body,
+            tag: notificationTag || "xauusd-alert",
+            renotify: false,
           });
         }
 
@@ -1939,10 +1975,33 @@
       function formatMarketDataStatus(ta) {
         if (!ta || typeof ta !== "object") return "Market data status unknown";
 
+        const marketSession = getCurrentMarketSessionState(ta);
         const updatedAt =
           typeof ta.last_updated_at === "number" && ta.last_updated_at > 0
             ? new Date(ta.last_updated_at * 1000).toLocaleTimeString()
             : null;
+        const baseInterval = ta.base_interval
+          ? ` · Base ${String(ta.base_interval).toUpperCase()}`
+          : "";
+
+        if (marketSession.isMarketClosed) {
+          const closedLead = String(
+            marketSession.closedReason || "XAUUSD market is currently closed.",
+          ).replace(/[.\s]+$/, "");
+          const nextOpenText = marketSession.nextOpenText
+            ? ` · Reopens ${marketSession.nextOpenText}`
+            : "";
+          const lastBarText = marketSession.barTimeText
+            ? ` · Last bar ${marketSession.barLabel} ${marketSession.barTimeText}`
+            : "";
+          const updatedText = updatedAt ? ` · Updated ${updatedAt}` : "";
+          return `${closedLead}${baseInterval}${nextOpenText}${lastBarText}${updatedText}`;
+        }
+
+        if (marketSession.isHolidaySchedule && marketSession.holidayName) {
+          const updatedText = updatedAt ? ` · Updated ${updatedAt}` : "";
+          return `${ta.data_source || "Market data available"}${baseInterval} · Holiday schedule ${marketSession.holidayName}${updatedText}`;
+        }
 
         if (ta.stale_data) {
           const base = ta.data_warning
@@ -1951,12 +2010,96 @@
           return updatedAt ? `${base} Last fresh update: ${updatedAt}` : base;
         }
 
-        const baseInterval = ta.base_interval
-          ? ` · Base ${String(ta.base_interval).toUpperCase()}`
-          : "";
         return updatedAt
           ? `${ta.data_source}${baseInterval} · Updated ${updatedAt}`
           : `${ta.data_source || "Market data available"}${baseInterval}`;
+      }
+
+      function getCurrentMarketSessionState(ta) {
+        const session =
+          ta && ta.session_context && typeof ta.session_context === "object"
+            ? ta.session_context
+            : {};
+        const barSession =
+          session.bar_session && typeof session.bar_session === "object"
+            ? session.bar_session
+            : {};
+        const currentSession =
+          session.current_session &&
+          typeof session.current_session === "object"
+            ? session.current_session
+            : {};
+        const barTimestampUtc =
+          barSession.timestampUtc || session.barTimestampUtc || ta?.bar_timestamp_utc;
+        const isMarketClosed = Boolean(
+          currentSession.isMarketClosed ??
+            session.isMarketClosed ??
+            ta?.market_closed,
+        );
+        const isHolidaySchedule = Boolean(
+          currentSession.isHolidaySchedule ??
+            session.isHolidaySchedule ??
+            ta?.market_is_holiday_schedule,
+        );
+        return {
+          session,
+          barSession,
+          currentSession,
+          isMarketClosed,
+          isHolidaySchedule,
+          marketStatus:
+            currentSession.marketStatus ||
+            session.marketStatus ||
+            ta?.market_status ||
+            (isMarketClosed ? "closed" : "open"),
+          marketStatusLabel:
+            currentSession.marketStatusLabel ||
+            session.marketStatusLabel ||
+            ta?.market_status_label ||
+            (isMarketClosed ? "Market Closed" : "Market Open"),
+          currentLabel:
+            session.currentLabel ||
+            currentSession.label ||
+            (isMarketClosed
+              ? currentSession.marketStatusLabel ||
+                session.marketStatusLabel ||
+                "Market Closed"
+              : getUtcSessionLabel(new Date())),
+          currentTimeText:
+            session.currentTimeDisplayUtc ||
+            currentSession.timeDisplayUtc ||
+            formatUtcTimeShort(new Date()),
+          barLabel:
+            session.label ||
+            barSession.label ||
+            getUtcSessionLabel(barTimestampUtc),
+          barTimeText:
+            session.barTimeDisplayUtc ||
+            barSession.timeDisplayUtc ||
+            formatUtcTimeShort(barTimestampUtc),
+          nextOpenText:
+            currentSession.nextOpenTimeDisplayUtc ||
+            session.nextOpenTimeDisplayUtc ||
+            ta?.market_next_open_display_utc ||
+            currentSession.nextOpenUtc ||
+            ta?.market_next_open_utc ||
+            "",
+          closedReason:
+            currentSession.closedReason ||
+            session.closedReason ||
+            ta?.market_closed_reason ||
+            "XAUUSD market is currently closed.",
+          holidayName:
+            currentSession.holidayName ||
+            session.holidayName ||
+            ta?.market_holiday_name ||
+            "",
+          holidayNote:
+            currentSession.holidayScheduleNote ||
+            session.holidayScheduleNote ||
+            ta?.market_holiday_schedule_note ||
+            "",
+        };
       }
 
       function updateSocketState(text, isGood) {
@@ -2610,6 +2753,7 @@
         pivotResistance2,
         pivotSupport2,
       ) {
+        const refreshNote = "Pivots reset at 00:00 UTC";
         const price = Number(currentPrice);
         const levels = [
           pivotPoint,
@@ -2630,36 +2774,36 @@
 
         if (price < lowestPivot) {
           return {
-            text: "Price below prior-day pivot complex",
+            text: `Price below prior-day pivot complex · ${refreshNote}`,
             tone: "value-bearish",
           };
         }
         if (price > highestPivot) {
           return {
-            text: "Price above prior-day pivot complex",
+            text: `Price above prior-day pivot complex · ${refreshNote}`,
             tone: "value-bullish",
           };
         }
         if (Number.isFinite(pp)) {
           if (price < pp) {
             return {
-              text: "Price below PP, inside prior-day pivot band",
+              text: `Price below PP, inside prior-day pivot band · ${refreshNote}`,
               tone: "value-bearish",
             };
           }
           if (price > pp) {
             return {
-              text: "Price above PP, inside prior-day pivot band",
+              text: `Price above PP, inside prior-day pivot band · ${refreshNote}`,
               tone: "value-bullish",
             };
           }
           return {
-            text: "Price sitting on PP",
+            text: `Price sitting on PP · ${refreshNote}`,
             tone: "value-watch",
           };
         }
         return {
-          text: "Price inside prior-day pivot band",
+          text: `Price inside prior-day pivot band · ${refreshNote}`,
           tone: "",
         };
       }
@@ -2858,12 +3002,15 @@
           sourceEl.style.marginBottom = "1rem";
           priceEl.after(sourceEl);
         }
+        const marketSessionState = getCurrentMarketSessionState(ta);
         sourceEl.innerText = formatMarketDataStatus(ta);
-        sourceEl.style.color = ta.stale_data
-          ? "var(--bearish)"
-          : dataSourceText.includes("Real-Time")
-            ? "var(--accent-strong)"
-            : "var(--text-muted)";
+        sourceEl.style.color = marketSessionState.isMarketClosed || marketSessionState.isHolidaySchedule
+          ? "var(--text-muted)"
+          : ta.stale_data
+            ? "var(--bearish)"
+            : dataSourceText.includes("Real-Time")
+              ? "var(--accent-strong)"
+              : "var(--text-muted)";
 
         const badge = document.getElementById("verdict-badge");
         badge.innerText = verdict;
@@ -3050,36 +3197,9 @@
         );
         const sessionContextEl = document.getElementById("rs-session");
         if (sessionContextEl) {
-          const session = ta.session_context || {};
-          const barSession =
-            session.bar_session && typeof session.bar_session === "object"
-              ? session.bar_session
-              : {};
-          const barTimestampUtc =
-            barSession.timestampUtc ||
-            session.barTimestampUtc ||
-            ta.bar_timestamp_utc;
-          const currentSession =
-            session.current_session &&
-            typeof session.current_session === "object"
-              ? session.current_session
-              : {};
-          const barLabel =
-            session.label ||
-            barSession.label ||
-            getUtcSessionLabel(barTimestampUtc);
-          const barTimeText =
-            session.barTimeDisplayUtc ||
-            barSession.timeDisplayUtc ||
-            formatUtcTimeShort(barTimestampUtc);
-          const currentLabel =
-            session.currentLabel ||
-            currentSession.label ||
-            getUtcSessionLabel(new Date());
-          const currentTimeText =
-            session.currentTimeDisplayUtc ||
-            currentSession.timeDisplayUtc ||
-            formatUtcTimeShort(new Date());
+          const marketSession = getCurrentMarketSessionState(ta);
+          const { barLabel, barTimeText, currentLabel, currentTimeText } =
+            marketSession;
           const vwapDelta = Number(structureContext.distSessionVwapPct || 0);
           const vwapBiasText = getVwapBiasLabel(vwapDelta);
           const orbState = getRoundedSignalState(
@@ -3092,13 +3212,25 @@
           const sweepLabel = getSweepStateLabel(sweepState);
           const sweepText =
             sweepState === 0 ? "No Sweep" : `Sweep ${sweepLabel}`;
-          sessionContextEl.innerText = `Bar ${barLabel} ${barTimeText} · Now ${currentLabel} ${currentTimeText} · VWAP ${vwapDelta.toFixed(2)}% ${vwapBiasText} · ${orbText} · ${sweepText}`;
-          const microstructureTone = getMicrostructureTone(
-            vwapDelta,
-            orbState,
-            sweepState,
-          );
-          sessionContextEl.className = `metric-value compact ${microstructureTone > 0 ? "value-bullish" : microstructureTone < 0 ? "value-bearish" : ""}`;
+          if (marketSession.isMarketClosed) {
+            const nextOpenText = marketSession.nextOpenText
+              ? ` · Reopens ${marketSession.nextOpenText}`
+              : "";
+            sessionContextEl.innerText = `Last bar ${barLabel} ${barTimeText} · Now ${currentLabel} ${currentTimeText}${nextOpenText} · Microstructure frozen until reopen`;
+            sessionContextEl.className = "metric-value compact value-watch";
+          } else {
+            const holidayText =
+              marketSession.isHolidaySchedule && marketSession.holidayName
+                ? ` · Holiday schedule ${marketSession.holidayName}`
+                : "";
+            sessionContextEl.innerText = `Bar ${barLabel} ${barTimeText} · Now ${currentLabel} ${currentTimeText} · VWAP ${vwapDelta.toFixed(2)}% ${vwapBiasText} · ${orbText} · ${sweepText}${holidayText}`;
+            const microstructureTone = getMicrostructureTone(
+              vwapDelta,
+              orbState,
+              sweepState,
+            );
+            sessionContextEl.className = `metric-value compact ${microstructureTone > 0 ? "value-bullish" : microstructureTone < 0 ? "value-bearish" : ""}`;
+          }
         }
         if (regimePivotsEl || regimePivotContextEl) {
           const pivotPoint = getFirstDefinedValue(

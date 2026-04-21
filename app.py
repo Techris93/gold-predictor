@@ -1,6 +1,7 @@
 from flask import Flask, jsonify, render_template, request, send_from_directory
 from flask_socketio import SocketIO
 import copy
+import hashlib
 import json
 import math
 import os
@@ -234,6 +235,93 @@ def _summarize_changes_for_push(changes):
     return " | ".join(parts) if parts else "Signal state changed"
 
 
+def _notification_fingerprint(changes):
+    filtered = _filter_notification_changes(changes)
+    normalized_changes = {}
+    for key in sorted(filtered.keys()):
+        value = filtered.get(key)
+        if isinstance(value, dict):
+            normalized_changes[key] = {
+                "previous": value.get("previous"),
+                "current": value.get("current"),
+            }
+        else:
+            normalized_changes[key] = value
+    raw_payload = json.dumps(
+        {
+            "title": _notification_title_for_changes(filtered),
+            "changes": normalized_changes,
+        },
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha1(raw_payload.encode("utf-8")).hexdigest()
+
+
+def _notification_tag_from_fingerprint(fingerprint):
+    fingerprint = str(fingerprint or "").strip()
+    if not fingerprint:
+        return "xauusd-alert"
+    return f"xauusd-alert-{fingerprint[:16]}"
+
+
+def _alert_class_metadata(signal_class):
+    signal_class = str(signal_class or "").strip().lower()
+    mapping = {
+        "context": (
+            "last_context_alert_ts",
+            "last_context_alert_fingerprint",
+            ALERT_CONTEXT_COOLDOWN_SECONDS,
+        ),
+        "execution": (
+            "last_execution_alert_ts",
+            "last_execution_alert_fingerprint",
+            ALERT_CLASS_COOLDOWN_SECONDS,
+        ),
+        "diagnostics": (
+            "last_diagnostics_alert_ts",
+            "last_diagnostics_alert_fingerprint",
+            ALERT_CLASS_COOLDOWN_SECONDS,
+        ),
+        "price_action": (
+            "last_price_action_alert_ts",
+            "last_price_action_alert_fingerprint",
+            PRICE_ACTION_ALERT_COOLDOWN_SECONDS,
+        ),
+    }
+    return mapping.get(
+        signal_class,
+        ("last_alert_ts", "last_alert_fingerprint", ALERT_COOLDOWN_SECONDS),
+    )
+
+
+def _should_suppress_duplicate_alert(alert_state, fingerprint, signal_class, now_ts):
+    fingerprint = str(fingerprint or "").strip()
+    if not fingerprint:
+        return False
+
+    alert_state = alert_state if isinstance(alert_state, dict) else {}
+    global_last_ts = int(alert_state.get("last_alert_ts", 0) or 0)
+    global_last_fingerprint = str(alert_state.get("last_alert_fingerprint", "") or "")
+    if (
+        global_last_fingerprint == fingerprint
+        and ALERT_COOLDOWN_SECONDS > 0
+        and (now_ts - global_last_ts) < ALERT_COOLDOWN_SECONDS
+    ):
+        return True
+
+    class_ts_key, class_fp_key, class_cooldown = _alert_class_metadata(signal_class)
+    class_last_ts = int(alert_state.get(class_ts_key, 0) or 0)
+    class_last_fingerprint = str(alert_state.get(class_fp_key, "") or "")
+    return (
+        class_last_fingerprint == fingerprint
+        and class_cooldown > 0
+        and (now_ts - class_last_ts) < class_cooldown
+    )
+
+
 def _notification_title_for_changes(changes):
     changed_keys = set((changes or {}).keys())
     has_structure = "market_structure" in changed_keys
@@ -429,21 +517,95 @@ def _format_microstructure_change(changes):
     return " · ".join(parts)
 
 
-def _format_bar_session_microstructure(ta_data):
+def _extract_market_session_state(ta_data):
     ta_data = ta_data if isinstance(ta_data, dict) else {}
     session = ta_data.get("session_context") if isinstance(ta_data.get("session_context"), dict) else {}
     bar_session = session.get("bar_session") if isinstance(session.get("bar_session"), dict) else {}
     current_session = session.get("current_session") if isinstance(session.get("current_session"), dict) else {}
+    is_market_closed = bool(
+        current_session.get("isMarketClosed")
+        or session.get("isMarketClosed")
+        or ta_data.get("market_closed")
+    )
+    return {
+        "session": session,
+        "bar_session": bar_session,
+        "current_session": current_session,
+        "is_market_closed": is_market_closed,
+        "is_holiday_schedule": bool(
+            current_session.get("isHolidaySchedule")
+            or session.get("isHolidaySchedule")
+            or ta_data.get("market_is_holiday_schedule")
+        ),
+        "market_status": str(
+            current_session.get("marketStatus")
+            or session.get("marketStatus")
+            or ta_data.get("market_status")
+            or ("closed" if is_market_closed else "open")
+        ),
+        "market_status_label": str(
+            current_session.get("marketStatusLabel")
+            or session.get("marketStatusLabel")
+            or ta_data.get("market_status_label")
+            or ("Market Closed" if is_market_closed else "Market Open")
+        ),
+        "current_label": str(
+            session.get("currentLabel")
+            or current_session.get("label")
+            or (current_session.get("marketStatusLabel") if is_market_closed else "Off")
+        ),
+        "current_time": str(
+            session.get("currentTimeDisplayUtc")
+            or current_session.get("timeDisplayUtc")
+            or datetime.now(timezone.utc).strftime("%H:%M UTC")
+        ),
+        "next_open": str(
+            current_session.get("nextOpenTimeDisplayUtc")
+            or session.get("nextOpenTimeDisplayUtc")
+            or ta_data.get("market_next_open_display_utc")
+            or current_session.get("nextOpenUtc")
+            or ta_data.get("market_next_open_utc")
+            or ""
+        ).strip(),
+        "closed_reason": str(
+            current_session.get("closedReason")
+            or session.get("closedReason")
+            or ta_data.get("market_closed_reason")
+            or "XAUUSD market is currently closed."
+        ).strip(),
+        "holiday_name": str(
+            current_session.get("holidayName")
+            or session.get("holidayName")
+            or ta_data.get("market_holiday_name")
+            or ""
+        ).strip(),
+        "holiday_note": str(
+            current_session.get("holidayScheduleNote")
+            or session.get("holidayScheduleNote")
+            or ta_data.get("market_holiday_schedule_note")
+            or ""
+        ).strip(),
+    }
+
+
+def _format_bar_session_microstructure(ta_data):
+    ta_data = ta_data if isinstance(ta_data, dict) else {}
+    market_session = _extract_market_session_state(ta_data)
+    session = market_session["session"]
+    bar_session = market_session["bar_session"]
     structure = ta_data.get("structure_context") if isinstance(ta_data.get("structure_context"), dict) else {}
 
     bar_label = str(session.get("label") or bar_session.get("label") or "Off")
     bar_time = str(session.get("barTimeDisplayUtc") or bar_session.get("timeDisplayUtc") or "N/A")
-    current_label = str(session.get("currentLabel") or current_session.get("label") or "Off")
-    current_time = str(
-        session.get("currentTimeDisplayUtc")
-        or current_session.get("timeDisplayUtc")
-        or datetime.now(timezone.utc).strftime("%H:%M UTC")
-    )
+    current_label = market_session["current_label"]
+    current_time = market_session["current_time"]
+
+    if market_session["is_market_closed"]:
+        reopen_text = f" · Reopens {market_session['next_open']}" if market_session["next_open"] else ""
+        return (
+            f"Last bar {bar_label} {bar_time} · Now {current_label} {current_time}"
+            f"{reopen_text} · Microstructure is frozen until reopen"
+        )
 
     try:
         vwap_delta = float(structure.get("distSessionVwapPct") or 0.0)
@@ -462,10 +624,13 @@ def _format_bar_session_microstructure(ta_data):
     orb_text = f"ORB {_orb_state_label(orb)}"
     sweep_text = "Sweep Bullish" if sweep > 0 else ("Sweep Bearish" if sweep < 0 else "No Sweep")
 
-    return (
+    summary = (
         f"Bar {bar_label} {bar_time} · Now {current_label} {current_time} "
         f"· {vwap_text} · {orb_text} · {sweep_text}"
     )
+    if market_session["is_holiday_schedule"] and market_session["holiday_name"]:
+        summary += f" · Holiday schedule {market_session['holiday_name']}"
+    return summary
 
 
 def _join_readable_list(items):
@@ -1686,6 +1851,7 @@ def _is_rr_signal_actionable(rr_signal):
 def _build_signal_notification(changes, rr_signal, market_structure, ta_data=None, payload=None):
     changed_keys = set((changes or {}).keys())
     title = _notification_title_for_changes(changes)
+    fingerprint = _notification_fingerprint(changes)
     body_lines = []
     if "market_structure" in changed_keys:
         body_lines.append(f"Market Structure: {_format_market_structure_change(changes, market_structure)}")
@@ -1701,6 +1867,8 @@ def _build_signal_notification(changes, rr_signal, market_structure, ta_data=Non
     return {
         "title": title,
         "body": body,
+        "notification_fingerprint": fingerprint,
+        "notification_tag": _notification_tag_from_fingerprint(fingerprint),
         "dashboard_action": {},
     }
 
@@ -1894,6 +2062,7 @@ def _send_web_push_notifications(changes, rr_signal, market_structure, ta_data=N
     push_payload = {
         "title": notification.get("title"),
         "body": notification.get("body"),
+        "tag": notification.get("notification_tag"),
         "dashboard_action": notification.get("dashboard_action"),
         "rr_signal": rr_signal,
         "market_structure": market_structure,
@@ -2080,6 +2249,7 @@ def _evaluate_decision_status(
     regime=None,
 ):
     market_state = (ta_data or {}).get("_prediction_market_state") or {}
+    market_session = _extract_market_session_state(ta_data)
     execution_state = execution_state if isinstance(execution_state, dict) else {}
     action_state = str(
         execution_state.get("actionState")
@@ -2107,6 +2277,20 @@ def _evaluate_decision_status(
         (trend == "Bullish" and "bearish" in structure.lower())
         or (trend == "Bearish" and "bullish" in structure.lower())
     )
+    if market_session["is_market_closed"]:
+        reopen_text = (
+            f" Reopens {market_session['next_open']}."
+            if market_session["next_open"]
+            else ""
+        )
+        return {
+            "text": f"Stand aside. {market_session['closed_reason']}{reopen_text}",
+            "status": "wait",
+            "buyChecks": [False, False, False, False, False],
+            "sellChecks": [False, False, False, False, False],
+            "exitChecks": [True, True, False, False, True],
+            "marketClosed": True,
+        }
     if action_state:
         text = "Stand aside. Checklist does not support a clean trade yet."
         status = "wait"
@@ -2254,6 +2438,15 @@ def _evaluate_execution_permission(decision_status, market_state):
     text = "No trade. Conditions are not clean enough yet."
     status = "no_trade"
 
+    if bool((decision_status or {}).get("marketClosed")):
+        return {
+            "text": decision_text or "No trade. XAUUSD market is currently closed.",
+            "status": "no_trade",
+            "actionState": "WAIT",
+            "decisionStatus": decision_kind,
+            "marketClosed": True,
+        }
+
     directional_entry_confirmed = (
         (action_state == "LONG_ACTIVE" and decision_kind == "buy")
         or (action_state == "SHORT_ACTIVE" and decision_kind == "sell")
@@ -2329,6 +2522,25 @@ def _evaluate_trade_playbook(decision_status, execution_permission, market_state
         (active_long and breakout_bias == "Bullish")
         or (active_short and breakout_bias == "Bearish")
     )
+    if bool((decision_status or {}).get("marketClosed")):
+        closed_text = str(
+            decision_status.get("text")
+            or execution_permission.get("text")
+            or "XAUUSD market is currently closed."
+        )
+        return {
+            "stage": "stand_aside",
+            "title": "Market Closed",
+            "text": closed_text,
+            "why": [closed_text],
+            "entryReadiness": "closed",
+            "exitUrgency": "low",
+            "warningLadder": warning_ladder,
+            "eventRegime": event_regime,
+            "breakoutBias": breakout_bias,
+            "directionalBias": directional_bias,
+            "alignment": "closed",
+        }
     reversal_risk = event_regime == "panic_reversal" or (
         active_long and breakout_bias == "Bearish"
     ) or (
@@ -3449,10 +3661,15 @@ def _indicator_monitor_loop():
                                 "last_confidence_bucket": "",
                                 "last_execution_state": "",
                                 "last_alert_ts": 0,
+                                "last_alert_fingerprint": "",
                                 "last_context_alert_ts": 0,
+                                "last_context_alert_fingerprint": "",
                                 "last_execution_alert_ts": 0,
+                                "last_execution_alert_fingerprint": "",
                                 "last_diagnostics_alert_ts": 0,
+                                "last_diagnostics_alert_fingerprint": "",
                                 "last_price_action_alert_ts": 0,
+                                "last_price_action_alert_fingerprint": "",
                                 "last_boundary_wobble_ts": 0,
                             },
                         )
@@ -3551,6 +3768,16 @@ def _indicator_monitor_loop():
                             last_snapshot = current_snapshot
                             continue
 
+                        alert_fingerprint = _notification_fingerprint(notification_changes)
+                        if _should_suppress_duplicate_alert(
+                            alert_state,
+                            alert_fingerprint,
+                            signal_class,
+                            now_ts,
+                        ):
+                            last_snapshot = current_snapshot
+                            continue
+
                         _record_live_signal_outcome(
                             payload,
                             current_snapshot,
@@ -3581,6 +3808,7 @@ def _indicator_monitor_loop():
                                     "verdict": payload.get("verdict"),
                                     "confidence": payload.get("confidence"),
                                     "decision_status": payload.get("DecisionStatus"),
+                                    "notification_tag": alert_notification.get("notification_tag"),
                                     "timestamp": now_ts,
                                 },
                             )
@@ -3610,17 +3838,30 @@ def _indicator_monitor_loop():
                                 "last_confidence_bucket": confidence_bucket,
                                 "last_execution_state": execution_state_label,
                                 "last_alert_ts": now_ts,
+                                "last_alert_fingerprint": alert_fingerprint,
                                 "last_context_alert_ts": (
                                     now_ts if signal_class == "context" else int(alert_state.get("last_context_alert_ts", 0) or 0)
+                                ),
+                                "last_context_alert_fingerprint": (
+                                    alert_fingerprint if signal_class == "context" else str(alert_state.get("last_context_alert_fingerprint", "") or "")
                                 ),
                                 "last_execution_alert_ts": (
                                     now_ts if signal_class == "execution" else int(alert_state.get("last_execution_alert_ts", 0) or 0)
                                 ),
+                                "last_execution_alert_fingerprint": (
+                                    alert_fingerprint if signal_class == "execution" else str(alert_state.get("last_execution_alert_fingerprint", "") or "")
+                                ),
                                 "last_diagnostics_alert_ts": (
                                     now_ts if signal_class == "diagnostics" else int(alert_state.get("last_diagnostics_alert_ts", 0) or 0)
                                 ),
+                                "last_diagnostics_alert_fingerprint": (
+                                    alert_fingerprint if signal_class == "diagnostics" else str(alert_state.get("last_diagnostics_alert_fingerprint", "") or "")
+                                ),
                                 "last_price_action_alert_ts": (
                                     now_ts if signal_class == "price_action" else int(alert_state.get("last_price_action_alert_ts", 0) or 0)
+                                ),
+                                "last_price_action_alert_fingerprint": (
+                                    alert_fingerprint if signal_class == "price_action" else str(alert_state.get("last_price_action_alert_fingerprint", "") or "")
                                 ),
                                 "last_boundary_wobble_ts": int(alert_state.get("last_boundary_wobble_ts", 0) or 0),
                             },
