@@ -465,6 +465,46 @@ class DashboardPayloadContractTests(unittest.TestCase):
             )
         )
 
+    def test_stabilize_vwap_bias_label_holds_neutral_through_boundary_noise(self):
+        self.assertEqual(
+            app_module._stabilize_vwap_bias_label(-0.10, "Neutral"),
+            "Neutral",
+        )
+        self.assertEqual(
+            app_module._stabilize_vwap_bias_label(-0.101, "Neutral"),
+            "Neutral",
+        )
+
+    def test_stabilize_vwap_bias_label_breaks_only_after_real_move(self):
+        self.assertEqual(
+            app_module._stabilize_vwap_bias_label(-0.121, "Neutral"),
+            "Mild Bearish",
+        )
+        self.assertEqual(
+            app_module._stabilize_vwap_bias_label(-0.281, "Bearish"),
+            "Bearish",
+        )
+
+    def test_extract_indicator_snapshot_uses_stable_vwap_bias_label(self):
+        payload = {
+            "TechnicalAnalysis": {
+                "price_action": {"structure": "Bearish Drift"},
+                "structure_context": {"distSessionVwapPct": -0.10},
+            },
+            "RegimeState": {},
+            "ExecutionState": {},
+            "verdict": "Neutral",
+            "confidence": 58,
+        }
+
+        snapshot = app_module._extract_indicator_snapshot(
+            payload,
+            previous_snapshot={"micro_vwap_bias": "Neutral"},
+        )
+
+        self.assertEqual(snapshot["micro_vwap_bias"], "Neutral")
+        self.assertEqual(snapshot["micro_vwap_band"], "-0.1% to +0.0%")
+
     def test_bar_session_formatter_reports_weekend_closure(self):
         ta = _sample_ta_payload()
         closed_session = _build_session_context_from_datetime(

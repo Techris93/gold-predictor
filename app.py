@@ -76,6 +76,7 @@ ENTER_STAGE_PROTECT_SECONDS = _read_int_env("ENTER_STAGE_PROTECT_SECONDS", 900, 
 NOTIFY_EXIT_READS = _read_bool_env("NOTIFY_EXIT_READS", True)
 RR200_MAX_SIGNALS_PER_DAY = _read_int_env("RR200_MAX_SIGNALS_PER_DAY", 5, 1)
 RR200_MIN_SIGNAL_SPACING_SECONDS = _read_int_env("RR200_MIN_SIGNAL_SPACING_SECONDS", 2700, 0)
+VWAP_BIAS_ALERT_HYSTERESIS_PCT = 0.02
 PUSH_EXCLUDED_FIELDS = {
     "rsi_14",
     "ema_20",
@@ -445,7 +446,7 @@ def _vwap_band_label(value):
     return f"{band_floor:+.1f}% to {band_ceil:+.1f}%"
 
 
-def _vwap_bias_label(value):
+def _raw_vwap_bias_label(value):
     try:
         numeric = float(value)
     except Exception:
@@ -459,6 +460,42 @@ def _vwap_bias_label(value):
     if numeric > -0.30:
         return "Mild Bearish"
     return "Bearish"
+
+
+def _vwap_bias_label(value):
+    return _raw_vwap_bias_label(value)
+
+
+def _stabilize_vwap_bias_label(value, previous_label=None):
+    raw_label = _raw_vwap_bias_label(value)
+    previous_label = str(previous_label or "").strip()
+    if not previous_label or previous_label == raw_label:
+        return raw_label
+
+    try:
+        numeric = float(value)
+    except Exception:
+        numeric = 0.0
+
+    hysteresis = float(VWAP_BIAS_ALERT_HYSTERESIS_PCT)
+
+    if previous_label == "Neutral":
+        if -0.10 - hysteresis < numeric < 0.10 + hysteresis:
+            return "Neutral"
+    elif previous_label == "Mild Bearish":
+        if -0.30 - hysteresis < numeric <= -0.10 + hysteresis:
+            return "Mild Bearish"
+    elif previous_label == "Bearish":
+        if numeric <= -0.30 + hysteresis:
+            return "Bearish"
+    elif previous_label == "Mild Bullish":
+        if 0.10 - hysteresis <= numeric < 0.30 + hysteresis:
+            return "Mild Bullish"
+    elif previous_label == "Bullish":
+        if numeric >= 0.30 - hysteresis:
+            return "Bullish"
+
+    return raw_label
 
 
 def _format_vwap_microstructure_text(value):
@@ -3261,13 +3298,14 @@ def _stabilize_prediction(prediction, ta_data):
     return stabilized
 
 
-def _extract_indicator_snapshot(payload):
+def _extract_indicator_snapshot(payload, previous_snapshot=None):
     """Build a compact snapshot used to detect indicator changes."""
     ta_data = payload.get("TechnicalAnalysis", {}) if isinstance(payload, dict) else {}
     pa = ta_data.get("price_action", {}) if isinstance(ta_data, dict) else {}
     regime_state = payload.get("RegimeState", {}) if isinstance(payload, dict) else {}
     execution_state = payload.get("ExecutionState", {}) if isinstance(payload, dict) else {}
     structure_context = ta_data.get("structure_context", {}) if isinstance(ta_data, dict) else {}
+    previous_snapshot = previous_snapshot if isinstance(previous_snapshot, dict) else {}
     try:
         micro_vwap_delta = round(float(structure_context.get("distSessionVwapPct") or 0.0), 3)
     except Exception:
@@ -3294,7 +3332,10 @@ def _extract_indicator_snapshot(payload):
         ),
         "micro_vwap_delta_pct": micro_vwap_delta,
         "micro_vwap_band": _vwap_band_label(micro_vwap_delta),
-        "micro_vwap_bias": _vwap_bias_label(micro_vwap_delta),
+        "micro_vwap_bias": _stabilize_vwap_bias_label(
+            micro_vwap_delta,
+            previous_snapshot.get("micro_vwap_bias"),
+        ),
         "micro_orb_state": micro_orb_state,
         "micro_sweep_state": micro_sweep_state,
     }
@@ -3638,7 +3679,10 @@ def _indicator_monitor_loop():
 
             payload, status_code = _build_prediction_response()
             if status_code == 200:
-                current_snapshot = _extract_indicator_snapshot(payload)
+                current_snapshot = _extract_indicator_snapshot(
+                    payload,
+                    previous_snapshot=last_snapshot,
+                )
                 current_price = float(((payload.get("TechnicalAnalysis") or {}).get("current_price")) or 0.0)
                 if current_price > 0:
                     _update_live_signal_outcomes(current_price, int(time.time()))

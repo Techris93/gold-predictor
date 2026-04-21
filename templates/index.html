@@ -67,7 +67,7 @@
         --text-muted: #9da8a0;
         --focus: #f3d86b;
         --safe-bottom: env(safe-area-inset-bottom, 0px);
-        --app-height: 100dvh;
+        --app-height: 100lvh;
       }
 
       * {
@@ -102,7 +102,7 @@
         min-height: 100vh;
         min-height: 100svh;
         min-height: 100dvh;
-        min-height: var(--app-height);
+        min-height: max(100dvh, var(--app-height));
         overflow-x: hidden;
         padding: 20px 20px calc(28px + var(--safe-bottom));
       }
@@ -753,14 +753,10 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        height: 100vh;
-        height: 100svh;
-        height: 100dvh;
-        height: var(--app-height);
         min-height: 100vh;
         min-height: 100svh;
         min-height: 100dvh;
-        min-height: var(--app-height);
+        min-height: max(100dvh, var(--app-height));
         padding: 24px 24px calc(24px + var(--safe-bottom));
         background: rgba(12, 16, 13, 0.96);
         transition: opacity 0.3s ease;
@@ -1523,46 +1519,119 @@
       let predictionRequestInFlight = false;
       let pendingIndicatorPayload = null;
       let viewportSyncBound = false;
+      let viewportHeightFloor = 0;
+      let lastViewportWidth = 0;
+      let viewportSettleTimer = null;
       const ALERTS_ENABLED_STORAGE_KEY = "gold_predictor_push_enabled";
       const UI_NOTIFICATION_DEDUPE_WINDOW_MS = 15 * 60 * 1000;
       let backgroundPushEnabled = hasPersistedPushEnable();
       let lastUiNotificationKey = "";
       let lastUiNotificationAt = 0;
 
-      function syncViewportHeight() {
+      function syncViewportHeight(options = {}) {
+        const { allowShrink = false } = options || {};
         const visualHeight =
           window.visualViewport && Number.isFinite(window.visualViewport.height)
-            ? window.visualViewport.height
-            : window.innerHeight;
-        const nextHeight = Math.max(320, Math.round(Number(visualHeight) || 0));
-        if (nextHeight > 0) {
+            ? Number(window.visualViewport.height)
+            : 0;
+        const innerHeight = Number(window.innerHeight) || 0;
+        const clientHeight =
+          Number(document.documentElement?.clientHeight) || 0;
+        const nextHeight = Math.max(
+          320,
+          Math.round(Math.max(visualHeight, innerHeight, clientHeight)),
+        );
+        const nextWidth = Math.max(
+          0,
+          Math.round(
+            Math.max(
+              Number(window.innerWidth) || 0,
+              Number(window.visualViewport?.width) || 0,
+            ),
+          ),
+        );
+        const widthShifted =
+          lastViewportWidth > 0 && Math.abs(nextWidth - lastViewportWidth) >= 80;
+        lastViewportWidth = nextWidth;
+
+        if (
+          allowShrink ||
+          widthShifted ||
+          !Number.isFinite(viewportHeightFloor) ||
+          viewportHeightFloor <= 0
+        ) {
+          viewportHeightFloor = nextHeight;
+        } else {
+          viewportHeightFloor = Math.max(viewportHeightFloor, nextHeight);
+        }
+
+        if (viewportHeightFloor > 0) {
           document.documentElement.style.setProperty(
             "--app-height",
-            `${nextHeight}px`,
+            `${viewportHeightFloor}px`,
           );
         }
+      }
+
+      function scheduleViewportSettleSync(options = {}) {
+        const { allowShrink = false } = options || {};
+        syncViewportHeight({ allowShrink });
+        window.requestAnimationFrame(() => {
+          syncViewportHeight({ allowShrink });
+          window.requestAnimationFrame(() => {
+            syncViewportHeight({ allowShrink });
+          });
+        });
+        if (viewportSettleTimer) {
+          clearTimeout(viewportSettleTimer);
+        }
+        viewportSettleTimer = setTimeout(() => {
+          syncViewportHeight({ allowShrink });
+          viewportSettleTimer = null;
+        }, 320);
       }
 
       function bindViewportHeightSync() {
         if (viewportSyncBound) return;
         viewportSyncBound = true;
-        syncViewportHeight();
-        window.addEventListener("resize", syncViewportHeight, {
-          passive: true,
-        });
-        window.addEventListener("orientationchange", syncViewportHeight, {
-          passive: true,
-        });
-        window.addEventListener("pageshow", syncViewportHeight, {
-          passive: true,
-        });
+        scheduleViewportSettleSync({ allowShrink: true });
+        window.addEventListener(
+          "resize",
+          () => {
+            scheduleViewportSettleSync({ allowShrink: true });
+          },
+          {
+            passive: true,
+          },
+        );
+        window.addEventListener(
+          "orientationchange",
+          () => {
+            scheduleViewportSettleSync({ allowShrink: true });
+          },
+          {
+            passive: true,
+          },
+        );
+        window.addEventListener(
+          "pageshow",
+          () => {
+            scheduleViewportSettleSync({ allowShrink: true });
+          },
+          {
+            passive: true,
+          },
+        );
         if (window.visualViewport) {
-          window.visualViewport.addEventListener("resize", syncViewportHeight, {
-            passive: true,
-          });
-          window.visualViewport.addEventListener("scroll", syncViewportHeight, {
-            passive: true,
-          });
+          window.visualViewport.addEventListener(
+            "resize",
+            () => {
+              scheduleViewportSettleSync();
+            },
+            {
+              passive: true,
+            },
+          );
         }
       }
 
@@ -1918,7 +1987,7 @@
         }
         predictionRequestInFlight = true;
         setRefreshBusy(true);
-        syncViewportHeight();
+        scheduleViewportSettleSync();
         if (loader) {
           loader.classList.remove("hide");
         }
@@ -1942,13 +2011,14 @@
           initialPredictionLoaded = true;
           predictionRequestInFlight = false;
           setRefreshBusy(false);
-          syncViewportHeight();
+          scheduleViewportSettleSync();
           // Force loader to hide even if JS crashed
           hideLoaderTimer = setTimeout(() => {
             if (loader) {
               loader.classList.add("hide");
             }
             hideLoaderTimer = null;
+            scheduleViewportSettleSync();
             _flushQueuedIndicatorPayload();
           }, 250);
         }
@@ -3388,6 +3458,7 @@
       // Fetch on load
       window.addEventListener("DOMContentLoaded", () => {
         bindViewportHeightSync();
+        scheduleViewportSettleSync({ allowShrink: true });
         initCollapsibleSectionToggle("technical-toggle", "technical-panel");
         setCollapsibleSectionExpanded(
           "technical-toggle",
