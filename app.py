@@ -77,6 +77,14 @@ NOTIFY_EXIT_READS = _read_bool_env("NOTIFY_EXIT_READS", True)
 RR200_MAX_SIGNALS_PER_DAY = _read_int_env("RR200_MAX_SIGNALS_PER_DAY", 5, 1)
 RR200_MIN_SIGNAL_SPACING_SECONDS = _read_int_env("RR200_MIN_SIGNAL_SPACING_SECONDS", 2700, 0)
 VWAP_BIAS_ALERT_HYSTERESIS_PCT = 0.02
+VWAP_DELTA_ALERT_THRESHOLD_PCT = 0.10
+NOTIFICATION_ALLOWED_FIELDS = {
+    "market_structure",
+    "micro_vwap_bias",
+    "micro_vwap_delta_pct",
+    "micro_orb_state",
+    "micro_sweep_state",
+}
 PUSH_EXCLUDED_FIELDS = {
     "rsi_14",
     "ema_20",
@@ -105,16 +113,11 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 TELEGRAM_THREAD_ID = os.getenv("TELEGRAM_THREAD_ID", "").strip()
 ENABLE_TELEGRAM_NOTIFICATIONS = _read_bool_env("GOLD_PREDICTOR_ENABLE_TELEGRAM", False)
 CHANGE_SUMMARY_ORDER = [
-    "warning_ladder",
-    "event_regime",
-    "breakout_bias",
     "market_structure",
-    "micro_vwap_band",
     "micro_vwap_bias",
+    "micro_vwap_delta_pct",
     "micro_orb_state",
     "micro_sweep_state",
-    "verdict",
-    "confidence_bucket",
 ]
 def _load_subscriptions():
     if not SUBSCRIPTIONS_FILE.exists():
@@ -202,26 +205,28 @@ def _filter_notification_changes(changes):
     filtered = {
         key: val
         for key, val in changes.items()
-        if key not in PUSH_EXCLUDED_FIELDS
+        if key in NOTIFICATION_ALLOWED_FIELDS and key not in PUSH_EXCLUDED_FIELDS
     }
     if "micro_vwap_bias" not in filtered:
-        filtered.pop("micro_vwap_delta_pct", None)
+        delta = filtered.get("micro_vwap_delta_pct")
+        prev = delta.get("previous") if isinstance(delta, dict) else None
+        cur = delta.get("current") if isinstance(delta, dict) else None
+        if not (
+            isinstance(prev, (int, float))
+            and isinstance(cur, (int, float))
+            and abs(float(cur) - float(prev)) >= VWAP_DELTA_ALERT_THRESHOLD_PCT
+        ):
+            filtered.pop("micro_vwap_delta_pct", None)
     return filtered
 
 
 def _summarize_changes_for_push(changes):
     labels = {
-        "warning_ladder": "Warning Ladder",
-        "event_regime": "Event Regime",
-        "breakout_bias": "Breakout Bias",
         "market_structure": "Market Structure",
-        "micro_vwap_band": "VWAP Band",
         "micro_vwap_bias": "VWAP Bias",
+        "micro_vwap_delta_pct": "VWAP",
         "micro_orb_state": "ORB",
         "micro_sweep_state": "Sweep",
-        "verdict": "Verdict",
-        "confidence_bucket": "AI Confidence",
-        "execution_state": "Execution State",
     }
     ordered_keys = [key for key in CHANGE_SUMMARY_ORDER if key in changes]
     ordered_keys.extend(key for key in changes if key not in ordered_keys)
@@ -326,37 +331,20 @@ def _should_suppress_duplicate_alert(alert_state, fingerprint, signal_class, now
 def _notification_title_for_changes(changes):
     changed_keys = set(_filter_notification_changes(changes).keys())
     has_structure = "market_structure" in changed_keys
-    has_warning = "warning_ladder" in changed_keys
-    has_event_regime = "event_regime" in changed_keys
-    has_breakout_bias = "breakout_bias" in changed_keys
-    has_micro_vwap = "micro_vwap_band" in changed_keys or "micro_vwap_bias" in changed_keys
+    has_micro_vwap = (
+        "micro_vwap_bias" in changed_keys
+        or "micro_vwap_delta_pct" in changed_keys
+    )
     has_micro_orb = "micro_orb_state" in changed_keys
     has_micro_sweep = "micro_sweep_state" in changed_keys
     has_microstructure = has_micro_vwap or has_micro_orb or has_micro_sweep
-    has_verdict = "verdict" in changed_keys
-    has_confidence = "confidence_bucket" in changed_keys
-    has_execution_state = "execution_state" in changed_keys
 
-    if has_microstructure and not has_structure and not has_execution_state:
-        return "XAUUSD Microstructure Changed"
-    if (has_warning or has_event_regime or has_breakout_bias) and not has_structure and not has_execution_state and not has_verdict and not has_confidence:
-        return "XAUUSD Trade Context Changed"
-    if has_verdict and not has_structure and not has_execution_state and not has_confidence:
-        return "XAUUSD Verdict Changed"
-    if has_confidence and not has_structure and not has_execution_state and not has_verdict:
-        return "XAUUSD Confidence Changed"
-    if has_structure and not has_execution_state:
-        return "XAUUSD Market Structure Changed"
-    if has_execution_state and not has_structure:
-        return "XAUUSD Execution State Changed"
-    if (has_verdict or has_confidence or has_warning or has_event_regime or has_breakout_bias) and not has_structure and not has_execution_state:
-        return "XAUUSD State Changed"
-    if has_execution_state and (has_structure or has_verdict or has_confidence or has_warning or has_event_regime or has_breakout_bias):
-        return "XAUUSD Structure / Execution Changed"
-    if has_verdict or has_confidence or has_warning or has_event_regime or has_breakout_bias or has_execution_state:
-        return "XAUUSD State Changed"
+    if has_structure and has_microstructure:
+        return "XAUUSD Price Action Changed"
     if has_microstructure:
         return "XAUUSD Microstructure Changed"
+    if has_structure:
+        return "XAUUSD Market Structure Changed"
     return "XAUUSD Signal Changed"
 
 
@@ -524,10 +512,9 @@ def _vwap_bias_strategy_note(bias_label):
 def _format_microstructure_change(changes):
     changes = changes if isinstance(changes, dict) else {}
     parts = []
-    vwap_band_delta = changes.get("micro_vwap_band")
     vwap_bias_delta = changes.get("micro_vwap_bias")
     vwap_value_delta = changes.get("micro_vwap_delta_pct")
-    if isinstance(vwap_bias_delta, dict) or isinstance(vwap_band_delta, dict):
+    if isinstance(vwap_bias_delta, dict) or isinstance(vwap_value_delta, dict):
         prev_bias = str((vwap_bias_delta or {}).get("previous") or "")
         cur_bias = str((vwap_bias_delta or {}).get("current") or "")
         prev_val = (vwap_value_delta or {}).get("previous") if isinstance(vwap_value_delta, dict) else None
@@ -539,6 +526,22 @@ def _format_microstructure_change(changes):
             strategy_note = _vwap_bias_strategy_note(cur_bias)
             strategy_suffix = f": {strategy_note}" if strategy_note else ""
             parts.append(f"VWAP {prev_bias} -> {cur_bias}{value_suffix}{strategy_suffix}")
+        elif (
+            isinstance(prev_val, (int, float))
+            and isinstance(cur_val, (int, float))
+            and abs(float(cur_val) - float(prev_val)) >= VWAP_DELTA_ALERT_THRESHOLD_PCT
+        ):
+            current_bias = cur_bias or prev_bias or _vwap_bias_label(cur_val)
+            strength_word = (
+                "strengthened"
+                if abs(float(cur_val)) > abs(float(prev_val))
+                else "eased"
+            )
+            strategy_note = _vwap_bias_strategy_note(current_bias)
+            strategy_suffix = f": {strategy_note}" if strategy_note else ""
+            parts.append(
+                f"VWAP {current_bias} {strength_word}{value_suffix}{strategy_suffix}"
+            )
     orb_delta = changes.get("micro_orb_state")
     if isinstance(orb_delta, dict):
         prev_orb = _orb_state_label(orb_delta.get("previous"))
@@ -2135,18 +2138,13 @@ def _is_material_change(changes):
         return False
 
     always_material = {
-        "verdict",
-        "confidence_bucket",
-        "warning_ladder",
-        "event_regime",
-        "breakout_bias",
         "market_structure",
         "micro_vwap_bias",
         "micro_orb_state",
         "micro_sweep_state",
     }
     numeric_thresholds = {
-        "micro_vwap_delta_pct": 0.10,
+        "micro_vwap_delta_pct": VWAP_DELTA_ALERT_THRESHOLD_PCT,
     }
 
     for key, delta in changes.items():
@@ -3729,84 +3727,21 @@ def _indicator_monitor_loop():
                             or execution_state_payload.get("status")
                             or ""
                         )
-                        previous_warning_ladder = str(alert_state.get("last_warning_ladder", ""))
-                        previous_event_regime = str(alert_state.get("last_event_regime", ""))
-                        previous_breakout_bias = str(alert_state.get("last_breakout_bias", ""))
-                        previous_confidence_bucket = str(alert_state.get("last_confidence_bucket", ""))
-                        previous_execution_state = str(alert_state.get("last_execution_state", ""))
-                        warning_tier_changed = (
-                            _warning_tier_rank(previous_warning_ladder)
-                            != _warning_tier_rank(warning_ladder)
-                        )
-                        warning_changed = (
-                            "warning_ladder" in notification_changes
-                            and bool(warning_ladder)
-                            and warning_tier_changed
-                            and (
-                                _warning_alert_tier(warning_ladder) != "low"
-                                or _warning_alert_tier(previous_warning_ladder) != "low"
-                            )
-                        )
-                        event_regime_changed = (
-                            "event_regime" in notification_changes
-                            and bool(event_regime)
-                            and not _is_context_flip_noise(
-                                previous_warning_ladder,
-                                warning_ladder,
-                                previous_event_regime,
-                                event_regime,
-                            )
-                        )
-                        breakout_bias_changed = (
-                            "breakout_bias" in notification_changes
-                            and bool(breakout_bias)
-                            and warning_ladder in {"High Breakout Risk", "Directional Expansion Likely", "Active Momentum Event"}
-                            and (
-                                breakout_bias != previous_breakout_bias
-                                and (breakout_bias in {"Bullish", "Bearish"} or previous_breakout_bias in {"Bullish", "Bearish"})
-                            )
-                        )
                         market_structure_changed = (
                             "market_structure" in notification_changes
                             and bool(market_structure)
                         )
                         microstructure_changed = bool(
-                            "micro_vwap_band" in notification_changes
-                            or "micro_vwap_bias" in notification_changes
+                            "micro_vwap_bias" in notification_changes
+                            or "micro_vwap_delta_pct" in notification_changes
                             or "micro_orb_state" in notification_changes
                             or "micro_sweep_state" in notification_changes
-                        )
-                        verdict_changed = "verdict" in notification_changes and bool(verdict)
-                        confidence_changed = (
-                            "confidence_bucket" in notification_changes
-                            and bool(confidence_bucket)
-                            and confidence_bucket != previous_confidence_bucket
-                            and confidence_bucket in {"High", "Very High", "Low"}
-                        )
-                        execution_state_changed = (
-                            "execution_state" in notification_changes
-                            and bool(execution_state_label)
-                            and execution_state_label != previous_execution_state
                         )
                         should_alert = bool(
                             market_structure_changed
                             or microstructure_changed
-                            or warning_changed
-                            or event_regime_changed
-                            or breakout_bias_changed
-                            or verdict_changed
-                            or confidence_changed
-                            or execution_state_changed
                         )
-                        signal_class = ""
-                        if market_structure_changed or microstructure_changed:
-                            signal_class = "price_action"
-                        elif execution_state_changed:
-                            signal_class = "execution"
-                        elif warning_changed or event_regime_changed or breakout_bias_changed:
-                            signal_class = "context"
-                        elif verdict_changed or confidence_changed:
-                            signal_class = "diagnostics"
+                        signal_class = "price_action" if should_alert else ""
 
                         if not should_alert:
                             last_snapshot = current_snapshot

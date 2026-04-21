@@ -1046,6 +1046,9 @@
             >
               Background push: not enabled
             </div>
+            <div class="socket-state status-pill" id="alert-policy-state">
+              Alerts: price action only
+            </div>
           </div>
         </section>
 
@@ -1523,6 +1526,18 @@
       let lastViewportWidth = 0;
       let viewportSettleTimer = null;
       const ALERTS_ENABLED_STORAGE_KEY = "gold_predictor_push_enabled";
+      const ALLOWED_LIVE_ALERT_TITLES = new Set([
+        "XAUUSD Market Structure Changed",
+        "XAUUSD Microstructure Changed",
+        "XAUUSD Price Action Changed",
+      ]);
+      const ALLOWED_LIVE_ALERT_FIELDS = new Set([
+        "market_structure",
+        "micro_vwap_bias",
+        "micro_vwap_delta_pct",
+        "micro_orb_state",
+        "micro_sweep_state",
+      ]);
       const UI_NOTIFICATION_DEDUPE_WINDOW_MS = 15 * 60 * 1000;
       let backgroundPushEnabled = hasPersistedPushEnable();
       let lastUiNotificationKey = "";
@@ -1931,6 +1946,7 @@
           typeof payload?.message === "string" && payload.message.trim()
             ? payload.message
             : summarizeChanges(payload?.changes || {});
+        const isAllowedAlert = isAllowedIndicatorAlert(payload);
         const notificationTag = String(
           payload?.notification_tag || `${title}|${body}`,
         ).trim();
@@ -1938,11 +1954,12 @@
           notificationTag,
         );
 
-        if (!suppressDuplicateUiAlert) {
+        if (isAllowedAlert && !suppressDuplicateUiAlert) {
           showPushToast(title, body);
         }
 
         if (
+          isAllowedAlert &&
           !suppressDuplicateUiAlert &&
           !backgroundPushEnabled &&
           document.visibilityState !== "visible" &&
@@ -2179,6 +2196,22 @@
         el.style.color = isGood ? "var(--bullish)" : "var(--text-muted)";
       }
 
+      function updateAlertPolicyState(text, isGood = true) {
+        const el = document.getElementById("alert-policy-state");
+        if (!el) return;
+        el.innerText = text;
+        el.style.color = isGood ? "var(--accent-strong)" : "var(--text-muted)";
+      }
+
+      function isAllowedIndicatorAlert(payload) {
+        const title = String(payload?.title || "").trim();
+        if (title && ALLOWED_LIVE_ALERT_TITLES.has(title)) {
+          return true;
+        }
+        const changeKeys = Object.keys(payload?.changes || {});
+        return changeKeys.some((key) => ALLOWED_LIVE_ALERT_FIELDS.has(key));
+      }
+
       function pulseLiveUpdate() {
         const badge = document.getElementById("verdict-badge");
         const price = document.getElementById("current-price");
@@ -2291,27 +2324,19 @@
         if (entries.length === 0) return "No indicator fields changed.";
 
         const labels = {
-          execution_state: "Execution State",
-          verdict: "Verdict",
-          confidence: "Confidence",
-          confidence_bucket: "Confidence",
-          trend: "Trend",
           market_structure: "Market Structure",
-          warning_ladder: "Warning Ladder",
-          event_regime: "Event Regime",
-          breakout_bias: "Breakout Bias",
-          micro_vwap_band: "VWAP Band",
           micro_vwap_bias: "VWAP Bias",
+          micro_vwap_delta_pct: "VWAP",
           micro_orb_state: "ORB",
           micro_sweep_state: "Sweep",
-          ema_20: "EMA 20",
-          ema_50: "EMA 50",
-          market_regime: "Market Regime",
-          alignment: "Alignment",
-          adx_14: "ADX",
-          atr_percent: "ATR%",
         };
-        const preferredOrder = ["execution_state"];
+        const preferredOrder = [
+          "market_structure",
+          "micro_vwap_bias",
+          "micro_vwap_delta_pct",
+          "micro_orb_state",
+          "micro_sweep_state",
+        ];
         const orderedEntries = preferredOrder
           .filter((key) => key in (changes || {}))
           .map((key) => [key, changes[key]]);
@@ -3492,6 +3517,10 @@
           alertsBtn.addEventListener("click", requestAlertsPermission);
         }
         syncAlertsButton();
+        updateAlertPolicyState(
+          "Alerts: structure + VWAP / ORB / sweep only",
+          true,
+        );
         ensureServiceWorker().then(() => {
           if (
             "Notification" in window &&

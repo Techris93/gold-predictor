@@ -374,6 +374,84 @@ class DashboardPayloadContractTests(unittest.TestCase):
         self.assertEqual(payload["price_action"]["structure"], "Higher Highs / Higher Lows (Bullish Structure)")
         self.assertEqual(payload["structure_context"]["openingRangeBreak"], 1)
 
+    def test_sweep_reclaim_uses_last_closed_15m_bar(self):
+        candles = []
+        for idx in range(60):
+            base = 100.0 + (idx * 0.08)
+            candles.append(
+                {
+                    "Open": base,
+                    "High": base + 0.45,
+                    "Low": base - 0.35,
+                    "Close": base + 0.18,
+                    "Volume": 1000 + idx,
+                }
+            )
+        frame = pd.DataFrame(
+            candles,
+            index=pd.date_range("2026-04-20T09:00:00Z", periods=len(candles), freq="15min", tz="UTC"),
+        )
+        enriched = pd.DataFrame(
+            {
+                "PA_STRUCTURE": ["Bearish Drift"] * len(frame),
+                "CANDLE_PATTERN": ["None"] * len(frame),
+                "OPENING_RANGE_BREAK": [0] * (len(frame) - 1) + [1],
+                "SWEEP_RECLAIM_SIGNAL": [0] * (len(frame) - 2) + [1, 0],
+                "SWEEP_RECLAIM_QUALITY": [0.0] * (len(frame) - 2) + [0.86, 0.0],
+            },
+            index=frame.index,
+        )
+
+        def _fake_build_ta_payload_from_row(row, *_args, **_kwargs):
+            return {
+                "structure_context": {
+                    "openingRangeBreak": int(row.get("OPENING_RANGE_BREAK") or 0),
+                    "sweepReclaimSignal": int(row.get("SWEEP_RECLAIM_SIGNAL") or 0),
+                    "sweepReclaimQuality": float(row.get("SWEEP_RECLAIM_QUALITY") or 0.0),
+                }
+            }
+
+        with patch.object(
+            predict_gold,
+            "_fetch_mtf_trends",
+            return_value={
+                "m15_trend": "Bullish",
+                "h1_trend": "Bullish",
+                "h4_trend": "Neutral",
+                "alignment_score": 2,
+                "alignment_label": "Strong Bullish Alignment",
+                "data_points": {"m15": 200, "h1": 200, "h4": 200},
+                "sources": {"m15": "test", "h1": "test", "h4": "test"},
+            },
+        ), patch.object(
+            predict_gold,
+            "_get_cached_cross_asset_context",
+            return_value={"bias": "Neutral", "score": 0.0, "display": "Neutral"},
+        ), patch.object(
+            predict_gold,
+            "classify_price_action",
+            return_value=("Bearish Drift", "None"),
+        ), patch.object(
+            predict_gold,
+            "prepare_historical_features",
+            return_value=enriched,
+        ), patch.object(
+            predict_gold,
+            "build_ta_payload_from_row",
+            side_effect=_fake_build_ta_payload_from_row,
+        ):
+            payload = predict_gold._build_technical_analysis_from_frame(
+                frame,
+                td_symbol="XAU/USD",
+                now_ts=1713600000,
+                data_source="unit-test",
+            )
+
+        self.assertEqual(payload["price_action"]["basis"], "last_closed_15m_bar")
+        self.assertEqual(payload["structure_context"]["sweepReclaimSignal"], 1)
+        self.assertAlmostEqual(payload["structure_context"]["sweepReclaimQuality"], 0.86)
+        self.assertEqual(payload["structure_context"]["openingRangeBreak"], 0)
+
     def test_signal_notification_omits_execution_and_decision_text(self):
         notification = app_module._build_signal_notification(
             {
@@ -420,6 +498,28 @@ class DashboardPayloadContractTests(unittest.TestCase):
         self.assertNotIn("execution_state", filtered)
         self.assertIn("market_structure", filtered)
 
+    def test_notification_filter_suppresses_non_price_action_categories(self):
+        changes = {
+            "warning_ladder": {"previous": "Normal", "current": "High Breakout Risk"},
+            "event_regime": {"previous": "normal", "current": "event_risk"},
+            "breakout_bias": {"previous": "Neutral", "current": "Bearish"},
+            "verdict": {"previous": "Neutral", "current": "Bearish"},
+            "confidence_bucket": {"previous": "Guarded", "current": "High"},
+            "execution_state": {"previous": "Watchlist Only", "current": "No Trade"},
+            "market_structure": {
+                "previous": "Bearish Drift",
+                "current": "Higher Highs / Higher Lows (Bullish Structure)",
+            },
+            "micro_vwap_delta_pct": {"previous": 0.31, "current": 0.56},
+        }
+
+        filtered = app_module._filter_notification_changes(changes)
+
+        self.assertEqual(
+            set(filtered.keys()),
+            {"market_structure", "micro_vwap_delta_pct"},
+        )
+
     def test_execution_state_change_cannot_restore_old_alert_title(self):
         notification = app_module._build_signal_notification(
             {
@@ -436,6 +536,62 @@ class DashboardPayloadContractTests(unittest.TestCase):
 
         self.assertEqual(notification["title"], "XAUUSD Signal Changed")
         self.assertNotEqual(notification["title"], "XAUUSD Execution State Changed")
+
+    def test_suppressed_notification_categories_cannot_restore_old_titles(self):
+        title = app_module._notification_title_for_changes(
+            {
+                "warning_ladder": {
+                    "previous": "Normal",
+                    "current": "High Breakout Risk",
+                },
+                "verdict": {
+                    "previous": "Neutral",
+                    "current": "Bearish",
+                },
+                "confidence_bucket": {
+                    "previous": "Guarded",
+                    "current": "High",
+                },
+            }
+        )
+
+        self.assertEqual(title, "XAUUSD Signal Changed")
+        self.assertNotEqual(title, "XAUUSD Trade Context Changed")
+        self.assertNotEqual(title, "XAUUSD Verdict Changed")
+        self.assertNotEqual(title, "XAUUSD Confidence Changed")
+        self.assertNotEqual(title, "XAUUSD State Changed")
+
+    def test_notification_keeps_material_vwap_move_without_bias_flip(self):
+        notification = app_module._build_signal_notification(
+            {
+                "micro_vwap_delta_pct": {
+                    "previous": 0.31,
+                    "current": 0.56,
+                },
+            },
+            {},
+            "Bearish Drift",
+            ta_data=_sample_ta_payload(),
+            payload={},
+        )
+
+        self.assertEqual(notification["title"], "XAUUSD Microstructure Changed")
+        self.assertIn(
+            "VWAP Bullish strengthened (0.31% -> 0.56%)",
+            notification["body"],
+        )
+
+    def test_notification_drops_small_vwap_move_without_bias_flip(self):
+        filtered = app_module._filter_notification_changes(
+            {
+                "micro_vwap_delta_pct": {
+                    "previous": 0.31,
+                    "current": 0.33,
+                },
+            }
+        )
+
+        self.assertEqual(filtered, {})
 
     def test_notification_fingerprint_ignores_body_clock_drift(self):
         changes = {

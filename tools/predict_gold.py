@@ -795,9 +795,16 @@ def _build_technical_analysis_from_frame(
     latest = enriched.iloc[-1]
     stable_structure_row = enriched.iloc[structure_index]
     signal_row = latest.copy()
-    # Keep ORB/price-action-derived context pinned to the last closed 15m bar so
-    # intrabar live-price updates do not make the dashboard and alerts wobble.
-    for key in ("PA_STRUCTURE", "CANDLE_PATTERN", "OPENING_RANGE_BREAK"):
+    # Keep price-action-triggered microstructure context pinned to the last
+    # closed 15m bar so intrabar live-price updates do not make the dashboard
+    # and alerts wobble.
+    for key in (
+        "PA_STRUCTURE",
+        "CANDLE_PATTERN",
+        "OPENING_RANGE_BREAK",
+        "SWEEP_RECLAIM_SIGNAL",
+        "SWEEP_RECLAIM_QUALITY",
+    ):
         if key in stable_structure_row.index:
             signal_row[key] = stable_structure_row.get(key)
     cross_asset_context = _get_cached_cross_asset_context()

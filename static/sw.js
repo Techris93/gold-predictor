@@ -1,3 +1,9 @@
+self.ALLOWED_ALERT_TITLES = new Set([
+  "XAUUSD Market Structure Changed",
+  "XAUUSD Microstructure Changed",
+  "XAUUSD Price Action Changed",
+]);
+
 self.addEventListener("install", () => {
   self.skipWaiting();
 });
@@ -15,6 +21,9 @@ self.addEventListener("push", (event) => {
   }
 
   const title = data.title || "XAUUSD Signal Changed";
+  if (!self.ALLOWED_ALERT_TITLES.has(title)) {
+    return;
+  }
   const options = {
     body: data.body || "Market signal changed",
     icon: "/static/favicon.png",
