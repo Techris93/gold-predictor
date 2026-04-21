@@ -1,12 +1,6 @@
 {
   "windows": [
     {
-      "name": "Retail Sales",
-      "start": "2026-04-21T12:00:00Z",
-      "end": "2026-04-21T13:45:00Z",
-      "reason": "Release date from the St. Louis Fed FRED release schedule for April 21, 2026 (Selected Real Retail Sales Series)."
-    },
-    {
       "name": "Initial Jobless Claims",
       "start": "2026-04-23T12:10:00Z",
       "end": "2026-04-23T13:30:00Z",
