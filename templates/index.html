@@ -181,6 +181,36 @@
         gap: 2px;
       }
 
+      .brand-meta {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .brand-pill {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 1.75rem;
+        padding: 0 10px;
+        border-radius: 999px;
+        border: 1px solid rgba(214, 196, 94, 0.28);
+        background: rgba(214, 196, 94, 0.12);
+        color: var(--accent);
+        font-size: 0.76rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        line-height: 1;
+      }
+
+      .brand-status {
+        color: var(--text-muted);
+        font-size: 0.86rem;
+        line-height: 1.35;
+      }
+
       .app-eyebrow {
         color: var(--accent);
         font-size: 0.76rem;
@@ -367,6 +397,13 @@
         font-size: 0.92rem;
         line-height: 1.45;
         overflow-wrap: anywhere;
+      }
+
+      .status-pill-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 14px;
       }
 
       .status-pill {
@@ -699,6 +736,34 @@
         font-size: 0.88rem;
       }
 
+      .decision-toggle-preview,
+      .ar-preview,
+      .section-toggle-preview {
+        color: var(--text-main);
+        font-size: 0.9rem;
+        font-weight: 500;
+        line-height: 1.45;
+        overflow-wrap: anywhere;
+      }
+
+      .section-toggle-preview.preview-bullish,
+      .decision-toggle-preview.preview-bullish,
+      .ar-preview.preview-bullish {
+        color: var(--bullish);
+      }
+
+      .section-toggle-preview.preview-bearish,
+      .decision-toggle-preview.preview-bearish,
+      .ar-preview.preview-bearish {
+        color: var(--bearish);
+      }
+
+      .section-toggle-preview.preview-watch,
+      .decision-toggle-preview.preview-watch,
+      .ar-preview.preview-watch {
+        color: var(--accent);
+      }
+
       .section-toggle-label {
         color: var(--text-main);
         font-family: "Space Grotesk", sans-serif;
@@ -997,7 +1062,10 @@
             alt=""
           />
           <div class="brand-copy">
-            <p class="app-eyebrow">Gold Predictor</p>
+            <div class="brand-meta">
+              <span class="brand-pill">Gold Predictor</span>
+              <span class="brand-status">Live execution console</span>
+            </div>
             <h1>XAUUSD Intelligence Console</h1>
           </div>
         </div>
@@ -1030,24 +1098,26 @@
                 <div class="confidence-bar-fill" id="confidence-bar"></div>
               </div>
             </div>
-            <div
-              class="socket-state status-pill"
-              id="socket-state"
-              role="status"
-              aria-live="polite"
-            >
-              Push channel: connecting...
-            </div>
-            <div
-              class="socket-state status-pill"
-              id="bg-push-state"
-              role="status"
-              aria-live="polite"
-            >
-              Background push: not enabled
-            </div>
-            <div class="socket-state status-pill" id="alert-policy-state">
-              Alerts: price action only
+            <div class="status-pill-row">
+              <div
+                class="socket-state status-pill"
+                id="socket-state"
+                role="status"
+                aria-live="polite"
+              >
+                Push channel: connecting...
+              </div>
+              <div
+                class="socket-state status-pill"
+                id="bg-push-state"
+                role="status"
+                aria-live="polite"
+              >
+                Background push: not enabled
+              </div>
+              <div class="socket-state status-pill" id="alert-policy-state">
+                Alerts: price action only
+              </div>
             </div>
           </div>
         </section>
@@ -1132,6 +1202,9 @@
                   >Tap to open trend, momentum, and active parameter
                   details</span
                 >
+                <span class="section-toggle-preview" id="technical-preview"
+                  >Trend, alignment, and active parameter snapshot</span
+                >
               </span>
               <span class="ar-toggle-meta">
                 <span class="ar-toggle-badge js-toggle-badge">Hidden</span>
@@ -1204,6 +1277,9 @@
                 <span class="section-toggle-subtext"
                   >Tap to open guidance summary and execution workflow</span
                 >
+                <span class="section-toggle-preview" id="guidance-preview"
+                  >Sell, buy, and exit balance at a glance</span
+                >
               </span>
               <span class="ar-toggle-meta">
                 <span class="ar-toggle-badge js-toggle-badge">Hidden</span>
@@ -1260,6 +1336,11 @@
                     <span class="decision-toggle-subtext"
                       >Tap to open execution state, forecast bucket, and checklist
                       rules</span
+                    >
+                    <span
+                      class="decision-toggle-preview"
+                      id="execution-preview"
+                      >Execution readiness and anti-chop status</span
                     >
                   </span>
                   <span class="ar-toggle-meta">
@@ -1454,6 +1535,9 @@
               <span class="ar-heading-wrap">
                 <span class="ar-heading">Autoresearch</span>
                 <span class="ar-subtext">Tap to expand research details</span>
+                <span class="ar-preview" id="ar-preview"
+                  >Research status, ROI, and promotion signal</span
+                >
               </span>
               <span class="ar-toggle-meta">
                 <span class="ar-toggle-badge" id="ar-toggle-status"
@@ -2203,6 +2287,25 @@
         el.style.color = isGood ? "var(--accent-strong)" : "var(--text-muted)";
       }
 
+      function updatePreviewState(elementId, text, tone = "") {
+        const el = document.getElementById(elementId);
+        if (!el) return;
+        el.innerText = text;
+        const baseClass = el.className
+          .split(/\s+/)
+          .filter(
+            (token) =>
+              token &&
+              ![
+                "preview-bullish",
+                "preview-bearish",
+                "preview-watch",
+              ].includes(token),
+          )
+          .join(" ");
+        el.className = `${baseClass}${tone ? ` ${tone}` : ""}`;
+      }
+
       function isAllowedIndicatorAlert(payload) {
         const title = String(payload?.title || "").trim();
         if (title && ALLOWED_LIVE_ALERT_TITLES.has(title)) {
@@ -2471,6 +2574,11 @@
           if (toggleStatusEl) {
             toggleStatusEl.innerText = "No report";
           }
+          updatePreviewState(
+            "ar-preview",
+            "No report available yet",
+            "preview-bearish",
+          );
         }
       }
 
@@ -2554,6 +2662,17 @@
             ? new Date(data.latest_generated_at).toLocaleString()
             : "N/A";
         }
+        const roiPreview =
+          data.summary?.roi !== null && data.summary?.roi !== undefined
+            ? `${Number(data.summary.roi).toFixed(2)}% ROI`
+            : data.median_score !== null && data.median_score !== undefined
+              ? `${Number(data.median_score).toFixed(2)}% median ROI`
+              : "ROI pending";
+        updatePreviewState(
+          "ar-preview",
+          `Loaded · ${roiPreview} · ${latestRunPromoted ? "Recommend" : "Hold"}`,
+          latestRunPromoted ? "preview-bullish" : "preview-watch",
+        );
       }
 
       function getGuidanceLevel(score) {
@@ -3159,6 +3278,19 @@
           regime.atr_percent !== undefined
             ? `${safeText(regime.atr_percent)}%`
             : "N/A";
+        const technicalPreviewTone =
+          trendText === "Bullish" && alignmentText.includes("Bullish")
+            ? "preview-bullish"
+            : trendText === "Bearish" && alignmentText.includes("Bearish")
+              ? "preview-bearish"
+              : regimeText.includes("Range")
+                ? "preview-watch"
+                : "";
+        updatePreviewState(
+          "technical-preview",
+          `${trendText} trend · ${alignmentText} · ADX ${regime.adx_14 !== undefined ? safeText(regime.adx_14) : "N/A"}`,
+          technicalPreviewTone,
+        );
         const activeParamsEl = document.getElementById("ta-active-params");
         if (activeParamsEl) {
           activeParamsEl.innerText = formatActiveParamsSummary(
@@ -3410,6 +3542,23 @@
         exitEl.className = `metric-value ${tradeGuidance.exitLevel === "High" ? "value-bearish" : tradeGuidance.exitLevel === "Medium" ? "value-bullish" : ""}`;
 
         summaryEl.innerText = tradeGuidance.summary;
+        const guidancePreviewTone =
+          (tradeGuidance.sellLevel === "Strong" ||
+            tradeGuidance.sellLevel === "Watch") &&
+          tradeGuidance.buyLevel === "Weak"
+            ? "preview-bearish"
+            : (tradeGuidance.buyLevel === "Strong" ||
+                tradeGuidance.buyLevel === "Watch") &&
+                tradeGuidance.sellLevel === "Weak"
+              ? "preview-bullish"
+              : tradeGuidance.exitLevel === "High"
+                ? "preview-watch"
+                : "";
+        updatePreviewState(
+          "guidance-preview",
+          `Sell ${tradeGuidance.sellLevel} · Buy ${tradeGuidance.buyLevel} · Exit ${tradeGuidance.exitLevel}`,
+          guidancePreviewTone,
+        );
 
         const checklist =
           data.DecisionStatus && typeof data.DecisionStatus === "object"
@@ -3436,13 +3585,15 @@
           data.ForecastState && typeof data.ForecastState === "object"
             ? data.ForecastState
             : {};
+        const forecastBucket = forecastState.regimeBucket || "transition";
         const forecastBucketEl = document.getElementById("forecast-bucket");
         if (forecastBucketEl) {
-          const forecastBucket = forecastState.regimeBucket || "transition";
           forecastBucketEl.innerText = humanizeWords(forecastBucket);
           forecastBucketEl.className = `metric-value ${forecastBucket === "active_momentum" ? "value-bullish" : forecastBucket === "reversal_risk" ? "value-bearish" : ""}`;
         }
         const executionStateEl = document.getElementById("execution-state");
+        let executionPreviewTone = "";
+        let executionPreviewStatus = "Stand Aside";
         if (executionStateEl) {
           const executionStatus = executionState.status || "stand_aside";
           const executionActionState = String(
@@ -3462,20 +3613,40 @@
                   : executionStatus === "prepare"
                     ? ""
                     : "";
+          executionPreviewStatus = humanizeWords(executionStatus);
+          executionPreviewTone =
+            executionStatus === "enter" ||
+            executionActionState === "LONG_ACTIVE"
+              ? "preview-bullish"
+              : executionStatus === "exit" ||
+                  executionActionState === "SHORT_ACTIVE"
+                ? "preview-bearish"
+                : executionStatus === "prepare"
+                  ? "preview-watch"
+                  : "";
           executionStateEl.innerText = humanizeWords(executionStatus);
           executionStateEl.className = `metric-value ${executionTone}`;
         }
         const antiChopEl = document.getElementById("anti-chop-state");
+        let antiChopPreviewText = "Filter clear";
         if (antiChopEl) {
           const antiChopReasons = Array.isArray(executionState.antiChopReasons)
             ? executionState.antiChopReasons
             : [];
+          antiChopPreviewText = executionState.antiChopActive
+            ? "Anti-chop active"
+            : "Filter clear";
           antiChopEl.innerText = executionState.antiChopActive
             ? antiChopReasons[0] ||
               "Execution is being suppressed by the anti-chop filter."
             : "Clear";
           antiChopEl.className = `metric-value ${executionState.antiChopActive ? "value-bearish" : "value-bullish"}`;
         }
+        updatePreviewState(
+          "execution-preview",
+          `${executionPreviewStatus} · ${humanizeWords(forecastBucket)} · ${antiChopPreviewText}`,
+          executionState.antiChopActive ? "preview-watch" : executionPreviewTone,
+        );
 
         suppressNextUiChangeNotification = false;
       }
