@@ -1,18 +1,11 @@
 {
   "windows": [
     {
-      "name": "S&P Global Flash US Manufacturing PMI",
-      "start": "2026-04-23T13:30:00Z",
-      "end": "2026-04-23T14:30:00Z",
-      "release": "2026-04-23T13:45:00Z",
-      "reason": "Official S&P Global PMI calendar lists S&P Global Flash US PMI for April 23, 2026 at 13:45 UTC; this publication bundle covers the paired US flash manufacturing and services PMI releases."
-    },
-    {
-      "name": "S&P Global Flash US Services PMI",
-      "start": "2026-04-23T13:30:00Z",
-      "end": "2026-04-23T14:30:00Z",
-      "release": "2026-04-23T13:45:00Z",
-      "reason": "Official S&P Global PMI calendar lists S&P Global Flash US PMI for April 23, 2026 at 13:45 UTC; this publication bundle covers the paired US flash manufacturing and services PMI releases."
+      "name": "Initial Jobless Claims",
+      "start": "2026-04-24T12:10:00Z",
+      "end": "2026-04-24T13:30:00Z",
+      "release": "2026-04-24T12:30:00Z",
+      "reason": "Release date from the St. Louis Fed FRED release schedule for April 24, 2026 (State Unemployment Insurance Weekly Claims Report)."
     },
     {
       "name": "Michigan Consumer Sentiment (Final)",
@@ -20,13 +13,6 @@
       "end": "2026-04-24T14:45:00Z",
       "release": "2026-04-24T14:00:00Z",
       "reason": "Official University of Michigan Surveys of Consumers 2026 release dates list Michigan Consumer Sentiment (Final) for April 24, 2026 at 10:00 ET."
-    },
-    {
-      "name": "Initial Jobless Claims",
-      "start": "2026-04-24T18:40:00Z",
-      "end": "2026-04-24T20:00:00Z",
-      "release": "2026-04-24T19:00:00Z",
-      "reason": "Release date from the St. Louis Fed FRED release schedule for April 24, 2026 (State Unemployment Insurance Weekly Claims Report)."
     },
     {
       "name": "Conference Board Consumer Confidence",
@@ -41,6 +27,13 @@
       "end": "2026-04-29T19:30:00Z",
       "release": "2026-04-29T18:00:00Z",
       "reason": "Federal Reserve FOMC statement and press conference window for April 29, 2026."
+    },
+    {
+      "name": "Retail Sales",
+      "start": "2026-04-30T12:00:00Z",
+      "end": "2026-04-30T13:45:00Z",
+      "release": "2026-04-30T12:30:00Z",
+      "reason": "Release date from the St. Louis Fed FRED release schedule for April 30, 2026 (Monthly State Retail Sales)."
     },
     {
       "name": "Personal Income and Outlays",
@@ -64,11 +57,11 @@
       "reason": "Release date from the St. Louis Fed FRED release schedule for April 30, 2026 (Unemployment Insurance Weekly Claims Report)."
     },
     {
-      "name": "Retail Sales",
-      "start": "2026-04-30T15:30:00Z",
-      "end": "2026-04-30T17:15:00Z",
-      "release": "2026-04-30T16:00:00Z",
-      "reason": "Release date from the St. Louis Fed FRED release schedule for April 30, 2026 (Monthly State Retail Sales)."
+      "name": "Initial Jobless Claims",
+      "start": "2026-05-01T12:10:00Z",
+      "end": "2026-05-01T13:30:00Z",
+      "release": "2026-05-01T12:30:00Z",
+      "reason": "Release date from the St. Louis Fed FRED release schedule for May 1, 2026 (State Unemployment Insurance Weekly Claims Report)."
     },
     {
       "name": "S&P Global US Manufacturing PMI",
@@ -83,13 +76,6 @@
       "end": "2026-05-01T14:45:00Z",
       "release": "2026-05-01T14:00:00Z",
       "reason": "Official ISM PMI release calendar lists the ISM Manufacturing PMI for May 1, 2026 at 10:00 ET."
-    },
-    {
-      "name": "Initial Jobless Claims",
-      "start": "2026-05-01T18:40:00Z",
-      "end": "2026-05-01T20:00:00Z",
-      "release": "2026-05-01T19:00:00Z",
-      "reason": "Release date from the St. Louis Fed FRED release schedule for May 1, 2026 (State Unemployment Insurance Weekly Claims Report)."
     },
     {
       "name": "S&P Global US Services PMI",
@@ -134,18 +120,18 @@
       "reason": "Employment Situation release date from the St. Louis Fed FRED release schedule for May 8, 2026; FRED notes dates are published by the source."
     },
     {
+      "name": "Initial Jobless Claims",
+      "start": "2026-05-08T12:10:00Z",
+      "end": "2026-05-08T13:30:00Z",
+      "release": "2026-05-08T12:30:00Z",
+      "reason": "Release date from the St. Louis Fed FRED release schedule for May 8, 2026 (State Unemployment Insurance Weekly Claims Report)."
+    },
+    {
       "name": "Michigan Consumer Sentiment (Prelim)",
       "start": "2026-05-08T13:45:00Z",
       "end": "2026-05-08T14:45:00Z",
       "release": "2026-05-08T14:00:00Z",
       "reason": "Official University of Michigan Surveys of Consumers 2026 release dates list Michigan Consumer Sentiment (Prelim) for May 8, 2026 at 10:00 ET."
-    },
-    {
-      "name": "Initial Jobless Claims",
-      "start": "2026-05-08T18:40:00Z",
-      "end": "2026-05-08T20:00:00Z",
-      "release": "2026-05-08T19:00:00Z",
-      "reason": "Release date from the St. Louis Fed FRED release schedule for May 8, 2026 (State Unemployment Insurance Weekly Claims Report)."
     },
     {
       "name": "CPI",
@@ -177,9 +163,9 @@
     },
     {
       "name": "Initial Jobless Claims",
-      "start": "2026-05-15T18:40:00Z",
-      "end": "2026-05-15T20:00:00Z",
-      "release": "2026-05-15T19:00:00Z",
+      "start": "2026-05-15T12:10:00Z",
+      "end": "2026-05-15T13:30:00Z",
+      "release": "2026-05-15T12:30:00Z",
       "reason": "Release date from the St. Louis Fed FRED release schedule for May 15, 2026 (State Unemployment Insurance Weekly Claims Report)."
     },
     {
@@ -188,6 +174,13 @@
       "end": "2026-05-20T18:45:00Z",
       "release": "2026-05-20T18:00:00Z",
       "reason": "Federal Reserve FOMC calendars note minutes are released three weeks after the policy decision; this window tracks that scheduled minutes release."
+    },
+    {
+      "name": "Retail Sales",
+      "start": "2026-05-21T12:00:00Z",
+      "end": "2026-05-21T13:45:00Z",
+      "release": "2026-05-21T12:30:00Z",
+      "reason": "Release date from the St. Louis Fed FRED release schedule for May 21, 2026 (Monthly State Retail Sales)."
     },
     {
       "name": "Initial Jobless Claims",
@@ -211,11 +204,11 @@
       "reason": "Official S&P Global PMI calendar lists S&P Global Flash US PMI for May 21, 2026 at 13:45 UTC; this publication bundle covers the paired US flash manufacturing and services PMI releases."
     },
     {
-      "name": "Retail Sales",
-      "start": "2026-05-21T15:30:00Z",
-      "end": "2026-05-21T17:15:00Z",
-      "release": "2026-05-21T16:00:00Z",
-      "reason": "Release date from the St. Louis Fed FRED release schedule for May 21, 2026 (Monthly State Retail Sales)."
+      "name": "Initial Jobless Claims",
+      "start": "2026-05-22T12:10:00Z",
+      "end": "2026-05-22T13:30:00Z",
+      "release": "2026-05-22T12:30:00Z",
+      "reason": "Release date from the St. Louis Fed FRED release schedule for May 22, 2026 (State Unemployment Insurance Weekly Claims Report)."
     },
     {
       "name": "Michigan Consumer Sentiment (Final)",
@@ -223,13 +216,6 @@
       "end": "2026-05-22T14:45:00Z",
       "release": "2026-05-22T14:00:00Z",
       "reason": "Official University of Michigan Surveys of Consumers 2026 release dates list Michigan Consumer Sentiment (Final) for May 22, 2026 at 10:00 ET."
-    },
-    {
-      "name": "Initial Jobless Claims",
-      "start": "2026-05-22T18:40:00Z",
-      "end": "2026-05-22T20:00:00Z",
-      "release": "2026-05-22T19:00:00Z",
-      "reason": "Release date from the St. Louis Fed FRED release schedule for May 22, 2026 (State Unemployment Insurance Weekly Claims Report)."
     },
     {
       "name": "Conference Board Consumer Confidence",
@@ -261,9 +247,9 @@
     },
     {
       "name": "Initial Jobless Claims",
-      "start": "2026-05-29T18:40:00Z",
-      "end": "2026-05-29T20:00:00Z",
-      "release": "2026-05-29T19:00:00Z",
+      "start": "2026-05-29T12:10:00Z",
+      "end": "2026-05-29T13:30:00Z",
+      "release": "2026-05-29T12:30:00Z",
       "reason": "Release date from the St. Louis Fed FRED release schedule for May 29, 2026 (State Unemployment Insurance Weekly Claims Report)."
     },
     {
@@ -310,9 +296,9 @@
     },
     {
       "name": "Initial Jobless Claims",
-      "start": "2026-06-05T18:40:00Z",
-      "end": "2026-06-05T20:00:00Z",
-      "release": "2026-06-05T19:00:00Z",
+      "start": "2026-06-05T12:10:00Z",
+      "end": "2026-06-05T13:30:00Z",
+      "release": "2026-06-05T12:30:00Z",
       "reason": "Release date from the St. Louis Fed FRED release schedule for June 5, 2026 (State Unemployment Insurance Weekly Claims Report)."
     },
     {
@@ -337,18 +323,18 @@
       "reason": "Release date from the St. Louis Fed FRED release schedule for June 11, 2026 (Unemployment Insurance Weekly Claims Report)."
     },
     {
+      "name": "Initial Jobless Claims",
+      "start": "2026-06-12T12:10:00Z",
+      "end": "2026-06-12T13:30:00Z",
+      "release": "2026-06-12T12:30:00Z",
+      "reason": "Release date from the St. Louis Fed FRED release schedule for June 12, 2026 (State Unemployment Insurance Weekly Claims Report)."
+    },
+    {
       "name": "Michigan Consumer Sentiment (Prelim)",
       "start": "2026-06-12T13:45:00Z",
       "end": "2026-06-12T14:45:00Z",
       "release": "2026-06-12T14:00:00Z",
       "reason": "Official University of Michigan Surveys of Consumers 2026 release dates list Michigan Consumer Sentiment (Prelim) for June 12, 2026 at 10:00 ET."
-    },
-    {
-      "name": "Initial Jobless Claims",
-      "start": "2026-06-12T18:40:00Z",
-      "end": "2026-06-12T20:00:00Z",
-      "release": "2026-06-12T19:00:00Z",
-      "reason": "Release date from the St. Louis Fed FRED release schedule for June 12, 2026 (State Unemployment Insurance Weekly Claims Report)."
     },
     {
       "name": "Retail Sales",
@@ -373,10 +359,17 @@
     },
     {
       "name": "Initial Jobless Claims",
-      "start": "2026-06-19T18:40:00Z",
-      "end": "2026-06-19T20:00:00Z",
-      "release": "2026-06-19T19:00:00Z",
+      "start": "2026-06-19T12:10:00Z",
+      "end": "2026-06-19T13:30:00Z",
+      "release": "2026-06-19T12:30:00Z",
       "reason": "Release date from the St. Louis Fed FRED release schedule for June 19, 2026 (State Unemployment Insurance Weekly Claims Report)."
+    },
+    {
+      "name": "Retail Sales",
+      "start": "2026-06-25T12:00:00Z",
+      "end": "2026-06-25T13:45:00Z",
+      "release": "2026-06-25T12:30:00Z",
+      "reason": "Release date from the St. Louis Fed FRED release schedule for June 25, 2026 (Monthly State Retail Sales)."
     },
     {
       "name": "Personal Income and Outlays",
@@ -400,18 +393,11 @@
       "reason": "Release date from the St. Louis Fed FRED release schedule for June 25, 2026 (Unemployment Insurance Weekly Claims Report)."
     },
     {
-      "name": "Gross Domestic Product",
-      "start": "2026-06-25T14:30:00Z",
-      "end": "2026-06-25T16:15:00Z",
-      "release": "2026-06-25T15:00:00Z",
-      "reason": "Release date from the St. Louis Fed FRED release schedule for June 25, 2026 (Gross Domestic Product by State)."
-    },
-    {
-      "name": "Retail Sales",
-      "start": "2026-06-25T15:30:00Z",
-      "end": "2026-06-25T17:15:00Z",
-      "release": "2026-06-25T16:00:00Z",
-      "reason": "Release date from the St. Louis Fed FRED release schedule for June 25, 2026 (Monthly State Retail Sales)."
+      "name": "Initial Jobless Claims",
+      "start": "2026-06-26T12:10:00Z",
+      "end": "2026-06-26T13:30:00Z",
+      "release": "2026-06-26T12:30:00Z",
+      "reason": "Release date from the St. Louis Fed FRED release schedule for June 26, 2026 (State Unemployment Insurance Weekly Claims Report)."
     },
     {
       "name": "Michigan Consumer Sentiment (Final)",
@@ -419,13 +405,6 @@
       "end": "2026-06-26T14:45:00Z",
       "release": "2026-06-26T14:00:00Z",
       "reason": "Official University of Michigan Surveys of Consumers 2026 release dates list Michigan Consumer Sentiment (Final) for June 26, 2026 at 10:00 ET."
-    },
-    {
-      "name": "Initial Jobless Claims",
-      "start": "2026-06-26T18:40:00Z",
-      "end": "2026-06-26T20:00:00Z",
-      "release": "2026-06-26T19:00:00Z",
-      "reason": "Release date from the St. Louis Fed FRED release schedule for June 26, 2026 (State Unemployment Insurance Weekly Claims Report)."
     },
     {
       "name": "JOLTS",
@@ -471,9 +450,9 @@
     },
     {
       "name": "Initial Jobless Claims",
-      "start": "2026-07-03T18:40:00Z",
-      "end": "2026-07-03T20:00:00Z",
-      "release": "2026-07-03T19:00:00Z",
+      "start": "2026-07-03T12:10:00Z",
+      "end": "2026-07-03T13:30:00Z",
+      "release": "2026-07-03T12:30:00Z",
       "reason": "Release date from the St. Louis Fed FRED release schedule for July 3, 2026 (State Unemployment Insurance Weekly Claims Report)."
     },
     {
@@ -499,9 +478,9 @@
     },
     {
       "name": "Initial Jobless Claims",
-      "start": "2026-07-10T18:40:00Z",
-      "end": "2026-07-10T20:00:00Z",
-      "release": "2026-07-10T19:00:00Z",
+      "start": "2026-07-10T12:10:00Z",
+      "end": "2026-07-10T13:30:00Z",
+      "release": "2026-07-10T12:30:00Z",
       "reason": "Release date from the St. Louis Fed FRED release schedule for July 10, 2026 (State Unemployment Insurance Weekly Claims Report)."
     },
     {
@@ -533,6 +512,13 @@
       "reason": "Release date from the St. Louis Fed FRED release schedule for July 16, 2026 (Unemployment Insurance Weekly Claims Report)."
     },
     {
+      "name": "Initial Jobless Claims",
+      "start": "2026-07-17T12:10:00Z",
+      "end": "2026-07-17T13:30:00Z",
+      "release": "2026-07-17T12:30:00Z",
+      "reason": "Release date from the St. Louis Fed FRED release schedule for July 17, 2026 (State Unemployment Insurance Weekly Claims Report)."
+    },
+    {
       "name": "Michigan Consumer Sentiment (Prelim)",
       "start": "2026-07-17T13:45:00Z",
       "end": "2026-07-17T14:45:00Z",
@@ -540,11 +526,11 @@
       "reason": "Official University of Michigan Surveys of Consumers 2026 release dates list Michigan Consumer Sentiment (Prelim) for July 17, 2026 at 10:00 ET."
     },
     {
-      "name": "Initial Jobless Claims",
-      "start": "2026-07-17T18:40:00Z",
-      "end": "2026-07-17T20:00:00Z",
-      "release": "2026-07-17T19:00:00Z",
-      "reason": "Release date from the St. Louis Fed FRED release schedule for July 17, 2026 (State Unemployment Insurance Weekly Claims Report)."
+      "name": "Retail Sales",
+      "start": "2026-07-23T12:00:00Z",
+      "end": "2026-07-23T13:45:00Z",
+      "release": "2026-07-23T12:30:00Z",
+      "reason": "Release date from the St. Louis Fed FRED release schedule for July 23, 2026 (Monthly State Retail Sales)."
     },
     {
       "name": "Initial Jobless Claims",
@@ -554,17 +540,10 @@
       "reason": "Release date from the St. Louis Fed FRED release schedule for July 23, 2026 (Unemployment Insurance Weekly Claims Report)."
     },
     {
-      "name": "Retail Sales",
-      "start": "2026-07-23T15:30:00Z",
-      "end": "2026-07-23T17:15:00Z",
-      "release": "2026-07-23T16:00:00Z",
-      "reason": "Release date from the St. Louis Fed FRED release schedule for July 23, 2026 (Monthly State Retail Sales)."
-    },
-    {
       "name": "Initial Jobless Claims",
-      "start": "2026-07-24T18:40:00Z",
-      "end": "2026-07-24T20:00:00Z",
-      "release": "2026-07-24T19:00:00Z",
+      "start": "2026-07-24T12:10:00Z",
+      "end": "2026-07-24T13:30:00Z",
+      "release": "2026-07-24T12:30:00Z",
       "reason": "Release date from the St. Louis Fed FRED release schedule for July 24, 2026 (State Unemployment Insurance Weekly Claims Report)."
     },
     {
@@ -603,18 +582,18 @@
       "reason": "Release date from the St. Louis Fed FRED release schedule for July 30, 2026 (Unemployment Insurance Weekly Claims Report)."
     },
     {
+      "name": "Initial Jobless Claims",
+      "start": "2026-07-31T12:10:00Z",
+      "end": "2026-07-31T13:30:00Z",
+      "release": "2026-07-31T12:30:00Z",
+      "reason": "Release date from the St. Louis Fed FRED release schedule for July 31, 2026 (State Unemployment Insurance Weekly Claims Report)."
+    },
+    {
       "name": "Michigan Consumer Sentiment (Final)",
       "start": "2026-07-31T13:45:00Z",
       "end": "2026-07-31T14:45:00Z",
       "release": "2026-07-31T14:00:00Z",
       "reason": "Official University of Michigan Surveys of Consumers 2026 release dates list Michigan Consumer Sentiment (Final) for July 31, 2026 at 10:00 ET."
-    },
-    {
-      "name": "Initial Jobless Claims",
-      "start": "2026-07-31T18:40:00Z",
-      "end": "2026-07-31T20:00:00Z",
-      "release": "2026-07-31T19:00:00Z",
-      "reason": "Release date from the St. Louis Fed FRED release schedule for July 31, 2026 (State Unemployment Insurance Weekly Claims Report)."
     },
     {
       "name": "ISM Manufacturing PMI",
@@ -660,9 +639,9 @@
     },
     {
       "name": "Initial Jobless Claims",
-      "start": "2026-08-07T18:40:00Z",
-      "end": "2026-08-07T20:00:00Z",
-      "release": "2026-08-07T19:00:00Z",
+      "start": "2026-08-07T12:10:00Z",
+      "end": "2026-08-07T13:30:00Z",
+      "release": "2026-08-07T12:30:00Z",
       "reason": "Release date from the St. Louis Fed FRED release schedule for August 7, 2026 (State Unemployment Insurance Weekly Claims Report)."
     },
     {
@@ -694,18 +673,18 @@
       "reason": "Release date from the St. Louis Fed FRED release schedule for August 14, 2026 (Selected Real Retail Sales Series)."
     },
     {
+      "name": "Initial Jobless Claims",
+      "start": "2026-08-14T12:10:00Z",
+      "end": "2026-08-14T13:30:00Z",
+      "release": "2026-08-14T12:30:00Z",
+      "reason": "Release date from the St. Louis Fed FRED release schedule for August 14, 2026 (State Unemployment Insurance Weekly Claims Report)."
+    },
+    {
       "name": "Michigan Consumer Sentiment (Prelim)",
       "start": "2026-08-14T13:45:00Z",
       "end": "2026-08-14T14:45:00Z",
       "release": "2026-08-14T14:00:00Z",
       "reason": "Official University of Michigan Surveys of Consumers 2026 release dates list Michigan Consumer Sentiment (Prelim) for August 14, 2026 at 10:00 ET."
-    },
-    {
-      "name": "Initial Jobless Claims",
-      "start": "2026-08-14T18:40:00Z",
-      "end": "2026-08-14T20:00:00Z",
-      "release": "2026-08-14T19:00:00Z",
-      "reason": "Release date from the St. Louis Fed FRED release schedule for August 14, 2026 (State Unemployment Insurance Weekly Claims Report)."
     },
     {
       "name": "FOMC Minutes",
@@ -715,6 +694,13 @@
       "reason": "Federal Reserve FOMC calendars note minutes are released three weeks after the policy decision; this window tracks that scheduled minutes release."
     },
     {
+      "name": "Retail Sales",
+      "start": "2026-08-20T12:00:00Z",
+      "end": "2026-08-20T13:45:00Z",
+      "release": "2026-08-20T12:30:00Z",
+      "reason": "Release date from the St. Louis Fed FRED release schedule for August 20, 2026 (Monthly State Retail Sales)."
+    },
+    {
       "name": "Initial Jobless Claims",
       "start": "2026-08-20T12:10:00Z",
       "end": "2026-08-20T13:30:00Z",
@@ -722,17 +708,10 @@
       "reason": "Release date from the St. Louis Fed FRED release schedule for August 20, 2026 (Unemployment Insurance Weekly Claims Report)."
     },
     {
-      "name": "Retail Sales",
-      "start": "2026-08-20T15:30:00Z",
-      "end": "2026-08-20T17:15:00Z",
-      "release": "2026-08-20T16:00:00Z",
-      "reason": "Release date from the St. Louis Fed FRED release schedule for August 20, 2026 (Monthly State Retail Sales)."
-    },
-    {
       "name": "Initial Jobless Claims",
-      "start": "2026-08-21T18:40:00Z",
-      "end": "2026-08-21T20:00:00Z",
-      "release": "2026-08-21T19:00:00Z",
+      "start": "2026-08-21T12:10:00Z",
+      "end": "2026-08-21T13:30:00Z",
+      "release": "2026-08-21T12:30:00Z",
       "reason": "Release date from the St. Louis Fed FRED release schedule for August 21, 2026 (State Unemployment Insurance Weekly Claims Report)."
     },
     {
@@ -764,18 +743,18 @@
       "reason": "Release date from the St. Louis Fed FRED release schedule for August 27, 2026 (Unemployment Insurance Weekly Claims Report)."
     },
     {
+      "name": "Initial Jobless Claims",
+      "start": "2026-08-28T12:10:00Z",
+      "end": "2026-08-28T13:30:00Z",
+      "release": "2026-08-28T12:30:00Z",
+      "reason": "Release date from the St. Louis Fed FRED release schedule for August 28, 2026 (State Unemployment Insurance Weekly Claims Report)."
+    },
+    {
       "name": "Michigan Consumer Sentiment (Final)",
       "start": "2026-08-28T13:45:00Z",
       "end": "2026-08-28T14:45:00Z",
       "release": "2026-08-28T14:00:00Z",
       "reason": "Official University of Michigan Surveys of Consumers 2026 release dates list Michigan Consumer Sentiment (Final) for August 28, 2026 at 10:00 ET."
-    },
-    {
-      "name": "Initial Jobless Claims",
-      "start": "2026-08-28T18:40:00Z",
-      "end": "2026-08-28T20:00:00Z",
-      "release": "2026-08-28T19:00:00Z",
-      "reason": "Release date from the St. Louis Fed FRED release schedule for August 28, 2026 (State Unemployment Insurance Weekly Claims Report)."
     },
     {
       "name": "ISM Manufacturing PMI",
@@ -821,9 +800,9 @@
     },
     {
       "name": "Initial Jobless Claims",
-      "start": "2026-09-04T18:40:00Z",
-      "end": "2026-09-04T20:00:00Z",
-      "release": "2026-09-04T19:00:00Z",
+      "start": "2026-09-04T12:10:00Z",
+      "end": "2026-09-04T13:30:00Z",
+      "release": "2026-09-04T12:30:00Z",
       "reason": "Release date from the St. Louis Fed FRED release schedule for September 4, 2026 (State Unemployment Insurance Weekly Claims Report)."
     },
     {
@@ -848,18 +827,18 @@
       "reason": "Consumer Price Index release date from the St. Louis Fed FRED release schedule for September 11, 2026; FRED notes dates are published by the source."
     },
     {
+      "name": "Initial Jobless Claims",
+      "start": "2026-09-11T12:10:00Z",
+      "end": "2026-09-11T13:30:00Z",
+      "release": "2026-09-11T12:30:00Z",
+      "reason": "Release date from the St. Louis Fed FRED release schedule for September 11, 2026 (State Unemployment Insurance Weekly Claims Report)."
+    },
+    {
       "name": "Michigan Consumer Sentiment (Prelim)",
       "start": "2026-09-11T13:45:00Z",
       "end": "2026-09-11T14:45:00Z",
       "release": "2026-09-11T14:00:00Z",
       "reason": "Official University of Michigan Surveys of Consumers 2026 release dates list Michigan Consumer Sentiment (Prelim) for September 11, 2026 at 10:00 ET."
-    },
-    {
-      "name": "Initial Jobless Claims",
-      "start": "2026-09-11T18:40:00Z",
-      "end": "2026-09-11T20:00:00Z",
-      "release": "2026-09-11T19:00:00Z",
-      "reason": "Release date from the St. Louis Fed FRED release schedule for September 11, 2026 (State Unemployment Insurance Weekly Claims Report)."
     },
     {
       "name": "Retail Sales",
@@ -884,9 +863,9 @@
     },
     {
       "name": "Initial Jobless Claims",
-      "start": "2026-09-18T18:40:00Z",
-      "end": "2026-09-18T20:00:00Z",
-      "release": "2026-09-18T19:00:00Z",
+      "start": "2026-09-18T12:10:00Z",
+      "end": "2026-09-18T13:30:00Z",
+      "release": "2026-09-18T12:30:00Z",
       "reason": "Release date from the St. Louis Fed FRED release schedule for September 18, 2026 (State Unemployment Insurance Weekly Claims Report)."
     },
     {
@@ -895,6 +874,13 @@
       "end": "2026-09-24T13:30:00Z",
       "release": "2026-09-24T12:30:00Z",
       "reason": "Release date from the St. Louis Fed FRED release schedule for September 24, 2026 (Unemployment Insurance Weekly Claims Report)."
+    },
+    {
+      "name": "Initial Jobless Claims",
+      "start": "2026-09-25T12:10:00Z",
+      "end": "2026-09-25T13:30:00Z",
+      "release": "2026-09-25T12:30:00Z",
+      "reason": "Release date from the St. Louis Fed FRED release schedule for September 25, 2026 (State Unemployment Insurance Weekly Claims Report)."
     },
     {
       "name": "Michigan Consumer Sentiment (Final)",
@@ -939,13 +925,6 @@
       "reason": "Release date from the St. Louis Fed FRED release schedule for September 30, 2026 (Gross Domestic Product)."
     },
     {
-      "name": "Gross Domestic Product",
-      "start": "2026-09-30T14:30:00Z",
-      "end": "2026-09-30T16:15:00Z",
-      "release": "2026-09-30T15:00:00Z",
-      "reason": "Release date from the St. Louis Fed FRED release schedule for September 30, 2026 (Gross Domestic Product by State)."
-    },
-    {
       "name": "Initial Jobless Claims",
       "start": "2026-10-01T12:10:00Z",
       "end": "2026-10-01T13:30:00Z",
@@ -967,6 +946,13 @@
       "reason": "Employment Situation release date from the St. Louis Fed FRED release schedule for October 2, 2026; FRED notes dates are published by the source."
     },
     {
+      "name": "Initial Jobless Claims",
+      "start": "2026-10-02T12:10:00Z",
+      "end": "2026-10-02T13:30:00Z",
+      "release": "2026-10-02T12:30:00Z",
+      "reason": "Release date from the St. Louis Fed FRED release schedule for October 2, 2026 (State Unemployment Insurance Weekly Claims Report)."
+    },
+    {
       "name": "ISM Services PMI",
       "start": "2026-10-05T13:45:00Z",
       "end": "2026-10-05T14:45:00Z",
@@ -986,6 +972,13 @@
       "end": "2026-10-08T13:30:00Z",
       "release": "2026-10-08T12:30:00Z",
       "reason": "Release date from the St. Louis Fed FRED release schedule for October 8, 2026 (Unemployment Insurance Weekly Claims Report)."
+    },
+    {
+      "name": "Initial Jobless Claims",
+      "start": "2026-10-09T12:10:00Z",
+      "end": "2026-10-09T13:30:00Z",
+      "release": "2026-10-09T12:30:00Z",
+      "reason": "Release date from the St. Louis Fed FRED release schedule for October 9, 2026 (State Unemployment Insurance Weekly Claims Report)."
     },
     {
       "name": "Michigan Consumer Sentiment (Prelim)",
@@ -1021,6 +1014,13 @@
       "end": "2026-10-15T13:30:00Z",
       "release": "2026-10-15T12:30:00Z",
       "reason": "Release date from the St. Louis Fed FRED release schedule for October 15, 2026 (Unemployment Insurance Weekly Claims Report)."
+    },
+    {
+      "name": "Initial Jobless Claims",
+      "start": "2026-10-16T12:10:00Z",
+      "end": "2026-10-16T13:30:00Z",
+      "release": "2026-10-16T12:30:00Z",
+      "reason": "Release date from the St. Louis Fed FRED release schedule for October 16, 2026 (State Unemployment Insurance Weekly Claims Report)."
     }
   ]
 }
