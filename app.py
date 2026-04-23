@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import requests
 from tools import predict_gold
+from tools.research_runtime import create_research_brief, load_job_bundle, research_status
 from tools.signal_engine import (
     compute_prediction_from_ta,
 )
@@ -4117,6 +4118,47 @@ def get_autoresearch_latest():
         },
         "checks": {},
     })
+
+
+@app.route('/api/research/status')
+def get_research_status():
+    try:
+        return jsonify(research_status()), 200
+    except Exception as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 500
+
+
+@app.route('/api/research/jobs/<job_name>')
+def get_research_job(job_name):
+    try:
+        payload = load_job_bundle(job_name)
+        if payload is None:
+            return jsonify({"status": "error", "message": f"Job '{job_name}' was not found."}), 404
+        return jsonify({"status": "success", **payload}), 200
+    except Exception as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 500
+
+
+@app.route('/api/research/brief', methods=['POST'])
+def post_research_brief():
+    payload = request.get_json(silent=True) or {}
+    hypothesis = str(payload.get("hypothesis") or "").strip()
+    if not hypothesis:
+        return jsonify({"status": "error", "message": "Missing hypothesis."}), 400
+    job_name = str(payload.get("job_name") or payload.get("jobName") or "").strip()
+    if not job_name:
+        return jsonify({"status": "error", "message": "Missing job_name."}), 400
+
+    try:
+        brief = create_research_brief(
+            job_name=job_name,
+            hypothesis=hypothesis,
+            focus=str(payload.get("focus") or "").strip(),
+            constraints=str(payload.get("constraints") or "").strip(),
+        )
+        return jsonify({"status": "success", "brief": brief}), 200
+    except Exception as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 500
 
 @app.route('/api/predict')
 def get_prediction():
