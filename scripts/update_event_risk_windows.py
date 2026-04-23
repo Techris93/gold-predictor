@@ -107,6 +107,8 @@ class MacroReleaseConfig:
     start_pad_minutes: int
     end_pad_minutes: int
     reason_template: str
+    source_name_equals: tuple[str, ...] = ()
+    exclude_terms: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -139,6 +141,7 @@ NEAR_RELEASE_WINDOWS = [
             "Release date from the St. Louis Fed FRED release schedule for {date_label} "
             "({source_label})."
         ),
+        source_name_equals=("Unemployment Insurance Weekly Claims Report",),
     ),
     MacroReleaseConfig(
         name="ADP Employment",
@@ -150,6 +153,7 @@ NEAR_RELEASE_WINDOWS = [
             "Release date from the St. Louis Fed FRED release schedule for {date_label} "
             "({source_label})."
         ),
+        source_name_equals=("ADP National Employment Report",),
     ),
     MacroReleaseConfig(
         name="Retail Sales",
@@ -161,6 +165,7 @@ NEAR_RELEASE_WINDOWS = [
             "Release date from the St. Louis Fed FRED release schedule for {date_label} "
             "({source_label})."
         ),
+        source_name_equals=("Selected Real Retail Sales Series",),
     ),
     MacroReleaseConfig(
         name="Personal Income and Outlays",
@@ -172,6 +177,7 @@ NEAR_RELEASE_WINDOWS = [
             "Release date from the St. Louis Fed FRED release schedule for {date_label} "
             "({source_label})."
         ),
+        source_name_equals=("Personal Income and Outlays",),
     ),
     MacroReleaseConfig(
         name="Gross Domestic Product",
@@ -183,6 +189,7 @@ NEAR_RELEASE_WINDOWS = [
             "Release date from the St. Louis Fed FRED release schedule for {date_label} "
             "({source_label})."
         ),
+        source_name_equals=("Gross Domestic Product",),
     ),
 ]
 
@@ -658,11 +665,20 @@ def fetch_near_macro_windows(now_et: datetime, horizon_days: int) -> list[dict[s
 
     release_options = _load_fred_release_options(now_et.year)
     for config in NEAR_RELEASE_WINDOWS:
-        matched_options = [
-            (rid, source_name)
-            for rid, source_name in release_options
-            if all(term in source_name.lower() for term in config.match_terms)
-        ]
+        exact_names = {name.lower() for name in config.source_name_equals}
+        if exact_names:
+            matched_options = [
+                (rid, source_name)
+                for rid, source_name in release_options
+                if source_name.lower() in exact_names
+            ]
+        else:
+            matched_options = [
+                (rid, source_name)
+                for rid, source_name in release_options
+                if all(term in source_name.lower() for term in config.match_terms)
+                and not any(term in source_name.lower() for term in config.exclude_terms)
+            ]
         for rid, source_name in matched_options:
             for year in years:
                 release_datetimes = _fetch_release_datetimes(

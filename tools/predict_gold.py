@@ -591,7 +591,7 @@ def _event_risk_context(now_ts):
         "minutes_to_next_release": (round(minutes_to_next_release, 1) if minutes_to_next_release is not None else None),
         "near_releases": near_releases,
         "calendar_sparse": calendar_sparse,
-        "now_utc": datetime.now(timezone.utc).isoformat(),
+        "now_utc": datetime.fromtimestamp(now_ts, tz=timezone.utc).isoformat(),
     }
 
 

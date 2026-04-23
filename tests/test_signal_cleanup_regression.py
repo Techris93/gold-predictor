@@ -827,6 +827,52 @@ class DashboardPayloadContractTests(unittest.TestCase):
         self.assertEqual(context["next_release_event"]["name"], "Initial Jobless Claims")
         self.assertAlmostEqual(context["minutes_to_next_release"], 26.0, places=1)
         self.assertEqual(context["near_releases"][0]["release"], "2026-04-23T12:30:00Z")
+        self.assertEqual(context["now_utc"], "2026-04-23T12:04:00+00:00")
+
+    def test_near_macro_calendar_ignores_similarly_named_secondary_releases(self):
+        release_options = [
+            (469, "State Unemployment Insurance Weekly Claims Report"),
+            (180, "Unemployment Insurance Weekly Claims Report"),
+            (477, "Monthly State Retail Sales"),
+            (92, "Selected Real Retail Sales Series"),
+            (263, "Debt to Gross Domestic Product Ratios"),
+            (53, "Gross Domestic Product"),
+            (397, "Gross Domestic Product by County"),
+            (331, "Gross Domestic Product by Industry"),
+            (140, "Gross Domestic Product by State"),
+        ]
+        fetched_source_names = []
+
+        def fake_fetch_release_datetimes(*, release_id, release_name, target_year, default_release_time_et):
+            fetched_source_names.append(release_name)
+            return [pd.Timestamp("2026-04-30T08:30:00-04:00").to_pydatetime()]
+
+        with (
+            patch.object(update_event_risk_windows, "_load_fred_release_options", return_value=release_options),
+            patch.object(
+                update_event_risk_windows,
+                "_fetch_release_datetimes",
+                side_effect=fake_fetch_release_datetimes,
+            ),
+        ):
+            windows = update_event_risk_windows.fetch_near_macro_windows(
+                now_et=pd.Timestamp("2026-04-23T12:00:00-04:00").to_pydatetime(),
+                horizon_days=20,
+            )
+
+        self.assertIn("Unemployment Insurance Weekly Claims Report", fetched_source_names)
+        self.assertIn("Selected Real Retail Sales Series", fetched_source_names)
+        self.assertIn("Gross Domestic Product", fetched_source_names)
+        self.assertNotIn("State Unemployment Insurance Weekly Claims Report", fetched_source_names)
+        self.assertNotIn("Monthly State Retail Sales", fetched_source_names)
+        self.assertNotIn("Debt to Gross Domestic Product Ratios", fetched_source_names)
+        self.assertNotIn("Gross Domestic Product by County", fetched_source_names)
+        self.assertNotIn("Gross Domestic Product by Industry", fetched_source_names)
+        self.assertNotIn("Gross Domestic Product by State", fetched_source_names)
+        reasons = "\n".join(str(item.get("reason") or "") for item in windows)
+        self.assertNotIn("State Unemployment", reasons)
+        self.assertNotIn("Monthly State Retail Sales", reasons)
+        self.assertNotIn("Gross Domestic Product by", reasons)
 
     def test_sp_global_us_pmi_calendar_adds_flash_and_standard_us_windows(self):
         sample_calendar_html = """
@@ -1210,6 +1256,40 @@ class DashboardPayloadContractTests(unittest.TestCase):
             body["ExecutionState"]["text"],
             "Momentum is active and still aligned with the short position.",
         )
+
+    def test_stand_aside_playbook_prefers_no_trade_permission_text(self):
+        with tempfile.TemporaryDirectory() as tmpdir, patch.object(
+            app_module,
+            "PLAYBOOK_STATE_FILE",
+            Path(tmpdir) / "playbook_state.json",
+        ), patch.object(app_module.time, "time", return_value=1_700_000_000):
+            playbook = app_module._stabilize_trade_playbook(
+                {
+                    "stage": "stand_aside",
+                    "title": "Stand Aside",
+                    "text": "Let the normal directional engine do the work.",
+                    "why": [],
+                    "entryReadiness": "low",
+                    "exitUrgency": "low",
+                    "warningLadder": "Normal",
+                    "eventRegime": "normal",
+                    "breakoutBias": "Neutral",
+                    "directionalBias": "Bearish",
+                    "alignment": "mixed",
+                },
+                {
+                    "status": "no_trade",
+                    "text": "No trade. Conditions are not clean enough yet.",
+                },
+                {
+                    "status": "sell",
+                    "text": "Safer to look for a sell. Short state is confirmed with acceptable tradeability.",
+                },
+            )
+
+        self.assertEqual(playbook["title"], "Stand Aside")
+        self.assertEqual(playbook["text"], "No trade. Conditions are not clean enough yet.")
+        self.assertNotIn("Safer to look for a sell", playbook["text"])
 
     def test_stabilize_decision_status_requires_repeat_for_same_status_detail_changes(self):
         first_payload = {

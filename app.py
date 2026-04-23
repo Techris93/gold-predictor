@@ -2911,7 +2911,11 @@ def _stabilize_trade_playbook(trade_playbook, execution_permission, decision_sta
 
     if stabilized["stage"] == "stand_aside":
         stabilized["title"] = "Stand Aside"
-        stabilized["text"] = str((decision_status or {}).get("text") or (execution_permission or {}).get("text") or "No trade. Conditions are not clean enough yet.")
+        stabilized["text"] = str(
+            (execution_permission or {}).get("text")
+            or (decision_status or {}).get("text")
+            or "No trade. Conditions are not clean enough yet."
+        )
         stabilized["why"] = [
             f"Execution: {str((execution_permission or {}).get('text') or 'No trade')}",
             f"Decision: {str((decision_status or {}).get('text') or 'Stand aside.')}",
