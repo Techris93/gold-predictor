@@ -599,12 +599,9 @@ def compute_event_regime_snapshot(
             minutes_val = None
             if minutes_raw is not None:
                 minutes_val = round(_safe_float(minutes_raw, 0.0), 1)
-            is_duplicate = False
-            if next_event_name and _same_named_event(name, next_event_name):
-                if minutes_to_next_event is None and minutes_val is None:
-                    is_duplicate = True
-                elif minutes_to_next_event is not None and minutes_val is not None:
-                    is_duplicate = abs(minutes_val - round(_safe_float(minutes_to_next_event, 0.0), 1)) <= 0.1
+            is_duplicate = bool(
+                next_event_name and _same_named_event(name, next_event_name)
+            )
             if not is_duplicate and any(
                 _same_named_event(name, existing.get("name"))
                 and (
@@ -620,14 +617,6 @@ def compute_event_regime_snapshot(
                 is_duplicate = True
             if not is_duplicate:
                 near_events.append({"name": name, "minutes": minutes_val})
-
-    if not near_events and next_event_name and minutes_to_next_event is not None:
-        near_events.append(
-            {
-                "name": next_event_name,
-                "minutes": round(_safe_float(minutes_to_next_event, 0.0), 1),
-            }
-        )
 
     compression_score = 0.0
     if compression_ratio <= 0.55:

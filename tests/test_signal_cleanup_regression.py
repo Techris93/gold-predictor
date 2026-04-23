@@ -733,6 +733,15 @@ class DashboardPayloadContractTests(unittest.TestCase):
         self.assertIn("Holiday schedule Memorial Day", summary)
         self.assertNotIn("frozen until reopen", summary)
 
+    def test_bar_session_formatter_collapses_matching_session_labels(self):
+        summary = app_module._format_bar_session_microstructure(_sample_ta_payload())
+
+        self.assertIn("Session London / New York Overlap · Bar 12:00 UTC · Now 12:00 UTC", summary)
+        self.assertNotIn(
+            "Bar London / New York Overlap 12:00 UTC · Now London / New York Overlap 12:00 UTC",
+            summary,
+        )
+
     def test_normalize_ta_payload_schema_keeps_pivots_and_microstructure(self):
         normalized = _normalize_ta_payload_schema(_sample_ta_payload())
 
@@ -769,6 +778,28 @@ class DashboardPayloadContractTests(unittest.TestCase):
 
         self.assertEqual(snapshot["next_event_name"], "Retail Sales")
         self.assertEqual(snapshot["near_events"], [{"name": "CPI", "minutes": 2600.0}])
+
+    def test_event_regime_omits_later_occurrence_of_same_next_event_name(self):
+        snapshot = compute_event_regime_snapshot(
+            _sample_row(),
+            trend="Bearish",
+            alignment_label="Strong Bearish Alignment",
+            market_structure="Bearish Drift",
+            candle_pattern="None",
+            event_risk={
+                "active": False,
+                "minutes_to_next_release": 131.0,
+                "next_release_event": {"name": "Initial Jobless Claims"},
+                "near_releases": [
+                    {"name": "Initial Jobless Claims", "minutes": 131.0},
+                    {"name": "Initial Jobless Claims", "minutes": 1571.0},
+                ],
+            },
+            cross_asset_context={},
+        )
+
+        self.assertEqual(snapshot["next_event_name"], "Initial Jobless Claims")
+        self.assertEqual(snapshot["near_events"], [])
 
     def test_sanitize_client_payload_strips_removed_dashboard_fields(self):
         payload = {

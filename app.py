@@ -639,9 +639,19 @@ def _format_bar_session_microstructure(ta_data):
     bar_time = str(session.get("barTimeDisplayUtc") or bar_session.get("timeDisplayUtc") or "N/A")
     current_label = market_session["current_label"]
     current_time = market_session["current_time"]
+    same_session_label = bool(
+        bar_label.strip()
+        and current_label.strip()
+        and bar_label.strip().lower() == current_label.strip().lower()
+    )
 
     if market_session["is_market_closed"]:
         reopen_text = f" · Reopens {market_session['next_open']}" if market_session["next_open"] else ""
+        if same_session_label:
+            return (
+                f"Session {bar_label} · Last bar {bar_time} · Now {current_time}"
+                f"{reopen_text} · Microstructure is frozen until reopen"
+            )
         return (
             f"Last bar {bar_label} {bar_time} · Now {current_label} {current_time}"
             f"{reopen_text} · Microstructure is frozen until reopen"
@@ -664,10 +674,16 @@ def _format_bar_session_microstructure(ta_data):
     orb_text = f"ORB {_orb_state_label(orb)}"
     sweep_text = "Sweep Bullish" if sweep > 0 else ("Sweep Bearish" if sweep < 0 else "No Sweep")
 
-    summary = (
-        f"Bar {bar_label} {bar_time} · Now {current_label} {current_time} "
-        f"· {vwap_text} · {orb_text} · {sweep_text}"
-    )
+    if same_session_label:
+        summary = (
+            f"Session {bar_label} · Bar {bar_time} · Now {current_time} "
+            f"· {vwap_text} · {orb_text} · {sweep_text}"
+        )
+    else:
+        summary = (
+            f"Bar {bar_label} {bar_time} · Now {current_label} {current_time} "
+            f"· {vwap_text} · {orb_text} · {sweep_text}"
+        )
     if market_session["is_holiday_schedule"] and market_session["holiday_name"]:
         summary += f" · Holiday schedule {market_session['holiday_name']}"
     return summary
