@@ -6,6 +6,7 @@ from unittest.mock import patch
 import pandas as pd
 
 import app as app_module
+from scripts import update_event_risk_windows
 from tools import predict_gold
 from tools.event_regime import compute_event_regime_snapshot
 from tools.predict_gold import _normalize_ta_payload_schema
@@ -133,6 +134,14 @@ def _apply_current_session(payload, current_session):
     payload["session_context"]["holidayScheduleNote"] = current_session["holidayScheduleNote"]
     payload["session_context"]["holidayScheduleSource"] = current_session["holidayScheduleSource"]
     return payload
+
+
+class _FakeResponse:
+    def __init__(self, text):
+        self.text = text
+
+    def raise_for_status(self):
+        return None
 
 
 class DashboardPayloadContractTests(unittest.TestCase):
@@ -800,6 +809,170 @@ class DashboardPayloadContractTests(unittest.TestCase):
 
         self.assertEqual(snapshot["next_event_name"], "Initial Jobless Claims")
         self.assertEqual(snapshot["near_events"], [])
+
+    def test_event_risk_context_counts_down_from_release_timestamp(self):
+        window = {
+            "name": "Initial Jobless Claims",
+            "start": "2026-04-23T12:10:00Z",
+            "end": "2026-04-23T13:30:00Z",
+            "release": "2026-04-23T12:30:00Z",
+            "reason": "Synthetic test window.",
+        }
+
+        with patch.object(predict_gold, "_load_event_risk_windows", return_value=[window]):
+            context = predict_gold._event_risk_context(
+                int(pd.Timestamp("2026-04-23T12:04:00Z").timestamp())
+            )
+
+        self.assertEqual(context["next_release_event"]["name"], "Initial Jobless Claims")
+        self.assertAlmostEqual(context["minutes_to_next_release"], 26.0, places=1)
+        self.assertEqual(context["near_releases"][0]["release"], "2026-04-23T12:30:00Z")
+
+    def test_sp_global_us_pmi_calendar_adds_flash_and_standard_us_windows(self):
+        sample_calendar_html = """
+        <html><body>
+        <div>Calendar</div>
+        <div>Upcoming</div>
+        <div>2026</div>
+        <div>April 23</div>
+        <div>13:45 UTC S&P Global Flash US PMI</div>
+        <div>May 01</div>
+        <div>13:45 UTC S&P Global US Manufacturing PMI</div>
+        <div>May 05</div>
+        <div>13:45 UTC S&P Global US Services PMI</div>
+        </body></html>
+        """
+
+        with patch.object(
+            update_event_risk_windows.requests,
+            "get",
+            return_value=_FakeResponse(sample_calendar_html),
+        ):
+            windows = update_event_risk_windows.fetch_sp_global_us_pmi_windows(
+                now_utc=pd.Timestamp("2026-04-23T12:00:00Z").to_pydatetime(),
+                horizon_days=20,
+            )
+
+        names = {(item["name"], item["release"]) for item in windows}
+        self.assertIn(
+            ("S&P Global Flash US Manufacturing PMI", "2026-04-23T13:45:00Z"),
+            names,
+        )
+        self.assertIn(
+            ("S&P Global Flash US Services PMI", "2026-04-23T13:45:00Z"),
+            names,
+        )
+        self.assertIn(
+            ("S&P Global US Manufacturing PMI", "2026-05-01T13:45:00Z"),
+            names,
+        )
+        self.assertIn(
+            ("S&P Global US Services PMI", "2026-05-05T13:45:00Z"),
+            names,
+        )
+
+    def test_ism_calendar_adds_manufacturing_and_services_windows(self):
+        sample_ism_html = """
+        <html><body>
+        <h3>2026 ISM PMI Reports Release Dates</h3>
+        <table><tbody>
+        <tr><th scope="row">April 2026</th><td>1</td><td>6</td></tr>
+        <tr><th scope="row">May 2026</th><td>1</td><td>5</td></tr>
+        </tbody></table>
+        </body></html>
+        """
+
+        with patch.object(
+            update_event_risk_windows.requests,
+            "get",
+            return_value=_FakeResponse(sample_ism_html),
+        ):
+            windows = update_event_risk_windows.fetch_ism_pmi_windows(
+                now_et=pd.Timestamp("2026-04-01T13:00:00-04:00").to_pydatetime(),
+                horizon_days=40,
+            )
+
+        names = {(item["name"], item["release"]) for item in windows}
+        self.assertIn(("ISM Services PMI", "2026-04-06T14:00:00Z"), names)
+        self.assertIn(("ISM Manufacturing PMI", "2026-05-01T14:00:00Z"), names)
+        self.assertIn(("ISM Services PMI", "2026-05-05T14:00:00Z"), names)
+
+    def test_static_jolts_schedule_adds_known_release_dates(self):
+        windows = update_event_risk_windows.fetch_jolts_windows(
+            now_et=pd.Timestamp("2026-04-23T12:00:00-04:00").to_pydatetime(),
+            horizon_days=80,
+        )
+
+        names = {(item["name"], item["release"]) for item in windows}
+        self.assertIn(("JOLTS", "2026-05-05T14:00:00Z"), names)
+        self.assertIn(("JOLTS", "2026-06-02T14:00:00Z"), names)
+        self.assertIn(("JOLTS", "2026-06-30T14:00:00Z"), names)
+
+    def test_michigan_sentiment_schedule_adds_prelim_and_final_windows(self):
+        windows = update_event_risk_windows.fetch_michigan_sentiment_windows(
+            now_et=pd.Timestamp("2026-04-23T12:00:00-04:00").to_pydatetime(),
+            horizon_days=80,
+        )
+
+        names = {(item["name"], item["release"]) for item in windows}
+        self.assertIn(
+            ("Michigan Consumer Sentiment (Prelim)", "2026-05-08T14:00:00Z"),
+            names,
+        )
+        self.assertIn(
+            ("Michigan Consumer Sentiment (Final)", "2026-05-22T14:00:00Z"),
+            names,
+        )
+        self.assertIn(
+            ("Michigan Consumer Sentiment (Prelim)", "2026-06-12T14:00:00Z"),
+            names,
+        )
+
+    def test_conference_board_consumer_confidence_uses_last_tuesday_rule(self):
+        windows = update_event_risk_windows.fetch_conference_board_consumer_confidence_windows(
+            now_et=pd.Timestamp("2026-04-23T12:00:00-04:00").to_pydatetime(),
+            horizon_days=80,
+        )
+
+        names = {(item["name"], item["release"]) for item in windows}
+        self.assertIn(
+            ("Conference Board Consumer Confidence", "2026-04-28T14:00:00Z"),
+            names,
+        )
+        self.assertIn(
+            ("Conference Board Consumer Confidence", "2026-05-26T14:00:00Z"),
+            names,
+        )
+        self.assertIn(
+            ("Conference Board Consumer Confidence", "2026-06-30T14:00:00Z"),
+            names,
+        )
+
+    def test_fomc_minutes_windows_follow_three_week_rule(self):
+        sample_fomc_html = """
+        <html><body>
+        <div>2026 FOMC Meetings</div>
+        <div>January</div>
+        <div>27-28</div>
+        <div>March</div>
+        <div>17-18*</div>
+        <div>2027 FOMC Meetings</div>
+        </body></html>
+        """
+
+        with patch.object(
+            update_event_risk_windows.requests,
+            "get",
+            return_value=_FakeResponse(sample_fomc_html),
+        ):
+            windows = update_event_risk_windows.fetch_fomc_minutes_windows(
+                now_et=pd.Timestamp("2026-02-01T12:00:00-05:00").to_pydatetime(),
+                horizon_days=90,
+            )
+
+        names = {(item["name"], item["release"]) for item in windows}
+        self.assertIn(("FOMC Minutes", "2026-02-18T19:00:00Z"), names)
+        self.assertIn(("FOMC Minutes", "2026-04-08T18:00:00Z"), names)
 
     def test_sanitize_client_payload_strips_removed_dashboard_fields(self):
         payload = {

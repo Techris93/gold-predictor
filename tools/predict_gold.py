@@ -486,10 +486,27 @@ def _event_risk_context(now_ts):
 
     def _release_offset_minutes(name):
         label = str(name or "").lower()
-        if any(token in label for token in ["cpi", "ppi", "employment", "nfp"]):
+        if any(token in label for token in ["jobless claims", "adp employment"]):
+            return 20
+        if any(
+            token in label
+            for token in [
+                "retail sales",
+                "personal income",
+                "gross domestic product",
+                "cpi",
+                "ppi",
+                "employment",
+                "nfp",
+            ]
+        ):
             return 30
         if "fomc" in label:
             return 45
+        if any(token in label for token in ["ism", "jolts", "consumer confidence", "consumer sentiment"]):
+            return 15
+        if "pmi" in label:
+            return 15
         return 0
 
     def _release_ts(window, start_dt):

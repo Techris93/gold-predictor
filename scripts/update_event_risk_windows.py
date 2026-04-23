@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 """
-Refresh event-risk suppression windows from official BLS and Federal Reserve
-release calendars.
+Refresh event-risk suppression windows from official macro release calendars.
 
 Output format matches config/event_risk_windows.json:
 {
   "windows": [
-    {"name": "...", "start": "...Z", "end": "...Z", "reason": "..."}
+    {
+      "name": "...",
+      "start": "...Z",
+      "end": "...Z",
+      "release": "...Z",
+      "reason": "..."
+    }
   ]
 }
 """
@@ -17,6 +22,7 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -30,6 +36,8 @@ import requests
 FOMC_CALENDAR_URL = "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
 FRED_RELEASES_API_URL = "https://api.stlouisfed.org/fred/releases"
 FRED_RELEASE_DATES_API_URL = "https://api.stlouisfed.org/fred/release/dates"
+ISM_RELEASE_CALENDAR_URL = "https://www.ismworld.org/supply-management-news-and-reports/reports/rob-report-calendar/"
+SP_GLOBAL_PMI_CALENDAR_URL = "https://www.pmi.spglobal.com/Public/Release/ReleaseDates?language=en&os=os"
 FRED_API_KEY = os.getenv("FRED_API_KEY", "").strip()
 FRED_API_TIMEOUT_SECONDS = max(5, int(os.getenv("FRED_API_TIMEOUT_SECONDS", "30")))
 ET = ZoneInfo("America/New_York")
@@ -101,6 +109,25 @@ class MacroReleaseConfig:
     reason_template: str
 
 
+@dataclass(frozen=True)
+class PmiReleaseConfig:
+    source_label: str
+    event_names: tuple[str, ...]
+    start_pad_minutes: int
+    end_pad_minutes: int
+    reason_template: str
+
+
+@dataclass(frozen=True)
+class StaticReleaseConfig:
+    name: str
+    release_dates: tuple[str, ...]
+    release_time_et: str
+    start_pad_minutes: int
+    end_pad_minutes: int
+    reason_template: str
+
+
 NEAR_RELEASE_WINDOWS = [
     MacroReleaseConfig(
         name="Initial Jobless Claims",
@@ -159,6 +186,147 @@ NEAR_RELEASE_WINDOWS = [
     ),
 ]
 
+US_PMI_WINDOWS = [
+    PmiReleaseConfig(
+        source_label="S&P Global Flash US PMI",
+        event_names=(
+            "S&P Global Flash US Manufacturing PMI",
+            "S&P Global Flash US Services PMI",
+        ),
+        start_pad_minutes=15,
+        end_pad_minutes=45,
+        reason_template=(
+            "Official S&P Global PMI calendar lists {source_label} for {date_label} "
+            "at {release_label} UTC; this publication bundle covers the paired US flash "
+            "manufacturing and services PMI releases."
+        ),
+    ),
+    PmiReleaseConfig(
+        source_label="S&P Global US Manufacturing PMI",
+        event_names=("S&P Global US Manufacturing PMI",),
+        start_pad_minutes=15,
+        end_pad_minutes=45,
+        reason_template=(
+            "Official S&P Global PMI calendar lists {source_label} for {date_label} "
+            "at {release_label} UTC."
+        ),
+    ),
+    PmiReleaseConfig(
+        source_label="S&P Global US Services PMI",
+        event_names=("S&P Global US Services PMI",),
+        start_pad_minutes=15,
+        end_pad_minutes=45,
+        reason_template=(
+            "Official S&P Global PMI calendar lists {source_label} for {date_label} "
+            "at {release_label} UTC."
+        ),
+    ),
+]
+
+ISM_WINDOW_CONFIGS = [
+    {
+        "name": "ISM Manufacturing PMI",
+        "column_key": "manufacturing",
+        "start_pad_minutes": 15,
+        "end_pad_minutes": 45,
+        "reason_template": (
+            "Official ISM PMI release calendar lists the {report_label} for {date_label} "
+            "at 10:00 ET."
+        ),
+        "report_label": "ISM Manufacturing PMI",
+    },
+    {
+        "name": "ISM Services PMI",
+        "column_key": "services",
+        "start_pad_minutes": 15,
+        "end_pad_minutes": 45,
+        "reason_template": (
+            "Official ISM PMI release calendar lists the {report_label} for {date_label} "
+            "at 10:00 ET."
+        ),
+        "report_label": "ISM Services PMI",
+    },
+]
+
+JOLTS_WINDOWS = [
+    StaticReleaseConfig(
+        name="JOLTS",
+        release_dates=(
+            "2026-03-13",
+            "2026-03-31",
+            "2026-05-05",
+            "2026-06-02",
+            "2026-06-30",
+            "2026-08-04",
+            "2026-09-01",
+            "2026-09-29",
+            "2026-11-03",
+            "2026-12-01",
+        ),
+        release_time_et="10:00",
+        start_pad_minutes=15,
+        end_pad_minutes=45,
+        reason_template=(
+            "Official BLS JOLTS release schedule lists {name} for {date_label} "
+            "at 10:00 ET."
+        ),
+    ),
+]
+
+MICHIGAN_SENTIMENT_WINDOWS = [
+    StaticReleaseConfig(
+        name="Michigan Consumer Sentiment (Prelim)",
+        release_dates=(
+            "2026-01-09",
+            "2026-02-06",
+            "2026-03-13",
+            "2026-04-10",
+            "2026-05-08",
+            "2026-06-12",
+            "2026-07-17",
+            "2026-08-14",
+            "2026-09-11",
+            "2026-10-09",
+            "2026-11-06",
+            "2026-12-04",
+        ),
+        release_time_et="10:00",
+        start_pad_minutes=15,
+        end_pad_minutes=45,
+        reason_template=(
+            "Official University of Michigan Surveys of Consumers 2026 release dates list "
+            "{name} for {date_label} at 10:00 ET."
+        ),
+    ),
+    StaticReleaseConfig(
+        name="Michigan Consumer Sentiment (Final)",
+        release_dates=(
+            "2026-01-23",
+            "2026-02-20",
+            "2026-03-27",
+            "2026-04-24",
+            "2026-05-22",
+            "2026-06-26",
+            "2026-07-31",
+            "2026-08-28",
+            "2026-09-25",
+            "2026-10-23",
+            "2026-11-20",
+            "2026-12-18",
+        ),
+        release_time_et="10:00",
+        start_pad_minutes=15,
+        end_pad_minutes=45,
+        reason_template=(
+            "Official University of Michigan Surveys of Consumers 2026 release dates list "
+            "{name} for {date_label} at 10:00 ET."
+        ),
+    ),
+]
+
+CONFERENCE_BOARD_NAME = "Conference Board Consumer Confidence"
+FOMC_MINUTES_NAME = "FOMC Minutes"
+
 ALL_RELEASES_CALENDAR_URL = "https://fred.stlouisfed.org/releases/calendar?y={year}"
 
 
@@ -175,15 +343,34 @@ def _strip_html(raw_html: str) -> list[str]:
     return lines
 
 
-def _format_window(start_et: datetime, config: WindowConfig, reason: str) -> dict[str, str]:
-    start_utc = (start_et - timedelta(minutes=config.start_pad_minutes)).astimezone(timezone.utc)
-    end_utc = (start_et + timedelta(minutes=config.end_pad_minutes)).astimezone(timezone.utc)
+def _build_window(
+    *,
+    release_dt: datetime,
+    name: str,
+    start_pad_minutes: int,
+    end_pad_minutes: int,
+    reason: str,
+) -> dict[str, str]:
+    release_utc = release_dt.astimezone(timezone.utc)
+    start_utc = (release_dt - timedelta(minutes=start_pad_minutes)).astimezone(timezone.utc)
+    end_utc = (release_dt + timedelta(minutes=end_pad_minutes)).astimezone(timezone.utc)
     return {
-        "name": config.name,
+        "name": name,
         "start": start_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "end": end_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "release": release_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "reason": reason,
     }
+
+
+def _format_window(start_et: datetime, config: WindowConfig, reason: str) -> dict[str, str]:
+    return _build_window(
+        release_dt=start_et,
+        name=config.name,
+        start_pad_minutes=config.start_pad_minutes,
+        end_pad_minutes=config.end_pad_minutes,
+        reason=reason,
+    )
 
 
 def _format_custom_window(
@@ -193,14 +380,59 @@ def _format_custom_window(
     end_pad_minutes: int,
     reason: str,
 ) -> dict[str, str]:
-    start_utc = (start_et - timedelta(minutes=start_pad_minutes)).astimezone(timezone.utc)
-    end_utc = (start_et + timedelta(minutes=end_pad_minutes)).astimezone(timezone.utc)
-    return {
-        "name": name,
-        "start": start_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "end": end_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "reason": reason,
-    }
+    return _build_window(
+        release_dt=start_et,
+        name=name,
+        start_pad_minutes=start_pad_minutes,
+        end_pad_minutes=end_pad_minutes,
+        reason=reason,
+    )
+
+
+def _fetch_text(url: str, *, timeout: int = 30, allow_curl_fallback: bool = False) -> str:
+    response = requests.get(url, timeout=timeout)
+    response.raise_for_status()
+    text = response.text
+    if allow_curl_fallback and "captcha_form" in text.lower():
+        result = subprocess.run(
+            ["curl", "-sL", url],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        return str(result.stdout or "")
+    return text
+
+
+def _release_datetime_from_day(year: int, month: int, day: int, release_time_label: str) -> datetime:
+    parsed_time = datetime.strptime(str(release_time_label), "%H:%M")
+    return datetime(year, month, day, parsed_time.hour, parsed_time.minute, tzinfo=ET)
+
+
+def _iter_month_starts(start_dt: datetime, end_dt: datetime) -> list[tuple[int, int]]:
+    months: list[tuple[int, int]] = []
+    year = start_dt.year
+    month = start_dt.month
+    while True:
+        months.append((year, month))
+        if year == end_dt.year and month == end_dt.month:
+            break
+        month += 1
+        if month > 12:
+            month = 1
+            year += 1
+    return months
+
+
+def _last_weekday_of_month(year: int, month: int, weekday: int) -> datetime:
+    if month == 12:
+        cursor = datetime(year + 1, 1, 1, tzinfo=ET) - timedelta(days=1)
+    else:
+        cursor = datetime(year, month + 1, 1, tzinfo=ET) - timedelta(days=1)
+    while cursor.weekday() != weekday:
+        cursor -= timedelta(days=1)
+    return cursor
 
 
 def _fred_release_url(release_id: int, year: int) -> str:
@@ -462,7 +694,12 @@ def fetch_near_macro_windows(now_et: datetime, horizon_days: int) -> list[dict[s
     return windows
 
 
-def load_existing_bls_windows(output_path: Path, now_utc: datetime, horizon_days: int) -> list[dict[str, str]]:
+def _load_existing_windows(
+    output_path: Path,
+    now_utc: datetime,
+    horizon_days: int,
+    names: set[str],
+) -> list[dict[str, str]]:
     if not output_path.exists():
         return []
 
@@ -472,11 +709,10 @@ def load_existing_bls_windows(output_path: Path, now_utc: datetime, horizon_days
         return []
 
     end_cutoff = now_utc + timedelta(days=horizon_days)
-    known_names = {config.name for config in BLS_WINDOWS}
     preserved: list[dict[str, str]] = []
 
     for item in payload.get("windows", []):
-        if item.get("name") not in known_names:
+        if item.get("name") not in names:
             continue
         try:
             start_dt = datetime.strptime(item["start"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
@@ -542,7 +778,247 @@ def _extract_fomc_statement_dates(raw_html: str, target_year: int) -> list[datet
     return statement_dates
 
 
-def fetch_fomc_windows(now_et: datetime, horizon_days: int) -> list[dict[str, str]]:
+def _extract_sp_global_calendar_entries(raw_html: str) -> list[tuple[datetime, str]]:
+    lines = _strip_html(raw_html)
+    year_pattern = re.compile(r"^\d{4}$")
+    date_pattern = re.compile(r"^([A-Za-z]+)\s+(\d{1,2})$")
+    time_pattern = re.compile(r"^(\d{1,2}:\d{2})\s*UTC(?:\s+(.+))?$")
+
+    current_year: int | None = None
+    current_date: datetime | None = None
+    entries: list[tuple[datetime, str]] = []
+    parsing_calendar = False
+
+    index = 0
+    while index < len(lines):
+        normalized = str(lines[index]).strip()
+        if normalized == "Upcoming":
+            parsing_calendar = True
+            index += 1
+            continue
+        if not parsing_calendar:
+            index += 1
+            continue
+        if year_pattern.match(normalized):
+            current_year = int(normalized)
+            current_date = None
+            index += 1
+            continue
+        date_match = date_pattern.match(normalized)
+        if date_match and current_year is not None:
+            month = _month_number(date_match.group(1))
+            day = int(date_match.group(2))
+            current_date = datetime(current_year, month, day, tzinfo=timezone.utc)
+            index += 1
+            continue
+        time_match = time_pattern.match(normalized)
+        if time_match and current_date is not None:
+            release_time = datetime.strptime(time_match.group(1), "%H:%M")
+            release_label = str(time_match.group(2) or "").strip()
+            if not release_label and index + 1 < len(lines):
+                release_label = str(lines[index + 1]).strip()
+                if (
+                    not release_label
+                    or year_pattern.match(release_label)
+                    or date_pattern.match(release_label)
+                    or time_pattern.match(release_label)
+                    or release_label == "Upcoming"
+                ):
+                    release_label = ""
+            release_dt = current_date.replace(
+                hour=release_time.hour,
+                minute=release_time.minute,
+            )
+            if release_label:
+                entries.append((release_dt, release_label))
+        index += 1
+
+    return entries
+
+
+def fetch_sp_global_us_pmi_windows(now_utc: datetime, horizon_days: int) -> list[dict[str, str]]:
+    response = requests.get(SP_GLOBAL_PMI_CALENDAR_URL, timeout=30)
+    response.raise_for_status()
+
+    end_cutoff = now_utc + timedelta(days=horizon_days)
+    windows: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    config_by_source = {config.source_label: config for config in US_PMI_WINDOWS}
+
+    for release_dt_utc, source_label in _extract_sp_global_calendar_entries(response.text):
+        if release_dt_utc < now_utc or release_dt_utc > end_cutoff:
+            continue
+        config = config_by_source.get(source_label)
+        if config is None:
+            continue
+        release_dt_et = release_dt_utc.astimezone(ET)
+        reason = config.reason_template.format(
+            source_label=source_label,
+            date_label=release_dt_utc.strftime("%B %-d, %Y"),
+            release_label=release_dt_utc.strftime("%H:%M"),
+        )
+        for event_name in config.event_names:
+            dedupe_key = (event_name, release_dt_utc.isoformat())
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            windows.append(
+                _format_custom_window(
+                    start_et=release_dt_et,
+                    name=event_name,
+                    start_pad_minutes=config.start_pad_minutes,
+                    end_pad_minutes=config.end_pad_minutes,
+                    reason=reason,
+                )
+            )
+
+    return windows
+
+
+def _extract_ism_release_dates(raw_html: str, target_year: int) -> list[dict[str, datetime]]:
+    section_match = re.search(
+        rf"<h3>\s*{target_year}\s+ISM PMI.*?</h3>\s*<table.*?<tbody>(.*?)</tbody>",
+        raw_html,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if not section_match:
+        return []
+
+    rows: list[dict[str, datetime]] = []
+    for month_label, manufacturing_day, services_day in re.findall(
+        r"<tr>\s*<th[^>]*scope=\"row\"[^>]*>(.*?)</th>\s*<td>(.*?)</td>\s*<td>(.*?)</td>\s*</tr>",
+        section_match.group(1),
+        flags=re.IGNORECASE | re.DOTALL,
+    ):
+        cleaned_month = " ".join(re.sub(r"(?s)<[^>]+>", " ", month_label).split())
+        if not cleaned_month.endswith(str(target_year)):
+            continue
+        month_text, _ = cleaned_month.rsplit(" ", 1)
+        month_number = _month_number(month_text)
+        manufacturing_day_value = int(re.sub(r"[^0-9]", "", manufacturing_day))
+        services_day_value = int(re.sub(r"[^0-9]", "", services_day))
+        rows.append(
+            {
+                "manufacturing": _release_datetime_from_day(
+                    target_year,
+                    month_number,
+                    manufacturing_day_value,
+                    "10:00",
+                ),
+                "services": _release_datetime_from_day(
+                    target_year,
+                    month_number,
+                    services_day_value,
+                    "10:00",
+                ),
+            }
+        )
+
+    return rows
+
+
+def fetch_ism_pmi_windows(now_et: datetime, horizon_days: int) -> list[dict[str, str]]:
+    raw_html = _fetch_text(
+        ISM_RELEASE_CALENDAR_URL,
+        timeout=30,
+        allow_curl_fallback=True,
+    )
+
+    end_cutoff = now_et + timedelta(days=horizon_days)
+    windows: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    for year in {now_et.year, end_cutoff.year}:
+        for release_row in _extract_ism_release_dates(raw_html, year):
+            for config in ISM_WINDOW_CONFIGS:
+                release_dt = release_row[config["column_key"]]
+                if release_dt < now_et or release_dt > end_cutoff:
+                    continue
+                dedupe_key = (config["name"], release_dt.isoformat())
+                if dedupe_key in seen:
+                    continue
+                seen.add(dedupe_key)
+                windows.append(
+                    _format_custom_window(
+                        start_et=release_dt,
+                        name=config["name"],
+                        start_pad_minutes=config["start_pad_minutes"],
+                        end_pad_minutes=config["end_pad_minutes"],
+                        reason=config["reason_template"].format(
+                            report_label=config["report_label"],
+                            date_label=release_dt.strftime("%B %-d, %Y"),
+                        ),
+                    )
+                )
+
+    return windows
+
+
+def _build_windows_from_static_configs(
+    configs: list[StaticReleaseConfig],
+    now_et: datetime,
+    horizon_days: int,
+) -> list[dict[str, str]]:
+    end_cutoff = now_et + timedelta(days=horizon_days)
+    windows: list[dict[str, str]] = []
+
+    for config in configs:
+        for release_date in config.release_dates:
+            release_dt = _release_datetime_from_date(release_date, config.release_time_et)
+            if release_dt < now_et or release_dt > end_cutoff:
+                continue
+            windows.append(
+                _format_custom_window(
+                    start_et=release_dt,
+                    name=config.name,
+                    start_pad_minutes=config.start_pad_minutes,
+                    end_pad_minutes=config.end_pad_minutes,
+                    reason=config.reason_template.format(
+                        name=config.name,
+                        date_label=release_dt.strftime("%B %-d, %Y"),
+                    ),
+                )
+            )
+
+    return windows
+
+
+def fetch_jolts_windows(now_et: datetime, horizon_days: int) -> list[dict[str, str]]:
+    return _build_windows_from_static_configs(JOLTS_WINDOWS, now_et=now_et, horizon_days=horizon_days)
+
+
+def fetch_michigan_sentiment_windows(now_et: datetime, horizon_days: int) -> list[dict[str, str]]:
+    return _build_windows_from_static_configs(
+        MICHIGAN_SENTIMENT_WINDOWS,
+        now_et=now_et,
+        horizon_days=horizon_days,
+    )
+
+
+def fetch_conference_board_consumer_confidence_windows(now_et: datetime, horizon_days: int) -> list[dict[str, str]]:
+    end_cutoff = now_et + timedelta(days=horizon_days)
+    windows: list[dict[str, str]] = []
+    for year, month in _iter_month_starts(now_et, end_cutoff):
+        release_day = _last_weekday_of_month(year, month, 1)
+        release_dt = release_day.replace(hour=10, minute=0)
+        if release_dt < now_et or release_dt > end_cutoff:
+            continue
+        windows.append(
+            _format_custom_window(
+                start_et=release_dt,
+                name=CONFERENCE_BOARD_NAME,
+                start_pad_minutes=15,
+                end_pad_minutes=45,
+                reason=(
+                    "The Conference Board publishes the Consumer Confidence Index at "
+                    "10:00 ET on the last Tuesday of each month."
+                ),
+            )
+        )
+    return windows
+
+
+def _fetch_fomc_statement_dates(now_et: datetime, horizon_days: int) -> list[datetime]:
     response = requests.get(FOMC_CALENDAR_URL, timeout=30)
     response.raise_for_status()
     end_cutoff = now_et + timedelta(days=horizon_days)
@@ -551,22 +1027,49 @@ def fetch_fomc_windows(now_et: datetime, horizon_days: int) -> list[dict[str, st
     for year in {now_et.year, end_cutoff.year}:
         statement_dates.extend(_extract_fomc_statement_dates(response.text, year))
 
+    return sorted(statement_dates)
+
+
+def fetch_fomc_windows(now_et: datetime, horizon_days: int) -> list[dict[str, str]]:
+    end_cutoff = now_et + timedelta(days=horizon_days)
     windows: list[dict[str, str]] = []
-    for statement_dt in sorted(statement_dates):
+    for statement_dt in _fetch_fomc_statement_dates(now_et=now_et, horizon_days=horizon_days):
         if statement_dt < now_et or statement_dt > end_cutoff:
             continue
-        start_utc = (statement_dt - timedelta(minutes=45)).astimezone(timezone.utc)
-        end_utc = (statement_dt + timedelta(minutes=90)).astimezone(timezone.utc)
         windows.append(
-            {
-                "name": "FOMC Statement / Press Conference",
-                "start": start_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "end": end_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "reason": (
+            _build_window(
+                release_dt=statement_dt,
+                name="FOMC Statement / Press Conference",
+                start_pad_minutes=45,
+                end_pad_minutes=90,
+                reason=(
                     "Federal Reserve FOMC statement and press conference window "
                     f"for {statement_dt.strftime('%B %-d, %Y')}."
                 ),
-            }
+            )
+        )
+
+    return windows
+
+
+def fetch_fomc_minutes_windows(now_et: datetime, horizon_days: int) -> list[dict[str, str]]:
+    end_cutoff = now_et + timedelta(days=horizon_days)
+    windows: list[dict[str, str]] = []
+    for statement_dt in _fetch_fomc_statement_dates(now_et=now_et, horizon_days=horizon_days):
+        minutes_dt = statement_dt + timedelta(days=21)
+        if minutes_dt < now_et or minutes_dt > end_cutoff:
+            continue
+        windows.append(
+            _build_window(
+                release_dt=minutes_dt,
+                name=FOMC_MINUTES_NAME,
+                start_pad_minutes=15,
+                end_pad_minutes=45,
+                reason=(
+                    "Federal Reserve FOMC calendars note minutes are released three weeks "
+                    "after the policy decision; this window tracks that scheduled minutes release."
+                ),
+            )
         )
 
     return windows
@@ -579,7 +1082,12 @@ def build_windows(horizon_days: int, output_path: Path) -> dict[str, list[dict[s
     try:
         windows = fetch_bls_windows(now_et=now_et, horizon_days=horizon_days)
     except Exception as exc:
-        windows = load_existing_bls_windows(output_path=output_path, now_utc=now_utc, horizon_days=horizon_days)
+        windows = _load_existing_windows(
+            output_path=output_path,
+            now_utc=now_utc,
+            horizon_days=horizon_days,
+            names={config.name for config in BLS_WINDOWS},
+        )
         warning = (
             "Warning: failed to refresh BLS windows from the FRED release calendar; "
             f"preserving existing future BLS windows instead. Error: {exc}"
@@ -595,7 +1103,71 @@ def build_windows(horizon_days: int, output_path: Path) -> dict[str, list[dict[s
         )
         print(warning, file=sys.stderr)
 
-    windows.extend(fetch_fomc_windows(now_et=now_et, horizon_days=horizon_days))
+    try:
+        windows.extend(fetch_sp_global_us_pmi_windows(now_utc=now_utc, horizon_days=horizon_days))
+    except Exception as exc:
+        windows.extend(
+            _load_existing_windows(
+                output_path=output_path,
+                now_utc=now_utc,
+                horizon_days=horizon_days,
+                names={
+                    event_name
+                    for config in US_PMI_WINDOWS
+                    for event_name in config.event_names
+                },
+            )
+        )
+        warning = (
+            "Warning: failed to refresh S&P Global PMI windows from the official PMI calendar; "
+            f"preserving existing future US PMI windows instead. Error: {exc}"
+        )
+        print(warning, file=sys.stderr)
+
+    try:
+        windows.extend(fetch_ism_pmi_windows(now_et=now_et, horizon_days=horizon_days))
+    except Exception as exc:
+        windows.extend(
+            _load_existing_windows(
+                output_path=output_path,
+                now_utc=now_utc,
+                horizon_days=horizon_days,
+                names={str(config["name"]) for config in ISM_WINDOW_CONFIGS},
+            )
+        )
+        warning = (
+            "Warning: failed to refresh ISM PMI windows from the official ISM calendar; "
+            f"preserving existing future ISM PMI windows instead. Error: {exc}"
+        )
+        print(warning, file=sys.stderr)
+
+    windows.extend(fetch_jolts_windows(now_et=now_et, horizon_days=horizon_days))
+    windows.extend(fetch_michigan_sentiment_windows(now_et=now_et, horizon_days=horizon_days))
+    windows.extend(
+        fetch_conference_board_consumer_confidence_windows(
+            now_et=now_et,
+            horizon_days=horizon_days,
+        )
+    )
+
+    try:
+        windows.extend(fetch_fomc_windows(now_et=now_et, horizon_days=horizon_days))
+        windows.extend(fetch_fomc_minutes_windows(now_et=now_et, horizon_days=horizon_days))
+    except Exception as exc:
+        windows.extend(
+            _load_existing_windows(
+                output_path=output_path,
+                now_utc=now_utc,
+                horizon_days=horizon_days,
+                names={FOMC_MINUTES_NAME, "FOMC Statement / Press Conference"},
+            )
+        )
+        warning = (
+            "Warning: failed to refresh Federal Reserve meeting windows; "
+            f"preserving existing future FOMC statement and minutes windows instead. Error: {exc}"
+        )
+        print(warning, file=sys.stderr)
+
     deduped = {}
     for item in windows:
         deduped[(item.get("name"), item.get("start"), item.get("end"))] = item
