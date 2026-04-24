@@ -667,6 +667,64 @@ class DashboardPayloadContractTests(unittest.TestCase):
 
         self.assertEqual(filtered, {})
 
+    def test_notification_drops_orb_and_sweep_clear_noise(self):
+        changes = {
+            "micro_orb_state": {"previous": 1, "current": 0},
+            "micro_sweep_state": {"previous": -1, "current": 0},
+        }
+
+        self.assertEqual(app_module._filter_notification_changes(changes), {})
+        self.assertFalse(app_module._is_material_change(changes))
+
+    def test_notification_keeps_directional_orb_and_sweep_triggers(self):
+        changes = {
+            "micro_orb_state": {"previous": 0, "current": 1},
+            "micro_sweep_state": {"previous": 1, "current": -1},
+        }
+
+        filtered = app_module._filter_notification_changes(changes)
+
+        self.assertEqual(set(filtered.keys()), {"micro_orb_state", "micro_sweep_state"})
+        self.assertTrue(app_module._is_material_change(changes))
+
+    def test_market_structure_drops_clear_and_same_bias_deescalation(self):
+        clear_change = {
+            "market_structure": {
+                "previous": "Bullish Drift",
+                "current": "Consolidating",
+            }
+        }
+        deescalation_change = {
+            "market_structure": {
+                "previous": "Bullish Breakout",
+                "current": "Bullish Drift",
+            }
+        }
+
+        self.assertEqual(app_module._filter_notification_changes(clear_change), {})
+        self.assertEqual(app_module._filter_notification_changes(deescalation_change), {})
+        self.assertFalse(app_module._is_material_change(clear_change))
+        self.assertFalse(app_module._is_material_change(deescalation_change))
+
+    def test_market_structure_keeps_direction_flip_and_breakout_escalation(self):
+        breakout_change = {
+            "market_structure": {
+                "previous": "Bullish Drift",
+                "current": "Bullish Breakout",
+            }
+        }
+        flip_change = {
+            "market_structure": {
+                "previous": "Bullish Drift",
+                "current": "Bearish Breakdown",
+            }
+        }
+
+        self.assertIn("market_structure", app_module._filter_notification_changes(breakout_change))
+        self.assertIn("market_structure", app_module._filter_notification_changes(flip_change))
+        self.assertTrue(app_module._is_material_change(breakout_change))
+        self.assertTrue(app_module._is_material_change(flip_change))
+
     def test_notification_fingerprint_ignores_body_clock_drift(self):
         changes = {
             "execution_state": {

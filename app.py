@@ -212,6 +212,28 @@ def _filter_notification_changes(changes):
         for key, val in changes.items()
         if key in NOTIFICATION_ALLOWED_FIELDS and key not in PUSH_EXCLUDED_FIELDS
     }
+    market_structure_delta = filtered.get("market_structure")
+    if isinstance(market_structure_delta, dict) and not _is_alertable_market_structure_transition(
+        market_structure_delta.get("previous"),
+        market_structure_delta.get("current"),
+    ):
+        filtered.pop("market_structure", None)
+
+    for micro_key in ("micro_orb_state", "micro_sweep_state"):
+        micro_delta = filtered.get(micro_key)
+        if isinstance(micro_delta, dict) and not _is_alertable_directional_micro_transition(
+            micro_delta.get("previous"),
+            micro_delta.get("current"),
+        ):
+            filtered.pop(micro_key, None)
+
+    execution_quality_delta = filtered.get("execution_quality_signal")
+    if isinstance(execution_quality_delta, dict) and not _is_material_execution_quality_transition(
+        execution_quality_delta.get("previous"),
+        execution_quality_delta.get("current"),
+    ):
+        filtered.pop("execution_quality_signal", None)
+
     if "micro_vwap_bias" not in filtered:
         delta = filtered.get("micro_vwap_delta_pct")
         prev = delta.get("previous") if isinstance(delta, dict) else None
@@ -277,6 +299,66 @@ def _notification_tag_from_fingerprint(fingerprint):
     if not fingerprint:
         return "xauusd-alert"
     return f"xauusd-alert-{fingerprint[:16]}"
+
+
+def _coerce_directional_state(value):
+    try:
+        numeric = int(round(float(value)))
+    except Exception:
+        numeric = 0
+    if numeric > 0:
+        return 1
+    if numeric < 0:
+        return -1
+    return 0
+
+
+def _is_alertable_directional_micro_transition(previous, current):
+    previous_state = _coerce_directional_state(previous)
+    current_state = _coerce_directional_state(current)
+    if previous_state == current_state:
+        return False
+    # Fresh directional ORB/sweep events and direct side flips are actionable.
+    # Clearing back to neutral/none is usually just signal expiry.
+    return current_state != 0
+
+
+def _market_structure_bias(value):
+    text = str(value or "").strip()
+    has_bullish = "Bullish" in text or "Higher Highs" in text or "Breakout" in text
+    has_bearish = "Bearish" in text or "Lower Highs" in text or "Breakdown" in text
+    if has_bullish and not has_bearish:
+        return "Bullish"
+    if has_bearish and not has_bullish:
+        return "Bearish"
+    return "Neutral"
+
+
+def _market_structure_alert_tier(value):
+    text = str(value or "").strip()
+    if "Breakout" in text or "Breakdown" in text:
+        return 3
+    if "Higher Highs" in text or "Lower Highs" in text or "Structure" in text:
+        return 2
+    if "Drift" in text or "Pressure in Range" in text:
+        return 1
+    return 0
+
+
+def _is_alertable_market_structure_transition(previous, current):
+    previous_text = str(previous or "").strip()
+    current_text = str(current or "").strip()
+    if not current_text or previous_text == current_text:
+        return False
+    previous_bias = _market_structure_bias(previous_text)
+    current_bias = _market_structure_bias(current_text)
+    if current_bias == "Neutral":
+        return False
+    if previous_bias == "Neutral":
+        return True
+    if previous_bias != current_bias:
+        return True
+    return _market_structure_alert_tier(current_text) > _market_structure_alert_tier(previous_text)
 
 
 def _alert_class_metadata(signal_class):
@@ -2707,16 +2789,33 @@ def _is_material_change(changes):
         return False
 
     always_material = {
-        "market_structure",
         "micro_vwap_bias",
-        "micro_orb_state",
-        "micro_sweep_state",
     }
     numeric_thresholds = {
         "micro_vwap_delta_pct": VWAP_DELTA_ALERT_THRESHOLD_PCT,
     }
 
     for key, delta in changes.items():
+        if key == "market_structure":
+            if not isinstance(delta, dict):
+                continue
+            if _is_alertable_market_structure_transition(
+                delta.get("previous"),
+                delta.get("current"),
+            ):
+                return True
+            continue
+
+        if key in {"micro_orb_state", "micro_sweep_state"}:
+            if not isinstance(delta, dict):
+                continue
+            if _is_alertable_directional_micro_transition(
+                delta.get("previous"),
+                delta.get("current"),
+            ):
+                return True
+            continue
+
         if key == "execution_quality_signal":
             if not isinstance(delta, dict):
                 continue

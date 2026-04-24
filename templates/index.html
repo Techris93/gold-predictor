@@ -2482,6 +2482,17 @@
       function humanizeChangeValue(key, value) {
         const text = String(value ?? "").trim();
         if (!text) return "None";
+        if (key === "micro_orb_state") {
+          const numeric = Number(value);
+          return numeric > 0 ? "Bullish" : numeric < 0 ? "Bearish" : "Neutral";
+        }
+        if (key === "micro_sweep_state") {
+          const numeric = Number(value);
+          return numeric > 0 ? "Bullish" : numeric < 0 ? "Bearish" : "None";
+        }
+        if (key === "micro_vwap_delta_pct" && Number.isFinite(Number(value))) {
+          return `${Number(value).toFixed(2)}%`;
+        }
         const humanizedKeys = new Set([
           "event_regime",
           "breakout_bias",
@@ -2498,6 +2509,7 @@
 
         const labels = {
           market_structure: "Market Structure",
+          execution_quality_signal: "Execution Quality",
           micro_vwap_bias: "VWAP Bias",
           micro_vwap_delta_pct: "VWAP",
           micro_orb_state: "ORB",
@@ -2505,6 +2517,7 @@
         };
         const preferredOrder = [
           "market_structure",
+          "execution_quality_signal",
           "micro_vwap_bias",
           "micro_vwap_delta_pct",
           "micro_orb_state",
