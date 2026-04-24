@@ -533,8 +533,8 @@ class DashboardPayloadContractTests(unittest.TestCase):
         notification = app_module._build_signal_notification(
             {
                 "execution_quality_signal": {
-                    "previous": "Watchlist Long Watchlist Reclaim >=1.5R",
-                    "current": "No Trade blocked: Recent Swing High is too close for a clean long target.",
+                    "previous": "No Trade",
+                    "current": "B VWAP Stretch Reversion Short >=2.5R",
                 }
             },
             {},
@@ -544,10 +544,33 @@ class DashboardPayloadContractTests(unittest.TestCase):
 
         self.assertEqual(notification["title"], "XAUUSD Execution Quality Changed")
         self.assertIn(
-            "Execution Quality: Watchlist Long Watchlist Reclaim >=1.5R -> No Trade blocked",
+            "Execution Quality: Setup confirmed: B VWAP Stretch Reversion Short >=2.5R",
             notification["body"],
         )
         self.assertIn("Bar Session / Microstructure:", notification["body"])
+
+    def test_execution_quality_no_trade_wording_is_not_material(self):
+        self.assertFalse(
+            app_module._is_material_change(
+                {
+                    "execution_quality_signal": {
+                        "previous": "No Trade blocked: VWAP is too close for a clean short target.",
+                        "current": "No Trade",
+                    }
+                }
+            )
+        )
+        self.assertEqual(
+            app_module._format_execution_quality_change(
+                {
+                    "execution_quality_signal": {
+                        "previous": "No Trade",
+                        "current": "No Trade blocked: VWAP is too close for a clean short target.",
+                    }
+                }
+            ),
+            "",
+        )
 
     def test_notification_filter_suppresses_non_price_action_categories(self):
         changes = {
@@ -1404,7 +1427,59 @@ class DashboardPayloadContractTests(unittest.TestCase):
         self.assertTrue(any("too close" in item for item in plan["blockers"]))
         self.assertLess(plan["targets"][1]["price"], plan["targets"][0]["price"])
 
-    def test_execution_quality_alert_signal_emphasizes_blocked_no_trade(self):
+    def test_execution_quality_range_reversion_uses_vwap_as_first_target(self):
+        ta_payload = _sample_ta_payload()
+        ta_payload["current_price"] = 4800.0
+        ta_payload["price_action"]["structure"] = "Consolidating"
+        ta_payload["volatility_regime"].update(
+            {
+                "market_regime": "Range",
+                "adx_14": 18.0,
+                "atr_14": 8.0,
+                "atr_percent": 0.16,
+            }
+        )
+        ta_payload["structure_context"].update(
+            {
+                "openingRangeBreak": 0,
+                "sessionVwap": 4798.0,
+                "distSessionVwapPct": 0.34,
+                "pivotPoint": 4797.0,
+                "pivotResistance1": 4806.0,
+                "pivotSupport1": 4788.0,
+                "pivotResistance2": 4818.0,
+                "pivotSupport2": 4772.0,
+            }
+        )
+        ta_payload["support_resistance"].update(
+            {
+                "nearest_support": {"label": "VWAP", "price": 4798.0},
+                "nearest_resistance": {"label": "Recent Swing High", "price": 4806.0},
+                "pivot_levels": {
+                    "pp": 4797.0,
+                    "r1": 4806.0,
+                    "s1": 4788.0,
+                    "r2": 4818.0,
+                    "s2": 4772.0,
+                },
+            }
+        )
+
+        plan = app_module._build_execution_quality_plan(
+            ta_payload,
+            {"breakout_bias": "Neutral"},
+            {"status": "wait", "text": "Wait for range edge confirmation."},
+            {"actionState": "WAIT", "status": "stand_aside"},
+        )
+
+        self.assertEqual(plan["direction"], "Short")
+        self.assertEqual(plan["setup"], "VWAP Stretch Reversion Short")
+        self.assertEqual(plan["targets"][0]["basis"], "VWAP mean reversion target")
+        self.assertEqual(plan["targets"][0]["price"], 4798.0)
+        self.assertLess(plan["riskReward"], 1.15)
+        self.assertEqual(plan["status"], "blocked")
+
+    def test_execution_quality_alert_signal_collapses_soft_blocked_no_trade(self):
         signal = app_module._execution_quality_alert_signal(
             {
                 "status": "blocked",
@@ -1417,9 +1492,23 @@ class DashboardPayloadContractTests(unittest.TestCase):
             }
         )
 
+        self.assertEqual(signal, "No Trade")
+
+    def test_execution_quality_alert_signal_keeps_hard_blockers(self):
+        signal = app_module._execution_quality_alert_signal(
+            {
+                "status": "blocked",
+                "grade": "No Trade",
+                "direction": "Long",
+                "setup": "Long Watchlist Reclaim",
+                "riskReward": 1.57,
+                "blockers": ["Macro event window is active; fresh entries are blocked."],
+            }
+        )
+
         self.assertEqual(
             signal,
-            "No Trade blocked: Recent Swing High is too close for a clean long target.",
+            "No Trade hard blocked: Macro event window is active; fresh entries are blocked.",
         )
 
     def test_execution_quality_alert_signal_avoids_duplicate_direction(self):
@@ -1446,6 +1535,67 @@ class DashboardPayloadContractTests(unittest.TestCase):
 
         self.assertEqual(ready_signal, "A VWAP / ORB Continuation Long >=1.5R")
         self.assertEqual(watchlist_signal, "Watchlist Long Watchlist Reclaim >=1.5R")
+
+    def test_execution_quality_alert_signal_requires_confirmation_before_ready_flip(self):
+        payload = {
+            "ExecutionQuality": {
+                "status": "ready",
+                "grade": "B",
+                "direction": "Short",
+                "setup": "VWAP Stretch Reversion Short",
+                "riskReward": 2.6,
+                "blockers": [],
+            },
+            "TechnicalAnalysis": {"structure_context": {}, "price_action": {}},
+        }
+        previous_snapshot = {
+            "execution_quality_signal": "No Trade",
+            "execution_quality_raw_signal": "No Trade",
+            "execution_quality_raw_streak": 4,
+        }
+
+        first_snapshot = app_module._extract_indicator_snapshot(payload, previous_snapshot)
+        second_snapshot = app_module._extract_indicator_snapshot(payload, first_snapshot)
+
+        self.assertEqual(first_snapshot["execution_quality_signal"], "No Trade")
+        self.assertEqual(first_snapshot["execution_quality_raw_streak"], 1)
+        self.assertEqual(
+            second_snapshot["execution_quality_signal"],
+            "B VWAP Stretch Reversion Short >=2.5R",
+        )
+        self.assertEqual(second_snapshot["execution_quality_raw_streak"], 2)
+
+    def test_execution_quality_alert_signal_requires_confirmation_before_soft_clear(self):
+        payload = {
+            "ExecutionQuality": {
+                "status": "blocked",
+                "grade": "No Trade",
+                "direction": "Short",
+                "setup": "VWAP Stretch Reversion Short",
+                "riskReward": 0.8,
+                "blockers": ["VWAP is too close for a clean short target."],
+            },
+            "TechnicalAnalysis": {"structure_context": {}, "price_action": {}},
+        }
+        previous_snapshot = {
+            "execution_quality_signal": "B VWAP Stretch Reversion Short >=2.5R",
+            "execution_quality_raw_signal": "B VWAP Stretch Reversion Short >=2.5R",
+            "execution_quality_raw_streak": 3,
+        }
+
+        first_snapshot = app_module._extract_indicator_snapshot(payload, previous_snapshot)
+        second_snapshot = app_module._extract_indicator_snapshot(payload, first_snapshot)
+        third_snapshot = app_module._extract_indicator_snapshot(payload, second_snapshot)
+
+        self.assertEqual(
+            first_snapshot["execution_quality_signal"],
+            "B VWAP Stretch Reversion Short >=2.5R",
+        )
+        self.assertEqual(
+            second_snapshot["execution_quality_signal"],
+            "B VWAP Stretch Reversion Short >=2.5R",
+        )
+        self.assertEqual(third_snapshot["execution_quality_signal"], "No Trade")
 
     def test_stand_aside_playbook_prefers_no_trade_permission_text(self):
         with tempfile.TemporaryDirectory() as tmpdir, patch.object(

@@ -72,6 +72,8 @@ PLAYBOOK_CONFIRMATION_COUNT = _read_int_env("PLAYBOOK_CONFIRMATION_COUNT", 2, 1)
 ENTER_PLAYBOOK_CONFIRMATION_COUNT = _read_int_env("ENTER_PLAYBOOK_CONFIRMATION_COUNT", 3, 1)
 EXIT_PLAYBOOK_CONFIRMATION_COUNT = _read_int_env("EXIT_PLAYBOOK_CONFIRMATION_COUNT", 2, 1)
 PLAYBOOK_FLIP_MIN_HOLD_SECONDS = _read_int_env("PLAYBOOK_FLIP_MIN_HOLD_SECONDS", 600, 0)
+EXECUTION_QUALITY_ALERT_CONFIRMATION_COUNT = _read_int_env("EXECUTION_QUALITY_ALERT_CONFIRMATION_COUNT", 2, 1)
+EXECUTION_QUALITY_CLEAR_CONFIRMATION_COUNT = _read_int_env("EXECUTION_QUALITY_CLEAR_CONFIRMATION_COUNT", 3, 1)
 BOUNDARY_WOBBLE_COOLDOWN_SECONDS = _read_int_env("BOUNDARY_WOBBLE_COOLDOWN_SECONDS", 1200, 0)
 ENTER_STAGE_PROTECT_SECONDS = _read_int_env("ENTER_STAGE_PROTECT_SECONDS", 900, 0)
 NOTIFY_EXIT_READS = _read_bool_env("NOTIFY_EXIT_READS", True)
@@ -573,8 +575,17 @@ def _format_execution_quality_change(changes):
         return ""
     previous = str(delta.get("previous") or "").strip() or "None"
     current = str(delta.get("current") or "").strip() or "None"
-    if previous == current:
+    if not _is_material_execution_quality_transition(previous, current):
         return ""
+    previous_category = _execution_quality_signal_category(previous)
+    current_category = _execution_quality_signal_category(current)
+    if current_category in {"ready", "watchlist"} and previous_category in {"no_trade", "hard_blocked"}:
+        return f"Setup confirmed: {current}"
+    if previous_category in {"ready", "watchlist"} and current_category == "no_trade":
+        return f"Setup invalidated: {previous} -> No Trade"
+    if current_category == "hard_blocked":
+        reason = current.replace("No Trade hard blocked:", "").strip()
+        return f"Hard block active: {reason or current}"
     return f"{previous} -> {current}"
 
 
@@ -949,6 +960,78 @@ def _execution_quality_status(grade, blockers):
     return "watchlist"
 
 
+def _is_hard_execution_quality_blocker(blocker):
+    text = str(blocker or "").strip().lower()
+    return bool(
+        text.startswith("market is closed")
+        or text.startswith("macro event window")
+        or text.startswith("atr% is extreme")
+    )
+
+
+def _execution_quality_signal_category(signal):
+    text = str(signal or "").strip()
+    if not text:
+        return "no_trade"
+    if text.startswith("No Trade hard blocked:"):
+        return "hard_blocked"
+    if text.startswith("No Trade"):
+        return "no_trade"
+    if text.startswith(("A ", "B ")):
+        return "ready"
+    if text.startswith("Watchlist "):
+        return "watchlist"
+    return "other"
+
+
+def _is_material_execution_quality_transition(previous, current):
+    previous_text = str(previous or "").strip()
+    current_text = str(current or "").strip()
+    if previous_text == current_text:
+        return False
+    previous_category = _execution_quality_signal_category(previous_text)
+    current_category = _execution_quality_signal_category(current_text)
+    if previous_category == "no_trade" and current_category == "no_trade":
+        return False
+    if previous_category == "hard_blocked" and current_category in {"hard_blocked", "no_trade"}:
+        return False
+    return True
+
+
+def _stabilize_execution_quality_alert_signal(raw_signal, previous_snapshot=None):
+    previous_snapshot = previous_snapshot if isinstance(previous_snapshot, dict) else {}
+    raw_signal = str(raw_signal or "No Trade").strip() or "No Trade"
+    if not previous_snapshot:
+        return raw_signal, raw_signal, 1
+
+    previous_raw = str(previous_snapshot.get("execution_quality_raw_signal") or "").strip()
+    previous_streak = int(previous_snapshot.get("execution_quality_raw_streak", 0) or 0)
+    raw_streak = previous_streak + 1 if raw_signal == previous_raw else 1
+    previous_stable = (
+        str(previous_snapshot.get("execution_quality_signal") or "").strip()
+        or raw_signal
+    )
+
+    raw_category = _execution_quality_signal_category(raw_signal)
+    stable_category = _execution_quality_signal_category(previous_stable)
+    stable_signal = previous_stable
+
+    if raw_signal == previous_stable:
+        stable_signal = raw_signal
+    elif raw_category == "hard_blocked":
+        stable_signal = raw_signal
+    elif raw_category in {"ready", "watchlist"}:
+        if raw_streak >= EXECUTION_QUALITY_ALERT_CONFIRMATION_COUNT:
+            stable_signal = raw_signal
+    elif raw_category == "no_trade" and stable_category in {"ready", "watchlist"}:
+        if raw_streak >= EXECUTION_QUALITY_CLEAR_CONFIRMATION_COUNT:
+            stable_signal = raw_signal
+    else:
+        stable_signal = raw_signal
+
+    return stable_signal, raw_signal, raw_streak
+
+
 def _atr_status(atr_percent):
     value = _coerce_float(atr_percent, 0.0) or 0.0
     if value >= 0.55:
@@ -1125,6 +1208,7 @@ def _build_execution_quality_plan(ta_data, regime_state, decision_status, execut
         setup = "No Clean Entry"
 
     levels = _collect_execution_levels(ta_data)
+    vwap_target_price = _coerce_float(structure.get("sessionVwap"), None)
     buffer = max(atr_abs * 0.15, current_price * 0.00015 if current_price > 0 else 0.75)
     entry_mid = current_price
     entry_low = None
@@ -1147,15 +1231,20 @@ def _build_execution_quality_plan(ta_data, regime_state, decision_status, execut
         nearby_resistance = _nearest_above(levels, current_price, min_distance=0.02)
         if nearby_resistance and float(nearby_resistance["price"]) - entry_mid < risk * 0.8:
             blockers.append(f"{nearby_resistance['label']} is too close for a clean long target.")
-        target_one_level = _nearest_above(levels, entry_mid + risk, min_distance=0.02)
-        target_two_level = (
-            _nearest_above(levels, float(target_one_level["price"]), min_distance=0.05)
-            if target_one_level
-            else _nearest_above(levels, entry_mid + risk * 1.8, min_distance=0.02)
-        )
-        target_one = float(target_one_level["price"]) if target_one_level else entry_mid + risk * 1.5
+        if mode == "Range Reversion" and vwap_target_price is not None and vwap_target_price > entry_mid + 0.02:
+            target_one = vwap_target_price
+            target_one_basis = "VWAP mean reversion target"
+            target_two_level = _nearest_above(levels, target_one, min_distance=0.05)
+        else:
+            target_one_level = _nearest_above(levels, entry_mid + risk, min_distance=0.02)
+            target_two_level = (
+                _nearest_above(levels, float(target_one_level["price"]), min_distance=0.05)
+                if target_one_level
+                else _nearest_above(levels, entry_mid + risk * 1.8, min_distance=0.02)
+            )
+            target_one = float(target_one_level["price"]) if target_one_level else entry_mid + risk * 1.5
+            target_one_basis = str(target_one_level.get("label") if target_one_level else "1.5R volatility target")
         target_two = float(target_two_level["price"]) if target_two_level else max(entry_mid + risk * 2.2, target_one + risk * 0.7)
-        target_one_basis = str(target_one_level.get("label") if target_one_level else "1.5R volatility target")
         target_two_basis = str(target_two_level.get("label") if target_two_level else "2.2R runner target")
     elif current_price > 0 and direction == "Short":
         resistance_anchor = _nearest_above(levels, current_price, min_distance=0.02)
@@ -1168,15 +1257,20 @@ def _build_execution_quality_plan(ta_data, regime_state, decision_status, execut
         nearby_support = _nearest_below(levels, current_price, min_distance=0.02)
         if nearby_support and entry_mid - float(nearby_support["price"]) < risk * 0.8:
             blockers.append(f"{nearby_support['label']} is too close for a clean short target.")
-        target_one_level = _nearest_below(levels, entry_mid - risk, min_distance=0.02)
-        target_two_level = (
-            _nearest_below(levels, float(target_one_level["price"]), min_distance=0.05)
-            if target_one_level
-            else _nearest_below(levels, entry_mid - risk * 1.8, min_distance=0.02)
-        )
-        target_one = float(target_one_level["price"]) if target_one_level else entry_mid - risk * 1.5
+        if mode == "Range Reversion" and vwap_target_price is not None and vwap_target_price < entry_mid - 0.02:
+            target_one = vwap_target_price
+            target_one_basis = "VWAP mean reversion target"
+            target_two_level = _nearest_below(levels, target_one, min_distance=0.05)
+        else:
+            target_one_level = _nearest_below(levels, entry_mid - risk, min_distance=0.02)
+            target_two_level = (
+                _nearest_below(levels, float(target_one_level["price"]), min_distance=0.05)
+                if target_one_level
+                else _nearest_below(levels, entry_mid - risk * 1.8, min_distance=0.02)
+            )
+            target_one = float(target_one_level["price"]) if target_one_level else entry_mid - risk * 1.5
+            target_one_basis = str(target_one_level.get("label") if target_one_level else "1.5R volatility target")
         target_two = float(target_two_level["price"]) if target_two_level else min(entry_mid - risk * 2.2, target_one - risk * 0.7)
-        target_one_basis = str(target_one_level.get("label") if target_one_level else "1.5R volatility target")
         target_two_basis = str(target_two_level.get("label") if target_two_level else "2.2R runner target")
     else:
         risk = 0.0
@@ -1308,7 +1402,13 @@ def _execution_quality_alert_signal(execution_quality):
     if status == "watchlist" and grade == "C" and direction in {"Long", "Short"}:
         return f"Watchlist {setup_label} {rr_bucket}"
     if blockers:
-        return f"No Trade blocked: {str(blockers[0])[:90]}"
+        hard_blocker = next(
+            (str(item).strip() for item in blockers if _is_hard_execution_quality_blocker(item)),
+            "",
+        )
+        if hard_blocker:
+            return f"No Trade hard blocked: {hard_blocker[:90]}"
+        return "No Trade"
     return "No Trade"
 
 
@@ -2617,6 +2717,16 @@ def _is_material_change(changes):
     }
 
     for key, delta in changes.items():
+        if key == "execution_quality_signal":
+            if not isinstance(delta, dict):
+                continue
+            if _is_material_execution_quality_transition(
+                delta.get("previous"),
+                delta.get("current"),
+            ):
+                return True
+            continue
+
         if key in always_material:
             return True
 
@@ -3790,6 +3900,15 @@ def _extract_indicator_snapshot(payload, previous_snapshot=None):
         micro_sweep_state = int(round(float(structure_context.get("sweepReclaimSignal") or 0.0)))
     except Exception:
         micro_sweep_state = 0
+    execution_quality_raw_signal = _execution_quality_alert_signal(execution_quality)
+    (
+        execution_quality_signal,
+        execution_quality_raw_signal,
+        execution_quality_raw_streak,
+    ) = _stabilize_execution_quality_alert_signal(
+        execution_quality_raw_signal,
+        previous_snapshot,
+    )
     return {
         "warning_ladder": (regime_state.get("warning_ladder") if isinstance(regime_state, dict) else None),
         "event_regime": (regime_state.get("event_regime") if isinstance(regime_state, dict) else None),
@@ -3802,7 +3921,9 @@ def _extract_indicator_snapshot(payload, previous_snapshot=None):
             if isinstance(execution_state, dict) and execution_state.get("title")
             else (execution_state.get("status") if isinstance(execution_state, dict) else None)
         ),
-        "execution_quality_signal": _execution_quality_alert_signal(execution_quality),
+        "execution_quality_signal": execution_quality_signal,
+        "execution_quality_raw_signal": execution_quality_raw_signal,
+        "execution_quality_raw_streak": execution_quality_raw_streak,
         "micro_vwap_delta_pct": micro_vwap_delta,
         "micro_vwap_band": _vwap_band_label(micro_vwap_delta),
         "micro_vwap_bias": _stabilize_vwap_bias_label(
