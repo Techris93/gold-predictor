@@ -1066,6 +1066,13 @@ def _execution_quality_signal_category(signal):
     return "other"
 
 
+def _execution_quality_signal_core(signal):
+    text = str(signal or "").strip()
+    if not text:
+        return "No Trade"
+    return re.sub(r"\s+(?:>=|<)\d+(?:\.\d+)?R$", "", text).strip() or text
+
+
 def _is_material_execution_quality_transition(previous, current):
     previous_text = str(previous or "").strip()
     current_text = str(current or "").strip()
@@ -1076,6 +1083,12 @@ def _is_material_execution_quality_transition(previous, current):
     if previous_category == "no_trade" and current_category == "no_trade":
         return False
     if previous_category == "hard_blocked" and current_category in {"hard_blocked", "no_trade"}:
+        return False
+    if (
+        previous_category in {"ready", "watchlist"}
+        and current_category in {"ready", "watchlist"}
+        and _execution_quality_signal_core(previous_text) == _execution_quality_signal_core(current_text)
+    ):
         return False
     return True
 
@@ -1088,7 +1101,11 @@ def _stabilize_execution_quality_alert_signal(raw_signal, previous_snapshot=None
 
     previous_raw = str(previous_snapshot.get("execution_quality_raw_signal") or "").strip()
     previous_streak = int(previous_snapshot.get("execution_quality_raw_streak", 0) or 0)
-    raw_streak = previous_streak + 1 if raw_signal == previous_raw else 1
+    raw_streak = (
+        previous_streak + 1
+        if _execution_quality_signal_core(raw_signal) == _execution_quality_signal_core(previous_raw)
+        else 1
+    )
     previous_stable = (
         str(previous_snapshot.get("execution_quality_signal") or "").strip()
         or raw_signal

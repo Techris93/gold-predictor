@@ -572,6 +572,18 @@ class DashboardPayloadContractTests(unittest.TestCase):
             "",
         )
 
+    def test_execution_quality_rr_bucket_change_is_not_material(self):
+        changes = {
+            "execution_quality_signal": {
+                "previous": "B VWAP Stretch Reversion Short >=1.15R",
+                "current": "B VWAP Stretch Reversion Short >=1.5R",
+            }
+        }
+
+        self.assertEqual(app_module._filter_notification_changes(changes), {})
+        self.assertFalse(app_module._is_material_change(changes))
+        self.assertEqual(app_module._format_execution_quality_change(changes), "")
+
     def test_notification_filter_suppresses_non_price_action_categories(self):
         changes = {
             "warning_ladder": {"previous": "Normal", "current": "High Breakout Risk"},
@@ -1620,6 +1632,46 @@ class DashboardPayloadContractTests(unittest.TestCase):
         self.assertEqual(
             second_snapshot["execution_quality_signal"],
             "B VWAP Stretch Reversion Short >=2.5R",
+        )
+        self.assertEqual(second_snapshot["execution_quality_raw_streak"], 2)
+
+    def test_execution_quality_confirmation_counts_same_setup_across_rr_bucket_noise(self):
+        first_payload = {
+            "ExecutionQuality": {
+                "status": "ready",
+                "grade": "B",
+                "direction": "Short",
+                "setup": "VWAP Stretch Reversion Short",
+                "riskReward": 1.2,
+                "blockers": [],
+            },
+            "TechnicalAnalysis": {"structure_context": {}, "price_action": {}},
+        }
+        second_payload = {
+            "ExecutionQuality": {
+                "status": "ready",
+                "grade": "B",
+                "direction": "Short",
+                "setup": "VWAP Stretch Reversion Short",
+                "riskReward": 1.6,
+                "blockers": [],
+            },
+            "TechnicalAnalysis": {"structure_context": {}, "price_action": {}},
+        }
+        previous_snapshot = {
+            "execution_quality_signal": "No Trade",
+            "execution_quality_raw_signal": "No Trade",
+            "execution_quality_raw_streak": 5,
+        }
+
+        first_snapshot = app_module._extract_indicator_snapshot(first_payload, previous_snapshot)
+        second_snapshot = app_module._extract_indicator_snapshot(second_payload, first_snapshot)
+
+        self.assertEqual(first_snapshot["execution_quality_signal"], "No Trade")
+        self.assertEqual(first_snapshot["execution_quality_raw_streak"], 1)
+        self.assertEqual(
+            second_snapshot["execution_quality_signal"],
+            "B VWAP Stretch Reversion Short >=1.5R",
         )
         self.assertEqual(second_snapshot["execution_quality_raw_streak"], 2)
 
