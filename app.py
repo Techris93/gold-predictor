@@ -85,6 +85,7 @@ NOTIFICATION_ALLOWED_FIELDS = {
     "micro_vwap_delta_pct",
     "micro_orb_state",
     "micro_sweep_state",
+    "execution_quality_signal",
 }
 PUSH_EXCLUDED_FIELDS = {
     "rsi_14",
@@ -115,6 +116,7 @@ TELEGRAM_THREAD_ID = os.getenv("TELEGRAM_THREAD_ID", "").strip()
 ENABLE_TELEGRAM_NOTIFICATIONS = _read_bool_env("GOLD_PREDICTOR_ENABLE_TELEGRAM", False)
 CHANGE_SUMMARY_ORDER = [
     "market_structure",
+    "execution_quality_signal",
     "micro_vwap_bias",
     "micro_vwap_delta_pct",
     "micro_orb_state",
@@ -224,6 +226,7 @@ def _filter_notification_changes(changes):
 def _summarize_changes_for_push(changes):
     labels = {
         "market_structure": "Market Structure",
+        "execution_quality_signal": "Execution Quality",
         "micro_vwap_bias": "VWAP Bias",
         "micro_vwap_delta_pct": "VWAP",
         "micro_orb_state": "ORB",
@@ -332,6 +335,7 @@ def _should_suppress_duplicate_alert(alert_state, fingerprint, signal_class, now
 def _notification_title_for_changes(changes):
     changed_keys = set(_filter_notification_changes(changes).keys())
     has_structure = "market_structure" in changed_keys
+    has_execution_quality = "execution_quality_signal" in changed_keys
     has_micro_vwap = (
         "micro_vwap_bias" in changed_keys
         or "micro_vwap_delta_pct" in changed_keys
@@ -342,6 +346,10 @@ def _notification_title_for_changes(changes):
 
     if has_structure and has_microstructure:
         return "XAUUSD Price Action Changed"
+    if has_execution_quality and (has_structure or has_microstructure):
+        return "XAUUSD Price Action Changed"
+    if has_execution_quality:
+        return "XAUUSD Execution Quality Changed"
     if has_microstructure:
         return "XAUUSD Microstructure Changed"
     if has_structure:
@@ -556,6 +564,18 @@ def _format_microstructure_change(changes):
         if prev_sweep != cur_sweep:
             parts.append(f"Sweep {prev_sweep} -> {cur_sweep}")
     return " · ".join(parts)
+
+
+def _format_execution_quality_change(changes):
+    changes = changes if isinstance(changes, dict) else {}
+    delta = changes.get("execution_quality_signal")
+    if not isinstance(delta, dict):
+        return ""
+    previous = str(delta.get("previous") or "").strip() or "None"
+    current = str(delta.get("current") or "").strip() or "None"
+    if previous == current:
+        return ""
+    return f"{previous} -> {current}"
 
 
 def _extract_market_session_state(ta_data):
@@ -1256,6 +1276,40 @@ def _build_execution_quality_plan(ta_data, regime_state, decision_status, execut
             else ["No trade until VWAP, ORB, pivots, and ADX align."]
         ),
     }
+
+
+def _execution_quality_alert_signal(execution_quality):
+    quality = execution_quality if isinstance(execution_quality, dict) else {}
+    grade = str(quality.get("grade") or "No Trade").strip() or "No Trade"
+    status = str(quality.get("status") or "blocked").strip() or "blocked"
+    direction = str(quality.get("direction") or "Neutral").strip() or "Neutral"
+    setup = str(quality.get("setup") or "No Clean Entry").strip() or "No Clean Entry"
+    blockers = quality.get("blockers") if isinstance(quality.get("blockers"), list) else []
+    risk_reward = _coerce_float(quality.get("riskReward"), 0.0) or 0.0
+    if risk_reward >= 2.5:
+        rr_bucket = ">=2.5R"
+    elif risk_reward >= 2.0:
+        rr_bucket = ">=2.0R"
+    elif risk_reward >= 1.5:
+        rr_bucket = ">=1.5R"
+    elif risk_reward >= 1.15:
+        rr_bucket = ">=1.15R"
+    else:
+        rr_bucket = "<1.15R"
+    setup_label = setup
+    if direction in {"Long", "Short"}:
+        direction_prefix = f"{direction} "
+        direction_suffix = f" {direction}"
+        if not (setup.startswith(direction_prefix) or setup.endswith(direction_suffix)):
+            setup_label = f"{direction} {setup}"
+
+    if status == "ready" and grade in {"A", "B"} and direction in {"Long", "Short"}:
+        return f"{grade} {setup_label} {rr_bucket}"
+    if status == "watchlist" and grade == "C" and direction in {"Long", "Short"}:
+        return f"Watchlist {setup_label} {rr_bucket}"
+    if blockers:
+        return f"No Trade blocked: {str(blockers[0])[:90]}"
+    return "No Trade"
 
 
 def _derive_dashboard_action(payload, ta_data=None):
@@ -2308,6 +2362,9 @@ def _build_signal_notification(changes, rr_signal, market_structure, ta_data=Non
     body_lines = []
     if "market_structure" in changed_keys:
         body_lines.append(f"Market Structure: {_format_market_structure_change(changes, market_structure)}")
+    quality_change = _format_execution_quality_change(changes)
+    if quality_change:
+        body_lines.append(f"Execution Quality: {quality_change}")
     micro_change = _format_microstructure_change(changes)
     if micro_change:
         body_lines.append(f"Microstructure Change: {micro_change}")
@@ -3718,6 +3775,7 @@ def _extract_indicator_snapshot(payload, previous_snapshot=None):
     pa = ta_data.get("price_action", {}) if isinstance(ta_data, dict) else {}
     regime_state = payload.get("RegimeState", {}) if isinstance(payload, dict) else {}
     execution_state = payload.get("ExecutionState", {}) if isinstance(payload, dict) else {}
+    execution_quality = payload.get("ExecutionQuality", {}) if isinstance(payload, dict) else {}
     structure_context = ta_data.get("structure_context", {}) if isinstance(ta_data, dict) else {}
     previous_snapshot = previous_snapshot if isinstance(previous_snapshot, dict) else {}
     try:
@@ -3744,6 +3802,7 @@ def _extract_indicator_snapshot(payload, previous_snapshot=None):
             if isinstance(execution_state, dict) and execution_state.get("title")
             else (execution_state.get("status") if isinstance(execution_state, dict) else None)
         ),
+        "execution_quality_signal": _execution_quality_alert_signal(execution_quality),
         "micro_vwap_delta_pct": micro_vwap_delta,
         "micro_vwap_band": _vwap_band_label(micro_vwap_delta),
         "micro_vwap_bias": _stabilize_vwap_bias_label(
@@ -4160,9 +4219,13 @@ def _indicator_monitor_loop():
                             or "micro_orb_state" in notification_changes
                             or "micro_sweep_state" in notification_changes
                         )
+                        execution_quality_changed = bool(
+                            "execution_quality_signal" in notification_changes
+                        )
                         should_alert = bool(
                             market_structure_changed
                             or microstructure_changed
+                            or execution_quality_changed
                         )
                         signal_class = "price_action" if should_alert else ""
 

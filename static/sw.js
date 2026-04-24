@@ -2,6 +2,7 @@ self.ALLOWED_ALERT_TITLES = new Set([
   "XAUUSD Market Structure Changed",
   "XAUUSD Microstructure Changed",
   "XAUUSD Price Action Changed",
+  "XAUUSD Execution Quality Changed",
 ]);
 
 self.addEventListener("install", () => {

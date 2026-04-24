@@ -507,6 +507,48 @@ class DashboardPayloadContractTests(unittest.TestCase):
         self.assertNotIn("execution_state", filtered)
         self.assertIn("market_structure", filtered)
 
+    def test_notification_filter_allows_execution_quality_signal_only(self):
+        filtered = app_module._filter_notification_changes(
+            {
+                "execution_quality_signal": {
+                    "previous": "No Trade",
+                    "current": "A VWAP / ORB Continuation Long >=1.5R",
+                },
+                "verdict": {"previous": "Neutral", "current": "Bullish"},
+                "confidence_bucket": {"previous": "Low", "current": "High"},
+            }
+        )
+
+        self.assertEqual(
+            filtered,
+            {
+                "execution_quality_signal": {
+                    "previous": "No Trade",
+                    "current": "A VWAP / ORB Continuation Long >=1.5R",
+                }
+            },
+        )
+
+    def test_execution_quality_signal_body_uses_price_action_title(self):
+        notification = app_module._build_signal_notification(
+            {
+                "execution_quality_signal": {
+                    "previous": "Watchlist Long Watchlist Reclaim >=1.5R",
+                    "current": "No Trade blocked: Recent Swing High is too close for a clean long target.",
+                }
+            },
+            {},
+            "Bullish Drift",
+            ta_data=_sample_ta_payload(),
+        )
+
+        self.assertEqual(notification["title"], "XAUUSD Execution Quality Changed")
+        self.assertIn(
+            "Execution Quality: Watchlist Long Watchlist Reclaim >=1.5R -> No Trade blocked",
+            notification["body"],
+        )
+        self.assertIn("Bar Session / Microstructure:", notification["body"])
+
     def test_notification_filter_suppresses_non_price_action_categories(self):
         changes = {
             "warning_ladder": {"previous": "Normal", "current": "High Breakout Risk"},
@@ -1361,6 +1403,49 @@ class DashboardPayloadContractTests(unittest.TestCase):
         self.assertEqual(plan["grade"], "No Trade")
         self.assertTrue(any("too close" in item for item in plan["blockers"]))
         self.assertLess(plan["targets"][1]["price"], plan["targets"][0]["price"])
+
+    def test_execution_quality_alert_signal_emphasizes_blocked_no_trade(self):
+        signal = app_module._execution_quality_alert_signal(
+            {
+                "status": "blocked",
+                "grade": "No Trade",
+                "score": 52,
+                "direction": "Long",
+                "setup": "Long Watchlist Reclaim",
+                "riskReward": 1.57,
+                "blockers": ["Recent Swing High is too close for a clean long target."],
+            }
+        )
+
+        self.assertEqual(
+            signal,
+            "No Trade blocked: Recent Swing High is too close for a clean long target.",
+        )
+
+    def test_execution_quality_alert_signal_avoids_duplicate_direction(self):
+        ready_signal = app_module._execution_quality_alert_signal(
+            {
+                "status": "ready",
+                "grade": "A",
+                "direction": "Long",
+                "setup": "VWAP / ORB Continuation Long",
+                "riskReward": 1.8,
+                "blockers": [],
+            }
+        )
+        watchlist_signal = app_module._execution_quality_alert_signal(
+            {
+                "status": "watchlist",
+                "grade": "C",
+                "direction": "Long",
+                "setup": "Long Watchlist Reclaim",
+                "riskReward": 1.6,
+                "blockers": [],
+            }
+        )
+
+        self.assertEqual(ready_signal, "A VWAP / ORB Continuation Long >=1.5R")
+        self.assertEqual(watchlist_signal, "Watchlist Long Watchlist Reclaim >=1.5R")
 
     def test_stand_aside_playbook_prefers_no_trade_permission_text(self):
         with tempfile.TemporaryDirectory() as tmpdir, patch.object(

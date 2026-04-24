@@ -475,11 +475,11 @@
       }
 
       .card-price-action {
-        grid-column: span 3;
+        grid-column: span 4;
       }
 
       .card-technical {
-        grid-column: span 5;
+        grid-column: span 4;
       }
 
       .card-market,
@@ -945,11 +945,11 @@
         }
 
         .card-price-action {
-          grid-column: span 2;
+          grid-column: span 4;
         }
 
         .card-technical {
-          grid-column: span 6;
+          grid-column: span 4;
         }
 
         .card-market,
@@ -1116,7 +1116,7 @@
                 Background push: not enabled
               </div>
               <div class="socket-state status-pill" id="alert-policy-state">
-                Alerts: structure + VWAP / ORB / sweep only
+                Alerts: structure + VWAP / ORB / sweep + key execution quality
               </div>
             </div>
           </div>
@@ -1143,6 +1143,44 @@
             <div class="metric-row">
               <span class="metric-label">Market Structure</span>
               <span class="metric-value" id="pa-structure">---</span>
+            </div>
+            <div class="decision-status execution-quality-status">
+              <div class="decision-status-label">Execution Quality</div>
+              <div class="decision-status-value wait" id="eq-status">
+                Waiting for a clean setup...
+              </div>
+            </div>
+            <div class="metric-row">
+              <span class="metric-label">Best Setup</span>
+              <span class="metric-value compact" id="eq-setup">---</span>
+            </div>
+            <div class="metric-row">
+              <span class="metric-label">Entry Zone</span>
+              <span class="metric-value compact" id="eq-entry">---</span>
+            </div>
+            <div class="metric-row">
+              <span class="metric-label">Stop / Invalidation</span>
+              <span class="metric-value compact" id="eq-stop">---</span>
+            </div>
+            <div class="metric-row">
+              <span class="metric-label">TP1 / TP2</span>
+              <span class="metric-value compact" id="eq-targets">---</span>
+            </div>
+            <div class="metric-row">
+              <span class="metric-label">R:R / Size</span>
+              <span class="metric-value compact" id="eq-rr">---</span>
+            </div>
+            <div class="decision-block">
+              <div class="decision-heading exit">Quality Reasons</div>
+              <ul class="playbook-why" id="eq-reasons">
+                <li>Awaiting execution-quality plan.</li>
+              </ul>
+            </div>
+            <div class="decision-block">
+              <div class="decision-heading exit">Blockers</div>
+              <ul class="playbook-why" id="eq-blockers">
+                <li>No blockers yet.</li>
+              </ul>
             </div>
           </section>
 
@@ -1386,48 +1424,6 @@
                       >---</span
                     >
                   </div>
-                  <div class="decision-status execution-quality-status">
-                    <div class="decision-status-label">Execution Quality</div>
-                    <div
-                      class="decision-status-value wait"
-                      id="eq-status"
-                    >
-                      Waiting for a clean setup...
-                    </div>
-                  </div>
-                  <div class="metric-row">
-                    <span class="metric-label">Best Setup</span>
-                    <span class="metric-value compact" id="eq-setup">---</span>
-                  </div>
-                  <div class="metric-row">
-                    <span class="metric-label">Entry Zone</span>
-                    <span class="metric-value compact" id="eq-entry">---</span>
-                  </div>
-                  <div class="metric-row">
-                    <span class="metric-label">Stop / Invalidation</span>
-                    <span class="metric-value compact" id="eq-stop">---</span>
-                  </div>
-                  <div class="metric-row">
-                    <span class="metric-label">TP1 / TP2</span>
-                    <span class="metric-value compact" id="eq-targets">---</span>
-                  </div>
-                  <div class="metric-row">
-                    <span class="metric-label">R:R / Size</span>
-                    <span class="metric-value compact" id="eq-rr">---</span>
-                  </div>
-                  <div class="decision-block">
-                    <div class="decision-heading exit">Quality Reasons</div>
-                    <ul class="playbook-why" id="eq-reasons">
-                      <li>Awaiting execution-quality plan.</li>
-                    </ul>
-                  </div>
-                  <div class="decision-block">
-                    <div class="decision-heading exit">Blockers</div>
-                    <ul class="playbook-why" id="eq-blockers">
-                      <li>No blockers yet.</li>
-                    </ul>
-                  </div>
-
                   <button
                     type="button"
                     class="decision-toggle"
@@ -1655,9 +1651,11 @@
         "XAUUSD Market Structure Changed",
         "XAUUSD Microstructure Changed",
         "XAUUSD Price Action Changed",
+        "XAUUSD Execution Quality Changed",
       ]);
       const ALLOWED_LIVE_ALERT_FIELDS = new Set([
         "market_structure",
+        "execution_quality_signal",
         "micro_vwap_bias",
         "micro_vwap_delta_pct",
         "micro_orb_state",
@@ -3118,6 +3116,10 @@
         const scoreText = Number.isFinite(score) ? `${score.toFixed(0)}/100` : "n/a";
         const mode = safeText(quality.mode, "No mode");
         const direction = safeText(quality.direction, "Neutral");
+        const status = String(quality.status || "blocked").toLowerCase();
+        if (status === "blocked" || grade === "No Trade") {
+          return `No Trade · ${scoreText} · ${mode} · Lean ${direction}`;
+        }
         return `${grade} · ${scoreText} · ${direction} · ${mode}`;
       }
 
@@ -3176,7 +3178,12 @@
           statusEl.className = `decision-status-value ${tone}`;
         }
         if (setupEl) {
-          setupEl.innerText = `${safeText(quality.setup, "No Clean Entry")} · ${safeText(quality.atrStatus, "ATR n/a")}`;
+          const status = String(quality.status || "blocked").toLowerCase();
+          const setupPrefix =
+            status === "blocked" || quality.grade === "No Trade"
+              ? "Blocked"
+              : safeText(quality.setup, "No Clean Entry");
+          setupEl.innerText = `${setupPrefix} · ${safeText(quality.setup, "No Clean Entry")} · ${safeText(quality.atrStatus, "ATR n/a")}`;
           setupEl.className = `metric-value compact ${
             tone === "buy"
               ? "value-bullish"
@@ -3897,7 +3904,7 @@
         }
         syncAlertsButton();
         updateAlertPolicyState(
-          "Alerts: structure + VWAP / ORB / sweep only",
+          "Alerts: structure + VWAP / ORB / sweep + key execution quality",
           true,
         );
         ensureServiceWorker().then(() => {
