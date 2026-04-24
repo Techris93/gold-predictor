@@ -80,6 +80,7 @@ NOTIFY_EXIT_READS = _read_bool_env("NOTIFY_EXIT_READS", True)
 RR200_MAX_SIGNALS_PER_DAY = _read_int_env("RR200_MAX_SIGNALS_PER_DAY", 5, 1)
 RR200_MIN_SIGNAL_SPACING_SECONDS = _read_int_env("RR200_MIN_SIGNAL_SPACING_SECONDS", 2700, 0)
 VWAP_BIAS_ALERT_HYSTERESIS_PCT = 0.02
+VWAP_BIAS_ALERT_MIN_MOVE_PCT = 0.03
 VWAP_DELTA_ALERT_THRESHOLD_PCT = 0.10
 NOTIFICATION_ALLOWED_FIELDS = {
     "market_structure",
@@ -234,6 +235,19 @@ def _filter_notification_changes(changes):
     ):
         filtered.pop("execution_quality_signal", None)
 
+    vwap_bias_delta = filtered.get("micro_vwap_bias")
+    if isinstance(vwap_bias_delta, dict):
+        vwap_value_delta = filtered.get("micro_vwap_delta_pct")
+        previous_value = vwap_value_delta.get("previous") if isinstance(vwap_value_delta, dict) else None
+        current_value = vwap_value_delta.get("current") if isinstance(vwap_value_delta, dict) else None
+        if not _is_alertable_vwap_bias_transition(
+            vwap_bias_delta.get("previous"),
+            vwap_bias_delta.get("current"),
+            previous_value,
+            current_value,
+        ):
+            filtered.pop("micro_vwap_bias", None)
+
     if "micro_vwap_bias" not in filtered:
         delta = filtered.get("micro_vwap_delta_pct")
         prev = delta.get("previous") if isinstance(delta, dict) else None
@@ -276,11 +290,11 @@ def _notification_fingerprint(changes):
         value = filtered.get(key)
         if isinstance(value, dict):
             normalized_changes[key] = {
-                "previous": value.get("previous"),
-                "current": value.get("current"),
+                "previous": _normalize_fingerprint_value(key, value.get("previous")),
+                "current": _normalize_fingerprint_value(key, value.get("current")),
             }
         else:
-            normalized_changes[key] = value
+            normalized_changes[key] = _normalize_fingerprint_value(key, value)
     raw_payload = json.dumps(
         {
             "title": _notification_title_for_changes(filtered),
@@ -292,6 +306,17 @@ def _notification_fingerprint(changes):
         default=str,
     )
     return hashlib.sha1(raw_payload.encode("utf-8")).hexdigest()
+
+
+def _normalize_fingerprint_value(key, value):
+    if key == "micro_vwap_delta_pct":
+        numeric = _coerce_float(value, None)
+        return round(numeric, 2) if numeric is not None else value
+    if key in {"micro_orb_state", "micro_sweep_state"}:
+        return _coerce_directional_state(value)
+    if key == "execution_quality_signal":
+        return _execution_quality_signal_core(value)
+    return value
 
 
 def _notification_tag_from_fingerprint(fingerprint):
@@ -547,6 +572,23 @@ def _vwap_bias_label(value):
     return _raw_vwap_bias_label(value)
 
 
+def _is_alertable_vwap_bias_transition(previous_bias, current_bias, previous_value=None, current_value=None):
+    previous_label = str(previous_bias or "").strip()
+    current_label = str(current_bias or "").strip()
+    if not previous_label or not current_label or previous_label == current_label:
+        return False
+
+    prev = _coerce_float(previous_value, None)
+    cur = _coerce_float(current_value, None)
+    if prev is not None and cur is not None:
+        if round(prev, 2) == round(cur, 2):
+            return False
+        if abs(cur - prev) < VWAP_BIAS_ALERT_MIN_MOVE_PCT:
+            return False
+
+    return True
+
+
 def _stabilize_vwap_bias_label(value, previous_label=None):
     raw_label = _raw_vwap_bias_label(value)
     previous_label = str(previous_label or "").strip()
@@ -579,12 +621,13 @@ def _stabilize_vwap_bias_label(value, previous_label=None):
     return raw_label
 
 
-def _format_vwap_microstructure_text(value):
+def _format_vwap_microstructure_text(value, bias_label=None):
     try:
         numeric = float(value)
     except Exception:
         numeric = 0.0
-    return f"VWAP {numeric:.2f}% {_vwap_bias_label(numeric)}"
+    label = str(bias_label or "").strip() or _vwap_bias_label(numeric)
+    return f"VWAP {numeric:.2f}% {label}"
 
 
 def _vwap_bias_strategy_note(bias_label):
@@ -615,7 +658,11 @@ def _format_microstructure_change(changes):
         value_suffix = ""
         if isinstance(prev_val, (int, float)) and isinstance(cur_val, (int, float)):
             value_suffix = f" ({float(prev_val):.2f}% -> {float(cur_val):.2f}%)"
-        if prev_bias and cur_bias and prev_bias != cur_bias:
+        if (
+            prev_bias
+            and cur_bias
+            and _is_alertable_vwap_bias_transition(prev_bias, cur_bias, prev_val, cur_val)
+        ):
             strategy_note = _vwap_bias_strategy_note(cur_bias)
             strategy_suffix = f": {strategy_note}" if strategy_note else ""
             parts.append(f"VWAP {prev_bias} -> {cur_bias}{value_suffix}{strategy_suffix}")
@@ -742,7 +789,7 @@ def _extract_market_session_state(ta_data):
     }
 
 
-def _format_bar_session_microstructure(ta_data):
+def _format_bar_session_microstructure(ta_data, vwap_bias_override=None):
     ta_data = ta_data if isinstance(ta_data, dict) else {}
     market_session = _extract_market_session_state(ta_data)
     session = market_session["session"]
@@ -784,7 +831,7 @@ def _format_bar_session_microstructure(ta_data):
     except Exception:
         sweep = 0
 
-    vwap_text = _format_vwap_microstructure_text(vwap_delta)
+    vwap_text = _format_vwap_microstructure_text(vwap_delta, vwap_bias_override)
     orb_text = f"ORB {_orb_state_label(orb)}"
     sweep_text = "Sweep Bullish" if sweep > 0 else ("Sweep Bearish" if sweep < 0 else "No Sweep")
 
@@ -1047,7 +1094,6 @@ def _is_hard_execution_quality_blocker(blocker):
     return bool(
         text.startswith("market is closed")
         or text.startswith("macro event window")
-        or text.startswith("atr% is extreme")
     )
 
 
@@ -1152,6 +1198,36 @@ def _execution_mode(adx, atr_percent, market_regime):
     return "Transition"
 
 
+def _execution_stop_profile(adx, atr_percent, mode):
+    adx_value = _coerce_float(adx, 0.0) or 0.0
+    atr_value = _coerce_float(atr_percent, 0.0) or 0.0
+    mode_text = str(mode or "")
+
+    if adx_value >= 35.0:
+        return {
+            "min_stop_atr": 1.5,
+            "max_entry_stop_atr": 2.0,
+            "management": "ADX > 35: trail winners with 2.0x ATR or VWAP +/- 0.5x ATR after TP1.",
+        }
+    if adx_value >= 25.0 or mode_text == "Trend Continuation":
+        return {
+            "min_stop_atr": 1.25,
+            "max_entry_stop_atr": 1.5,
+            "management": "ADX trend: use fixed targets; switch to trailing only if ADX clears 35.",
+        }
+    if atr_value >= 0.25:
+        return {
+            "min_stop_atr": 1.15,
+            "max_entry_stop_atr": 1.5,
+            "management": "Elevated ATR: avoid tight stops and reduce size instead of shrinking risk room.",
+        }
+    return {
+        "min_stop_atr": 1.0,
+        "max_entry_stop_atr": 1.5,
+        "management": "Normal volatility: protect with about 1.0x ATR; fixed TP works until ADX > 35.",
+    }
+
+
 def _collect_execution_levels(ta_data):
     ta_data = ta_data if isinstance(ta_data, dict) else {}
     structure = ta_data.get("structure_context") if isinstance(ta_data.get("structure_context"), dict) else {}
@@ -1223,6 +1299,11 @@ def _build_execution_quality_plan(ta_data, regime_state, decision_status, execut
         atr_abs = (current_price * atr_percent / 100.0) if current_price > 0 and atr_percent > 0 else max(current_price * 0.001, 1.0)
     atr_label = _atr_status(atr_percent)
     mode = _execution_mode(adx, atr_percent, volatility.get("market_regime"))
+    stop_profile = _execution_stop_profile(adx, atr_percent, mode)
+    min_stop_atr = _coerce_float(stop_profile.get("min_stop_atr"), 1.0) or 1.0
+    max_entry_stop_atr = _coerce_float(stop_profile.get("max_entry_stop_atr"), 1.5) or 1.5
+    min_stop_distance = atr_abs * min_stop_atr
+    max_entry_stop_distance = atr_abs * max_entry_stop_atr
 
     vwap_delta = _coerce_float(structure.get("distSessionVwapPct"), 0.0) or 0.0
     vwap_bias = _vwap_bias_label(vwap_delta)
@@ -1324,7 +1405,10 @@ def _build_execution_quality_plan(ta_data, regime_state, decision_status, execut
         stop_anchor_price = float(support_anchor["price"]) if support_anchor else current_price - atr_abs * 0.55
         stop_basis = str(support_anchor.get("label") if support_anchor else "ATR fallback support")
         stop = stop_anchor_price - buffer
-        risk = max(entry_mid - stop, atr_abs * 0.18)
+        raw_risk = max(entry_mid - stop, 0.0)
+        if raw_risk < min_stop_distance:
+            stop = entry_mid - min_stop_distance
+        risk = max(entry_mid - stop, min_stop_distance)
         entry_low = max(stop + risk * 0.25, entry_mid - atr_abs * 0.12)
         entry_high = entry_mid + atr_abs * 0.05
         nearby_resistance = _nearest_above(levels, current_price, min_distance=0.02)
@@ -1350,7 +1434,10 @@ def _build_execution_quality_plan(ta_data, regime_state, decision_status, execut
         stop_anchor_price = float(resistance_anchor["price"]) if resistance_anchor else current_price + atr_abs * 0.55
         stop_basis = str(resistance_anchor.get("label") if resistance_anchor else "ATR fallback resistance")
         stop = stop_anchor_price + buffer
-        risk = max(stop - entry_mid, atr_abs * 0.18)
+        raw_risk = max(stop - entry_mid, 0.0)
+        if raw_risk < min_stop_distance:
+            stop = entry_mid + min_stop_distance
+        risk = max(stop - entry_mid, min_stop_distance)
         entry_low = entry_mid - atr_abs * 0.05
         entry_high = min(stop - risk * 0.25, entry_mid + atr_abs * 0.12)
         nearby_support = _nearest_below(levels, current_price, min_distance=0.02)
@@ -1373,6 +1460,11 @@ def _build_execution_quality_plan(ta_data, regime_state, decision_status, execut
         target_two_basis = str(target_two_level.get("label") if target_two_level else "2.2R runner target")
     else:
         risk = 0.0
+
+    if direction in {"Long", "Short"} and risk > max_entry_stop_distance:
+        blockers.append(
+            f"Planned stop is wider than {max_entry_stop_atr:.1f}x ATR; wait for a better pullback."
+        )
 
     risk_reward = 0.0
     if stop is not None and target_one is not None and risk > 0:
@@ -1400,6 +1492,11 @@ def _build_execution_quality_plan(ta_data, regime_state, decision_status, execut
         reasons.append(f"ADX {adx:.1f} is in the transition zone.")
     reasons.append(f"VWAP is {vwap_delta:.2f}% from price bias: {vwap_bias}.")
     reasons.append(f"ORB is {_orb_state_label(orb_state)} and price is {'above' if pivot_point is not None and current_price >= pivot_point else 'below' if pivot_point is not None else 'near'} PP.")
+    if direction in {"Long", "Short"} and risk:
+        reasons.append(
+            f"Stop uses {risk / atr_abs:.2f}x ATR room; entry timing is poor above {max_entry_stop_atr:.1f}x ATR."
+        )
+    reasons.append(str(stop_profile.get("management") or ""))
     reasons = _dedupe_preserve_order(reasons)
     blockers = _dedupe_preserve_order(blockers)
 
@@ -1425,6 +1522,7 @@ def _build_execution_quality_plan(ta_data, regime_state, decision_status, execut
             "price": _round_level(stop),
             "basis": stop_basis or "No structural stop available",
             "distance": round(risk, 2) if risk else None,
+            "atrMultiple": round(risk / atr_abs, 2) if risk and atr_abs else None,
         },
         "targets": [
             {
@@ -1446,6 +1544,13 @@ def _build_execution_quality_plan(ta_data, regime_state, decision_status, execut
             else "Reduced risk / probe only" if status == "watchlist" or atr_label in {"Compressed", "Extreme"}
             else "Skip until blockers clear"
         ),
+        "riskManagement": {
+            "minStopAtr": round(min_stop_atr, 2),
+            "maxEntryStopAtr": round(max_entry_stop_atr, 2),
+            "stopAtrMultiple": round(risk / atr_abs, 2) if risk and atr_abs else None,
+            "trailActive": bool(adx >= 35.0),
+            "text": str(stop_profile.get("management") or ""),
+        },
         "components": {
             "regime": round(regime_component, 1),
             "vwap": round(vwap_component, 1),
@@ -2553,7 +2658,19 @@ def _is_rr_signal_actionable(rr_signal):
     )
 
 
-def _build_signal_notification(changes, rr_signal, market_structure, ta_data=None, payload=None):
+def _vwap_bias_override_for_notification(changes=None, snapshot=None):
+    snapshot = snapshot if isinstance(snapshot, dict) else {}
+    snapshot_bias = str(snapshot.get("micro_vwap_bias") or "").strip()
+    if snapshot_bias:
+        return snapshot_bias
+    changes = changes if isinstance(changes, dict) else {}
+    delta = changes.get("micro_vwap_bias")
+    if isinstance(delta, dict):
+        return str(delta.get("current") or "").strip() or None
+    return None
+
+
+def _build_signal_notification(changes, rr_signal, market_structure, ta_data=None, payload=None, snapshot=None):
     changes = _filter_notification_changes(changes)
     changed_keys = set((changes or {}).keys())
     title = _notification_title_for_changes(changes)
@@ -2567,7 +2684,10 @@ def _build_signal_notification(changes, rr_signal, market_structure, ta_data=Non
     micro_change = _format_microstructure_change(changes)
     if micro_change:
         body_lines.append(f"Microstructure Change: {micro_change}")
-    body_lines.append(f"Bar Session / Microstructure: {_format_bar_session_microstructure(ta_data)}")
+    body_lines.append(
+        "Bar Session / Microstructure: "
+        f"{_format_bar_session_microstructure(ta_data, _vwap_bias_override_for_notification(changes, snapshot))}"
+    )
 
     if not body_lines:
         body_lines.append(f"Market Structure: {_format_market_structure_change(changes, market_structure)}")
@@ -2719,7 +2839,7 @@ def _has_background_alert_channels():
     return _has_push_subscribers() or _telegram_enabled()
 
 
-def _send_telegram_notification(changes, rr_signal, market_structure, ta_data=None, payload=None):
+def _send_telegram_notification(changes, rr_signal, market_structure, ta_data=None, payload=None, snapshot=None):
     if not _telegram_enabled():
         return
 
@@ -2729,6 +2849,7 @@ def _send_telegram_notification(changes, rr_signal, market_structure, ta_data=No
         market_structure,
         ta_data=ta_data,
         payload=payload,
+        snapshot=snapshot,
     )
 
     payload = {
@@ -2753,7 +2874,7 @@ def _send_telegram_notification(changes, rr_signal, market_structure, ta_data=No
         return
 
 
-def _send_web_push_notifications(changes, rr_signal, market_structure, ta_data=None, payload=None):
+def _send_web_push_notifications(changes, rr_signal, market_structure, ta_data=None, payload=None, snapshot=None):
     if webpush is None or not VAPID_PUBLIC_KEY or not VAPID_PRIVATE_KEY:
         return
 
@@ -2767,6 +2888,7 @@ def _send_web_push_notifications(changes, rr_signal, market_structure, ta_data=N
         market_structure,
         ta_data=ta_data,
         payload=payload,
+        snapshot=snapshot,
     )
     push_payload = {
         "title": notification.get("title"),
@@ -2805,9 +2927,7 @@ def _is_material_change(changes):
     if not isinstance(changes, dict) or not changes:
         return False
 
-    always_material = {
-        "micro_vwap_bias",
-    }
+    always_material = set()
     numeric_thresholds = {
         "micro_vwap_delta_pct": VWAP_DELTA_ALERT_THRESHOLD_PCT,
     }
@@ -2839,6 +2959,21 @@ def _is_material_change(changes):
             if _is_material_execution_quality_transition(
                 delta.get("previous"),
                 delta.get("current"),
+            ):
+                return True
+            continue
+
+        if key == "micro_vwap_bias":
+            if not isinstance(delta, dict):
+                continue
+            vwap_value_delta = changes.get("micro_vwap_delta_pct")
+            previous_value = vwap_value_delta.get("previous") if isinstance(vwap_value_delta, dict) else None
+            current_value = vwap_value_delta.get("current") if isinstance(vwap_value_delta, dict) else None
+            if _is_alertable_vwap_bias_transition(
+                delta.get("previous"),
+                delta.get("current"),
+                previous_value,
+                current_value,
             ):
                 return True
             continue
@@ -4493,6 +4628,7 @@ def _indicator_monitor_loop():
                             market_structure,
                             ta_data=payload.get("TechnicalAnalysis"),
                             payload=payload,
+                            snapshot=current_snapshot,
                         )
                         alert_title = alert_notification.get("title") or "XAUUSD Direction / Grade Changed"
                         alert_message = alert_notification.get("body") or ""
@@ -4521,6 +4657,7 @@ def _indicator_monitor_loop():
                             market_structure=market_structure,
                             ta_data=payload.get("TechnicalAnalysis"),
                             payload=payload,
+                            snapshot=current_snapshot,
                         )
                         _send_telegram_notification(
                             changes=notification_changes,
@@ -4528,6 +4665,7 @@ def _indicator_monitor_loop():
                             market_structure=market_structure,
                             ta_data=payload.get("TechnicalAnalysis"),
                             payload=payload,
+                            snapshot=current_snapshot,
                         )
                         _save_json_file(
                             ALERT_STATE_FILE,

@@ -1170,6 +1170,10 @@
               <span class="metric-label">R:R / Size</span>
               <span class="metric-value compact" id="eq-rr">---</span>
             </div>
+            <div class="metric-row">
+              <span class="metric-label">Risk Plan</span>
+              <span class="metric-value compact" id="eq-risk">---</span>
+            </div>
             <div class="decision-block">
               <div class="decision-heading exit">Quality Reasons</div>
               <ul class="playbook-why" id="eq-reasons">
@@ -3150,8 +3154,10 @@
         const price = formatPriceLevel(stop.price);
         const distance = Number(stop.distance);
         const distanceText = Number.isFinite(distance) ? ` · risk ${distance.toFixed(2)}` : "";
+        const atrMultiple = Number(stop.atrMultiple);
+        const atrText = Number.isFinite(atrMultiple) ? ` · ${atrMultiple.toFixed(2)}x ATR` : "";
         const basis = safeText(stop.basis, "No structural stop available");
-        return price ? `${price} · ${basis}${distanceText}` : basis;
+        return price ? `${price} · ${basis}${distanceText}${atrText}` : basis;
       }
 
       function formatExecutionQualityTargets(targets) {
@@ -3182,6 +3188,7 @@
         const stopEl = document.getElementById("eq-stop");
         const targetsEl = document.getElementById("eq-targets");
         const rrEl = document.getElementById("eq-rr");
+        const riskEl = document.getElementById("eq-risk");
         const reasonsEl = document.getElementById("eq-reasons");
         const blockersEl = document.getElementById("eq-blockers");
         const tone = getExecutionQualityTone(quality);
@@ -3221,6 +3228,20 @@
                 ? "value-bearish"
                 : "value-watch"
           }`;
+        }
+        if (riskEl) {
+          const riskManagement =
+            quality.riskManagement && typeof quality.riskManagement === "object"
+              ? quality.riskManagement
+              : {};
+          const stopAtr = Number(riskManagement.stopAtrMultiple);
+          const maxAtr = Number(riskManagement.maxEntryStopAtr);
+          const atrText =
+            Number.isFinite(stopAtr) && Number.isFinite(maxAtr)
+              ? `${stopAtr.toFixed(2)}x / max ${maxAtr.toFixed(1)}x ATR`
+              : "ATR plan pending";
+          riskEl.innerText = `${atrText} · ${safeText(riskManagement.text, "Fixed targets until ADX > 35.")}`;
+          riskEl.className = `metric-value compact ${riskManagement.trailActive ? "value-bullish" : "value-watch"}`;
         }
         renderTextList(reasonsEl, quality.reasons, "No quality reasons yet.");
         renderTextList(blockersEl, quality.blockers, "No blockers.");

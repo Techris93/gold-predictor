@@ -679,6 +679,70 @@ class DashboardPayloadContractTests(unittest.TestCase):
 
         self.assertEqual(filtered, {})
 
+    def test_notification_drops_vwap_bias_flip_with_same_displayed_value(self):
+        changes = {
+            "micro_vwap_bias": {
+                "previous": "Bullish",
+                "current": "Mild Bullish",
+            },
+            "micro_vwap_delta_pct": {
+                "previous": 0.284,
+                "current": 0.281,
+            },
+        }
+
+        self.assertEqual(app_module._filter_notification_changes(changes), {})
+        self.assertFalse(app_module._is_material_change(changes))
+        self.assertEqual(app_module._format_microstructure_change(changes), "")
+
+    def test_notification_keeps_vwap_bias_flip_with_real_move(self):
+        changes = {
+            "micro_vwap_bias": {
+                "previous": "Bullish",
+                "current": "Mild Bullish",
+            },
+            "micro_vwap_delta_pct": {
+                "previous": 0.34,
+                "current": 0.28,
+            },
+        }
+
+        self.assertIn("micro_vwap_bias", app_module._filter_notification_changes(changes))
+        self.assertTrue(app_module._is_material_change(changes))
+        self.assertIn("VWAP Bullish -> Mild Bullish", app_module._format_microstructure_change(changes))
+
+    def test_notification_fingerprint_buckets_equivalent_vwap_values(self):
+        first = app_module._notification_fingerprint(
+            {
+                "micro_vwap_delta_pct": {
+                    "previous": 0.312,
+                    "current": 0.556,
+                }
+            }
+        )
+        second = app_module._notification_fingerprint(
+            {
+                "micro_vwap_delta_pct": {
+                    "previous": 0.314,
+                    "current": 0.555,
+                }
+            }
+        )
+
+        self.assertEqual(first, second)
+
+    def test_bar_session_microstructure_can_use_stabilized_vwap_bias(self):
+        ta = _sample_ta_payload()
+        ta["structure_context"]["distSessionVwapPct"] = 0.30
+
+        summary = app_module._format_bar_session_microstructure(
+            ta,
+            vwap_bias_override="Mild Bullish",
+        )
+
+        self.assertIn("VWAP 0.30% Mild Bullish", summary)
+        self.assertNotIn("VWAP 0.30% Bullish", summary)
+
     def test_notification_drops_orb_and_sweep_clear_noise(self):
         changes = {
             "micro_orb_state": {"previous": 1, "current": 0},
@@ -1444,7 +1508,59 @@ class DashboardPayloadContractTests(unittest.TestCase):
         self.assertIn("Long", plan["setup"])
         self.assertGreaterEqual(plan["riskReward"], 1.5)
         self.assertEqual(plan["stopLoss"]["basis"], "PP")
+        self.assertGreaterEqual(plan["stopLoss"]["atrMultiple"], 1.25)
+        self.assertIn("ADX trend", plan["riskManagement"]["text"])
         self.assertEqual(plan["targets"][0]["basis"], "R1")
+
+    def test_execution_quality_uses_atr_floor_for_tight_xauusd_stops(self):
+        ta_payload = _sample_ta_payload()
+        ta_payload["current_price"] = 4750.0
+        ta_payload["price_action"]["structure"] = "Bullish Drift"
+        ta_payload["volatility_regime"].update(
+            {
+                "market_regime": "Trending",
+                "adx_14": 28.77,
+                "atr_14": 8.6,
+                "atr_percent": 0.181,
+            }
+        )
+        ta_payload["structure_context"].update(
+            {
+                "openingRangeBreak": 1,
+                "sessionVwap": 4746.0,
+                "distSessionVwapPct": 0.12,
+                "pivotPoint": 4749.4,
+                "pivotResistance1": 4774.0,
+                "pivotSupport1": 4749.2,
+                "pivotResistance2": 4790.0,
+                "pivotSupport2": 4735.0,
+            }
+        )
+        ta_payload["support_resistance"].update(
+            {
+                "nearest_support": {"label": "PP", "price": 4749.4},
+                "nearest_resistance": {"label": "R1", "price": 4774.0},
+                "pivot_levels": {
+                    "pp": 4749.4,
+                    "r1": 4774.0,
+                    "s1": 4749.2,
+                    "r2": 4790.0,
+                    "s2": 4735.0,
+                },
+            }
+        )
+
+        plan = app_module._build_execution_quality_plan(
+            ta_payload,
+            {"breakout_bias": "Bullish"},
+            {"status": "buy", "text": "Safer to look for a buy."},
+            {"actionState": "LONG_ACTIVE", "status": "enter"},
+        )
+
+        self.assertEqual(plan["direction"], "Long")
+        self.assertGreaterEqual(plan["stopLoss"]["distance"], round(8.6 * 1.25, 2))
+        self.assertGreaterEqual(plan["stopLoss"]["atrMultiple"], 1.25)
+        self.assertIn("fixed targets", plan["riskManagement"]["text"])
 
     def test_execution_quality_blocks_low_reward_to_risk_location(self):
         ta_payload = _sample_ta_payload()
