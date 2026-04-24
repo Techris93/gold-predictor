@@ -1162,6 +1162,7 @@ class DashboardPayloadContractTests(unittest.TestCase):
         self.assertIn("ForecastState", body)
         self.assertIn("ExecutionState", body)
         self.assertIn("DecisionStatus", body)
+        self.assertIn("ExecutionQuality", body)
         for key in (
             "MarketState",
             "ExecutionPermission",
@@ -1256,6 +1257,110 @@ class DashboardPayloadContractTests(unittest.TestCase):
             body["ExecutionState"]["text"],
             "Momentum is active and still aligned with the short position.",
         )
+
+    def test_execution_quality_builds_institutional_vwap_orb_long_plan(self):
+        ta_payload = _sample_ta_payload()
+        ta_payload["current_price"] = 4800.0
+        ta_payload["price_action"]["structure"] = "Bullish Drift"
+        ta_payload["volatility_regime"].update(
+            {
+                "market_regime": "Trending",
+                "adx_14": 28.0,
+                "atr_14": 8.0,
+                "atr_percent": 0.32,
+            }
+        )
+        ta_payload["structure_context"].update(
+            {
+                "openingRangeBreak": 1,
+                "sessionVwap": 4792.0,
+                "distSessionVwapPct": 0.17,
+                "pivotPoint": 4794.0,
+                "pivotResistance1": 4824.0,
+                "pivotSupport1": 4782.0,
+                "pivotResistance2": 4848.0,
+                "pivotSupport2": 4768.0,
+            }
+        )
+        ta_payload["support_resistance"].update(
+            {
+                "nearest_support": {"label": "PP", "price": 4794.0},
+                "nearest_resistance": {"label": "R1", "price": 4824.0},
+                "pivot_levels": {
+                    "pp": 4794.0,
+                    "r1": 4824.0,
+                    "s1": 4782.0,
+                    "r2": 4848.0,
+                    "s2": 4768.0,
+                },
+            }
+        )
+
+        plan = app_module._build_execution_quality_plan(
+            ta_payload,
+            {"breakout_bias": "Bullish"},
+            {"status": "buy", "text": "Safer to look for a buy."},
+            {"actionState": "LONG_ACTIVE", "status": "enter"},
+        )
+
+        self.assertEqual(plan["direction"], "Long")
+        self.assertEqual(plan["status"], "ready")
+        self.assertEqual(plan["grade"], "A")
+        self.assertIn("Long", plan["setup"])
+        self.assertGreaterEqual(plan["riskReward"], 1.5)
+        self.assertEqual(plan["stopLoss"]["basis"], "PP")
+        self.assertEqual(plan["targets"][0]["basis"], "R1")
+
+    def test_execution_quality_blocks_low_reward_to_risk_location(self):
+        ta_payload = _sample_ta_payload()
+        ta_payload["current_price"] = 4800.0
+        ta_payload["price_action"]["structure"] = "Bearish Drift"
+        ta_payload["volatility_regime"].update(
+            {
+                "market_regime": "Trending",
+                "adx_14": 31.0,
+                "atr_14": 8.0,
+                "atr_percent": 0.34,
+            }
+        )
+        ta_payload["structure_context"].update(
+            {
+                "openingRangeBreak": -1,
+                "sessionVwap": 4812.0,
+                "distSessionVwapPct": -0.25,
+                "pivotPoint": 4810.0,
+                "pivotResistance1": 4812.0,
+                "pivotSupport1": 4796.0,
+                "pivotResistance2": 4826.0,
+                "pivotSupport2": 4782.0,
+            }
+        )
+        ta_payload["support_resistance"].update(
+            {
+                "nearest_support": {"label": "S1", "price": 4796.0},
+                "nearest_resistance": {"label": "PP", "price": 4810.0},
+                "pivot_levels": {
+                    "pp": 4810.0,
+                    "r1": 4812.0,
+                    "s1": 4796.0,
+                    "r2": 4826.0,
+                    "s2": 4782.0,
+                },
+            }
+        )
+
+        plan = app_module._build_execution_quality_plan(
+            ta_payload,
+            {"breakout_bias": "Bearish"},
+            {"status": "sell", "text": "Safer to look for a sell."},
+            {"actionState": "SHORT_ACTIVE", "status": "enter"},
+        )
+
+        self.assertEqual(plan["direction"], "Short")
+        self.assertEqual(plan["status"], "blocked")
+        self.assertEqual(plan["grade"], "No Trade")
+        self.assertTrue(any("too close" in item for item in plan["blockers"]))
+        self.assertLess(plan["targets"][1]["price"], plan["targets"][0]["price"])
 
     def test_stand_aside_playbook_prefers_no_trade_permission_text(self):
         with tempfile.TemporaryDirectory() as tmpdir, patch.object(

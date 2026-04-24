@@ -797,6 +797,52 @@ def _first_non_empty(*values):
     return None
 
 
+def _round_level(value):
+    numeric = _coerce_float(value, None)
+    return round(numeric, 2) if numeric is not None else None
+
+
+def _format_level_text(value):
+    numeric = _round_level(value)
+    return f"{numeric:.2f}" if numeric is not None else "N/A"
+
+
+def _append_level(levels, label, price):
+    numeric = _coerce_float(price, None)
+    if numeric is None or numeric <= 0:
+        return
+    label_text = str(label or "Level").strip() or "Level"
+    for item in levels:
+        if abs(float(item["price"]) - numeric) <= 0.05:
+            existing_label = str(item.get("label") or "")
+            if label_text not in existing_label:
+                item["label"] = f"{existing_label} / {label_text}".strip(" /")
+            return
+    levels.append({"label": label_text, "price": numeric})
+
+
+def _nearest_above(levels, price, min_distance=0.0):
+    current = _coerce_float(price, 0.0) or 0.0
+    candidates = [
+        item
+        for item in levels
+        if _coerce_float(item.get("price"), None) is not None
+        and float(item["price"]) > current + min_distance
+    ]
+    return min(candidates, key=lambda item: float(item["price"])) if candidates else None
+
+
+def _nearest_below(levels, price, min_distance=0.0):
+    current = _coerce_float(price, 0.0) or 0.0
+    candidates = [
+        item
+        for item in levels
+        if _coerce_float(item.get("price"), None) is not None
+        and float(item["price"]) < current - min_distance
+    ]
+    return max(candidates, key=lambda item: float(item["price"])) if candidates else None
+
+
 def _level_is_near(current_price, level_price, threshold_pct=0.08):
     price = _coerce_float(current_price, 0.0) or 0.0
     level = _coerce_float(level_price, None)
@@ -861,6 +907,355 @@ def _dedupe_preserve_order(items):
         seen.add(text)
         result.append(text)
     return result
+
+
+def _execution_quality_grade(score, risk_reward, blockers):
+    if blockers:
+        return "No Trade"
+    if score >= 82 and risk_reward >= 1.5:
+        return "A"
+    if score >= 70 and risk_reward >= 1.35:
+        return "B"
+    if score >= 58 and risk_reward >= 1.15:
+        return "C"
+    return "No Trade"
+
+
+def _execution_quality_status(grade, blockers):
+    if blockers or grade == "No Trade":
+        return "blocked"
+    if grade in {"A", "B"}:
+        return "ready"
+    return "watchlist"
+
+
+def _atr_status(atr_percent):
+    value = _coerce_float(atr_percent, 0.0) or 0.0
+    if value >= 0.55:
+        return "Extreme"
+    if value >= 0.30:
+        return "Expanded"
+    if value <= 0.12:
+        return "Compressed"
+    return "Normal"
+
+
+def _execution_mode(adx, atr_percent, market_regime):
+    adx_value = _coerce_float(adx, 0.0) or 0.0
+    regime_text = str(market_regime or "")
+    if adx_value >= 25.0 or "Trending" in regime_text:
+        return "Trend Continuation"
+    if adx_value <= 20.0 or "Range" in regime_text:
+        return "Range Reversion"
+    return "Transition"
+
+
+def _collect_execution_levels(ta_data):
+    ta_data = ta_data if isinstance(ta_data, dict) else {}
+    structure = ta_data.get("structure_context") if isinstance(ta_data.get("structure_context"), dict) else {}
+    support_resistance = ta_data.get("support_resistance") if isinstance(ta_data.get("support_resistance"), dict) else {}
+    pivot_levels = support_resistance.get("pivot_levels") if isinstance(support_resistance.get("pivot_levels"), dict) else {}
+
+    levels = []
+    for label, key, fallback_key in (
+        ("VWAP", "sessionVwap", None),
+        ("PP", "pivotPoint", "pp"),
+        ("R1", "pivotResistance1", "r1"),
+        ("S1", "pivotSupport1", "s1"),
+        ("R2", "pivotResistance2", "r2"),
+        ("S2", "pivotSupport2", "s2"),
+    ):
+        _append_level(
+            levels,
+            label,
+            _first_non_empty(
+                structure.get(key),
+                pivot_levels.get(fallback_key) if fallback_key else None,
+            ),
+        )
+
+    nearest_support = support_resistance.get("nearest_support")
+    nearest_resistance = support_resistance.get("nearest_resistance")
+    if isinstance(nearest_support, dict):
+        _append_level(levels, nearest_support.get("label") or "Nearest Support", nearest_support.get("price"))
+    if isinstance(nearest_resistance, dict):
+        _append_level(levels, nearest_resistance.get("label") or "Nearest Resistance", nearest_resistance.get("price"))
+
+    nearby_supports = (
+        support_resistance.get("nearby_supports")
+        if isinstance(support_resistance.get("nearby_supports"), list)
+        else []
+    )
+    nearby_resistances = (
+        support_resistance.get("nearby_resistances")
+        if isinstance(support_resistance.get("nearby_resistances"), list)
+        else []
+    )
+    for item in nearby_supports:
+        if isinstance(item, dict):
+            _append_level(levels, item.get("label") or item.get("family") or "Support", item.get("price"))
+    for item in nearby_resistances:
+        if isinstance(item, dict):
+            _append_level(levels, item.get("label") or item.get("family") or "Resistance", item.get("price"))
+
+    return sorted(levels, key=lambda item: float(item["price"]))
+
+
+def _build_execution_quality_plan(ta_data, regime_state, decision_status, execution_state):
+    ta_data = ta_data if isinstance(ta_data, dict) else {}
+    regime_state = regime_state if isinstance(regime_state, dict) else {}
+    decision_status = decision_status if isinstance(decision_status, dict) else {}
+    execution_state = execution_state if isinstance(execution_state, dict) else {}
+
+    current_price = _coerce_float(ta_data.get("current_price"), 0.0) or 0.0
+    volatility = ta_data.get("volatility_regime") if isinstance(ta_data.get("volatility_regime"), dict) else {}
+    structure = ta_data.get("structure_context") if isinstance(ta_data.get("structure_context"), dict) else {}
+    price_action = ta_data.get("price_action") if isinstance(ta_data.get("price_action"), dict) else {}
+    session = _extract_market_session_state(ta_data)
+    event_risk = ta_data.get("event_risk") if isinstance(ta_data.get("event_risk"), dict) else {}
+
+    adx = _coerce_float(volatility.get("adx_14"), 0.0) or 0.0
+    atr_percent = _coerce_float(volatility.get("atr_percent"), 0.0) or 0.0
+    atr_abs = _coerce_float(volatility.get("atr_14"), None)
+    if atr_abs is None or atr_abs <= 0:
+        atr_abs = (current_price * atr_percent / 100.0) if current_price > 0 and atr_percent > 0 else max(current_price * 0.001, 1.0)
+    atr_label = _atr_status(atr_percent)
+    mode = _execution_mode(adx, atr_percent, volatility.get("market_regime"))
+
+    vwap_delta = _coerce_float(structure.get("distSessionVwapPct"), 0.0) or 0.0
+    vwap_bias = _vwap_bias_label(vwap_delta)
+    orb_state = int(round(_coerce_float(structure.get("openingRangeBreak"), 0.0) or 0.0))
+    pivot_point = _coerce_float(structure.get("pivotPoint"), None)
+    breakout_bias = str(regime_state.get("breakout_bias") or "Neutral")
+    structure_text = str(price_action.get("structure") or "Consolidating")
+    decision_kind = str(decision_status.get("status") or "wait")
+    action_state = str(execution_state.get("actionState") or "WAIT")
+
+    long_score = 0.0
+    short_score = 0.0
+    reasons = []
+    blockers = []
+
+    if vwap_delta >= 0.30:
+        long_score += 3.0
+    elif vwap_delta >= 0.10:
+        long_score += 2.0
+    elif vwap_delta <= -0.30:
+        short_score += 3.0
+    elif vwap_delta <= -0.10:
+        short_score += 2.0
+
+    if orb_state > 0:
+        long_score += 2.5
+    elif orb_state < 0:
+        short_score += 2.5
+
+    if pivot_point is not None and current_price > 0:
+        if current_price >= pivot_point:
+            long_score += 1.5
+        else:
+            short_score += 1.5
+
+    if "Bullish" in structure_text:
+        long_score += 2.0
+    if "Bearish" in structure_text:
+        short_score += 2.0
+    if breakout_bias == "Bullish":
+        long_score += 1.5
+    elif breakout_bias == "Bearish":
+        short_score += 1.5
+    if decision_kind == "buy" or action_state == "LONG_ACTIVE":
+        long_score += 2.0
+    elif decision_kind == "sell" or action_state == "SHORT_ACTIVE":
+        short_score += 2.0
+
+    direction = "Neutral"
+    if mode == "Range Reversion" and abs(vwap_delta) >= 0.30:
+        direction = "Short" if vwap_delta > 0 else "Long"
+        reasons.append("Range mode uses VWAP extension for mean reversion.")
+    elif long_score >= short_score + 1.5:
+        direction = "Long"
+    elif short_score >= long_score + 1.5:
+        direction = "Short"
+
+    if session["is_market_closed"]:
+        blockers.append("Market is closed; wait for a live reopen.")
+    if bool(event_risk.get("active")):
+        blockers.append("Macro event window is active; fresh entries are blocked.")
+    if atr_label == "Extreme":
+        blockers.append("ATR% is extreme; reduce risk or skip until volatility normalizes.")
+    if direction == "Neutral":
+        blockers.append("VWAP, ORB, pivots, and structure are not aligned enough.")
+
+    if direction == "Long":
+        if mode == "Trend Continuation":
+            setup = "VWAP / ORB Continuation Long" if orb_state > 0 else "VWAP Pullback Long"
+        elif mode == "Range Reversion":
+            setup = "VWAP Stretch Reversion Long"
+        else:
+            setup = "Long Watchlist Reclaim"
+    elif direction == "Short":
+        if mode == "Trend Continuation":
+            setup = "VWAP / ORB Continuation Short" if orb_state < 0 else "VWAP Pullback Short"
+        elif mode == "Range Reversion":
+            setup = "VWAP Stretch Reversion Short"
+        else:
+            setup = "Short Watchlist Rejection"
+    else:
+        setup = "No Clean Entry"
+
+    levels = _collect_execution_levels(ta_data)
+    buffer = max(atr_abs * 0.15, current_price * 0.00015 if current_price > 0 else 0.75)
+    entry_mid = current_price
+    entry_low = None
+    entry_high = None
+    stop = None
+    target_one = None
+    target_two = None
+    stop_basis = ""
+    target_one_basis = ""
+    target_two_basis = ""
+
+    if current_price > 0 and direction == "Long":
+        support_anchor = _nearest_below(levels, current_price, min_distance=0.02)
+        stop_anchor_price = float(support_anchor["price"]) if support_anchor else current_price - atr_abs * 0.55
+        stop_basis = str(support_anchor.get("label") if support_anchor else "ATR fallback support")
+        stop = stop_anchor_price - buffer
+        risk = max(entry_mid - stop, atr_abs * 0.18)
+        entry_low = max(stop + risk * 0.25, entry_mid - atr_abs * 0.12)
+        entry_high = entry_mid + atr_abs * 0.05
+        nearby_resistance = _nearest_above(levels, current_price, min_distance=0.02)
+        if nearby_resistance and float(nearby_resistance["price"]) - entry_mid < risk * 0.8:
+            blockers.append(f"{nearby_resistance['label']} is too close for a clean long target.")
+        target_one_level = _nearest_above(levels, entry_mid + risk, min_distance=0.02)
+        target_two_level = (
+            _nearest_above(levels, float(target_one_level["price"]), min_distance=0.05)
+            if target_one_level
+            else _nearest_above(levels, entry_mid + risk * 1.8, min_distance=0.02)
+        )
+        target_one = float(target_one_level["price"]) if target_one_level else entry_mid + risk * 1.5
+        target_two = float(target_two_level["price"]) if target_two_level else max(entry_mid + risk * 2.2, target_one + risk * 0.7)
+        target_one_basis = str(target_one_level.get("label") if target_one_level else "1.5R volatility target")
+        target_two_basis = str(target_two_level.get("label") if target_two_level else "2.2R runner target")
+    elif current_price > 0 and direction == "Short":
+        resistance_anchor = _nearest_above(levels, current_price, min_distance=0.02)
+        stop_anchor_price = float(resistance_anchor["price"]) if resistance_anchor else current_price + atr_abs * 0.55
+        stop_basis = str(resistance_anchor.get("label") if resistance_anchor else "ATR fallback resistance")
+        stop = stop_anchor_price + buffer
+        risk = max(stop - entry_mid, atr_abs * 0.18)
+        entry_low = entry_mid - atr_abs * 0.05
+        entry_high = min(stop - risk * 0.25, entry_mid + atr_abs * 0.12)
+        nearby_support = _nearest_below(levels, current_price, min_distance=0.02)
+        if nearby_support and entry_mid - float(nearby_support["price"]) < risk * 0.8:
+            blockers.append(f"{nearby_support['label']} is too close for a clean short target.")
+        target_one_level = _nearest_below(levels, entry_mid - risk, min_distance=0.02)
+        target_two_level = (
+            _nearest_below(levels, float(target_one_level["price"]), min_distance=0.05)
+            if target_one_level
+            else _nearest_below(levels, entry_mid - risk * 1.8, min_distance=0.02)
+        )
+        target_one = float(target_one_level["price"]) if target_one_level else entry_mid - risk * 1.5
+        target_two = float(target_two_level["price"]) if target_two_level else min(entry_mid - risk * 2.2, target_one - risk * 0.7)
+        target_one_basis = str(target_one_level.get("label") if target_one_level else "1.5R volatility target")
+        target_two_basis = str(target_two_level.get("label") if target_two_level else "2.2R runner target")
+    else:
+        risk = 0.0
+
+    risk_reward = 0.0
+    if stop is not None and target_one is not None and risk > 0:
+        if direction == "Long":
+            risk_reward = max((target_one - entry_mid) / risk, 0.0)
+        elif direction == "Short":
+            risk_reward = max((entry_mid - target_one) / risk, 0.0)
+    if direction in {"Long", "Short"} and risk_reward < 1.15:
+        blockers.append("Reward-to-risk is below 1.15R after nearby levels and ATR stop.")
+
+    regime_component = 24.0 if mode == "Trend Continuation" and direction in {"Long", "Short"} else 18.0 if mode == "Range Reversion" and direction in {"Long", "Short"} else 10.0
+    vwap_component = 20.0 if (direction == "Long" and vwap_bias == "Bullish") or (direction == "Short" and vwap_bias == "Bearish") else 15.0 if (direction == "Long" and "Bullish" in vwap_bias) or (direction == "Short" and "Bearish" in vwap_bias) else 8.0 if vwap_bias == "Neutral" else 2.0
+    orb_component = 15.0 if (direction == "Long" and orb_state > 0) or (direction == "Short" and orb_state < 0) else 7.0 if orb_state == 0 else 1.0
+    location_component = 20.0 if (direction == "Long" and pivot_point is not None and current_price >= pivot_point) or (direction == "Short" and pivot_point is not None and current_price <= pivot_point) else 11.0 if pivot_point is None else 4.0
+    risk_component = min(max((risk_reward / 2.0) * 20.0, 0.0), 20.0)
+    score = round(min(regime_component + vwap_component + orb_component + location_component + risk_component, 100.0), 1)
+    grade = _execution_quality_grade(score, risk_reward, blockers)
+    status = _execution_quality_status(grade, blockers)
+
+    if adx >= 25:
+        reasons.append(f"ADX {adx:.1f} supports trend-following mode.")
+    elif adx <= 20:
+        reasons.append(f"ADX {adx:.1f} favors range/reversion entries.")
+    else:
+        reasons.append(f"ADX {adx:.1f} is in the transition zone.")
+    reasons.append(f"VWAP is {vwap_delta:.2f}% from price bias: {vwap_bias}.")
+    reasons.append(f"ORB is {_orb_state_label(orb_state)} and price is {'above' if pivot_point is not None and current_price >= pivot_point else 'below' if pivot_point is not None else 'near'} PP.")
+    reasons = _dedupe_preserve_order(reasons)
+    blockers = _dedupe_preserve_order(blockers)
+
+    return {
+        "status": status,
+        "grade": grade,
+        "score": score,
+        "mode": mode,
+        "atrStatus": atr_label,
+        "direction": direction,
+        "setup": setup,
+        "entry": {
+            "low": _round_level(entry_low),
+            "high": _round_level(entry_high),
+            "mid": _round_level(entry_mid) if current_price > 0 else None,
+            "text": (
+                f"{_format_level_text(entry_low)} - {_format_level_text(entry_high)}"
+                if entry_low is not None and entry_high is not None
+                else "Wait for a cleaner location"
+            ),
+        },
+        "stopLoss": {
+            "price": _round_level(stop),
+            "basis": stop_basis or "No structural stop available",
+            "distance": round(risk, 2) if risk else None,
+        },
+        "targets": [
+            {
+                "label": "TP1",
+                "price": _round_level(target_one),
+                "basis": target_one_basis or "No target available",
+                "rMultiple": round(risk_reward, 2) if risk_reward else None,
+            },
+            {
+                "label": "TP2",
+                "price": _round_level(target_two),
+                "basis": target_two_basis or "No runner target available",
+                "rMultiple": round(abs((target_two or entry_mid) - entry_mid) / risk, 2) if target_two is not None and risk else None,
+            },
+        ],
+        "riskReward": round(risk_reward, 2),
+        "positionSizeNote": (
+            "Normal planned risk only" if status == "ready" and atr_label in {"Normal", "Expanded"}
+            else "Reduced risk / probe only" if status == "watchlist" or atr_label in {"Compressed", "Extreme"}
+            else "Skip until blockers clear"
+        ),
+        "components": {
+            "regime": round(regime_component, 1),
+            "vwap": round(vwap_component, 1),
+            "orb": round(orb_component, 1),
+            "location": round(location_component, 1),
+            "risk": round(risk_component, 1),
+        },
+        "reasons": reasons,
+        "blockers": blockers,
+        "invalidations": (
+            [
+                f"Long thesis fails below {_format_level_text(stop)} ({stop_basis}).",
+                "Exit if price loses VWAP and ORB flips bearish.",
+            ]
+            if direction == "Long" and stop is not None
+            else [
+                f"Short thesis fails above {_format_level_text(stop)} ({stop_basis}).",
+                "Exit if price reclaims VWAP and ORB flips bullish.",
+            ]
+            if direction == "Short" and stop is not None
+            else ["No trade until VWAP, ORB, pivots, and ADX align."]
+        ),
+    }
 
 
 def _derive_dashboard_action(payload, ta_data=None):
@@ -3669,6 +4064,12 @@ def _build_prediction_response():
     execution_state["actionState"] = str(
         execution_state.get("actionState") or "WAIT"
     )
+    execution_quality = _build_execution_quality_plan(
+        ta_data,
+        regime_state,
+        decision_status,
+        execution_state,
+    )
 
     response_payload = {
         "status": "success",
@@ -3680,6 +4081,7 @@ def _build_prediction_response():
         "ForecastState": forecast_state,
         "ExecutionState": execution_state,
         "DecisionStatus": decision_status,
+        "ExecutionQuality": execution_quality,
     }
 
     return response_payload, 200
@@ -4223,4 +4625,4 @@ _ensure_monitor_started()
 
 if __name__ == '__main__':
     # Run on 0.0.0.0 to allow access from other devices on the local network (like your phone)
-    socketio.run(app, host='0.0.0.0', port=5001, debug=False)
+    socketio.run(app, host='0.0.0.0', port=5001, debug=False, allow_unsafe_werkzeug=True)

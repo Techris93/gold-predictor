@@ -1386,6 +1386,47 @@
                       >---</span
                     >
                   </div>
+                  <div class="decision-status execution-quality-status">
+                    <div class="decision-status-label">Execution Quality</div>
+                    <div
+                      class="decision-status-value wait"
+                      id="eq-status"
+                    >
+                      Waiting for a clean setup...
+                    </div>
+                  </div>
+                  <div class="metric-row">
+                    <span class="metric-label">Best Setup</span>
+                    <span class="metric-value compact" id="eq-setup">---</span>
+                  </div>
+                  <div class="metric-row">
+                    <span class="metric-label">Entry Zone</span>
+                    <span class="metric-value compact" id="eq-entry">---</span>
+                  </div>
+                  <div class="metric-row">
+                    <span class="metric-label">Stop / Invalidation</span>
+                    <span class="metric-value compact" id="eq-stop">---</span>
+                  </div>
+                  <div class="metric-row">
+                    <span class="metric-label">TP1 / TP2</span>
+                    <span class="metric-value compact" id="eq-targets">---</span>
+                  </div>
+                  <div class="metric-row">
+                    <span class="metric-label">R:R / Size</span>
+                    <span class="metric-value compact" id="eq-rr">---</span>
+                  </div>
+                  <div class="decision-block">
+                    <div class="decision-heading exit">Quality Reasons</div>
+                    <ul class="playbook-why" id="eq-reasons">
+                      <li>Awaiting execution-quality plan.</li>
+                    </ul>
+                  </div>
+                  <div class="decision-block">
+                    <div class="decision-heading exit">Blockers</div>
+                    <ul class="playbook-why" id="eq-blockers">
+                      <li>No blockers yet.</li>
+                    </ul>
+                  </div>
 
                   <button
                     type="button"
@@ -2144,6 +2185,22 @@
           "Refresh failed · execution preview may be stale",
           "preview-watch",
         );
+        updateExecutionQualityUI({
+          status: "blocked",
+          grade: "No Trade",
+          score: 0,
+          mode: "Unavailable",
+          direction: "Neutral",
+          setup: "Refresh Failed",
+          atrStatus: "ATR n/a",
+          entry: { text: "Unavailable until refresh succeeds" },
+          stopLoss: { basis: "Unavailable until refresh succeeds" },
+          targets: [],
+          riskReward: 0,
+          positionSizeNote: "Skip until data refresh succeeds",
+          reasons: [],
+          blockers: [msg],
+        });
 
         let sourceEl = document.getElementById("price-source");
         if (!sourceEl) {
@@ -3037,6 +3094,118 @@
         };
       }
 
+      function getExecutionQualityTone(executionQuality) {
+        const quality =
+          executionQuality && typeof executionQuality === "object"
+            ? executionQuality
+            : {};
+        const status = String(quality.status || "blocked").toLowerCase();
+        const direction = String(quality.direction || "Neutral");
+        if (status === "blocked") return "wait";
+        if (status === "watchlist") return "prepare";
+        if (direction === "Long") return "buy";
+        if (direction === "Short") return "sell";
+        return "wait";
+      }
+
+      function formatExecutionQualityStatus(executionQuality) {
+        const quality =
+          executionQuality && typeof executionQuality === "object"
+            ? executionQuality
+            : {};
+        const grade = safeText(quality.grade, "No Trade");
+        const score = Number(quality.score);
+        const scoreText = Number.isFinite(score) ? `${score.toFixed(0)}/100` : "n/a";
+        const mode = safeText(quality.mode, "No mode");
+        const direction = safeText(quality.direction, "Neutral");
+        return `${grade} · ${scoreText} · ${direction} · ${mode}`;
+      }
+
+      function formatExecutionQualityEntry(entry) {
+        const planEntry = entry && typeof entry === "object" ? entry : {};
+        if (planEntry.text) return safeText(planEntry.text);
+        const low = formatPriceLevel(planEntry.low);
+        const high = formatPriceLevel(planEntry.high);
+        if (low && high) return `${low} - ${high}`;
+        return "Wait for a cleaner location";
+      }
+
+      function formatExecutionQualityStop(stopLoss) {
+        const stop = stopLoss && typeof stopLoss === "object" ? stopLoss : {};
+        const price = formatPriceLevel(stop.price);
+        const distance = Number(stop.distance);
+        const distanceText = Number.isFinite(distance) ? ` · risk ${distance.toFixed(2)}` : "";
+        const basis = safeText(stop.basis, "No structural stop available");
+        return price ? `${price} · ${basis}${distanceText}` : basis;
+      }
+
+      function formatExecutionQualityTargets(targets) {
+        const values = Array.isArray(targets) ? targets : [];
+        const formatted = values
+          .map((target) => {
+            const item = target && typeof target === "object" ? target : {};
+            const price = formatPriceLevel(item.price);
+            if (!price) return "";
+            const rMultiple = Number(item.rMultiple);
+            const rText = Number.isFinite(rMultiple) ? ` · ${rMultiple.toFixed(2)}R` : "";
+            const basis = safeText(item.basis, "");
+            const basisText = basis ? ` · ${basis}` : "";
+            return `${safeText(item.label, "TP")} ${price}${rText}${basisText}`;
+          })
+          .filter(Boolean);
+        return formatted.length ? formatted.join(" · ") : "No clean target";
+      }
+
+      function updateExecutionQualityUI(executionQuality) {
+        const quality =
+          executionQuality && typeof executionQuality === "object"
+            ? executionQuality
+            : {};
+        const statusEl = document.getElementById("eq-status");
+        const setupEl = document.getElementById("eq-setup");
+        const entryEl = document.getElementById("eq-entry");
+        const stopEl = document.getElementById("eq-stop");
+        const targetsEl = document.getElementById("eq-targets");
+        const rrEl = document.getElementById("eq-rr");
+        const reasonsEl = document.getElementById("eq-reasons");
+        const blockersEl = document.getElementById("eq-blockers");
+        const tone = getExecutionQualityTone(quality);
+
+        if (statusEl) {
+          statusEl.innerText = formatExecutionQualityStatus(quality);
+          statusEl.className = `decision-status-value ${tone}`;
+        }
+        if (setupEl) {
+          setupEl.innerText = `${safeText(quality.setup, "No Clean Entry")} · ${safeText(quality.atrStatus, "ATR n/a")}`;
+          setupEl.className = `metric-value compact ${
+            tone === "buy"
+              ? "value-bullish"
+              : tone === "sell"
+                ? "value-bearish"
+                : tone === "prepare"
+                  ? "value-watch"
+                  : ""
+          }`;
+        }
+        if (entryEl) entryEl.innerText = formatExecutionQualityEntry(quality.entry);
+        if (stopEl) stopEl.innerText = formatExecutionQualityStop(quality.stopLoss);
+        if (targetsEl) targetsEl.innerText = formatExecutionQualityTargets(quality.targets);
+        if (rrEl) {
+          const rr = Number(quality.riskReward);
+          const rrText = Number.isFinite(rr) ? `${rr.toFixed(2)}R` : "n/a";
+          rrEl.innerText = `${rrText} · ${safeText(quality.positionSizeNote, "Skip until blockers clear")}`;
+          rrEl.className = `metric-value compact ${
+            rr >= 1.5 && tone !== "wait"
+              ? "value-bullish"
+              : rr < 1.15
+                ? "value-bearish"
+                : "value-watch"
+          }`;
+        }
+        renderTextList(reasonsEl, quality.reasons, "No quality reasons yet.");
+        renderTextList(blockersEl, quality.blockers, "No blockers.");
+      }
+
       function joinReadableList(items) {
         const filtered = items
           .map((item) => String(item || "").trim())
@@ -3662,10 +3831,29 @@
             : "Clear";
           antiChopEl.className = `metric-value ${executionState.antiChopActive ? "value-bearish" : "value-bullish"}`;
         }
+        const executionQuality =
+          data.ExecutionQuality && typeof data.ExecutionQuality === "object"
+            ? data.ExecutionQuality
+            : {};
+        updateExecutionQualityUI(executionQuality);
+        const qualityGrade = safeText(executionQuality.grade, "No Trade");
+        const qualityScore = Number(executionQuality.score);
+        const qualityText = Number.isFinite(qualityScore)
+          ? `EQ ${qualityGrade} ${qualityScore.toFixed(0)}/100`
+          : `EQ ${qualityGrade}`;
+        const qualityTone = getExecutionQualityTone(executionQuality);
         updatePreviewState(
           "execution-preview",
-          `${executionPreviewStatus} · ${humanizeWords(forecastBucket)} · ${antiChopPreviewText}`,
-          executionState.antiChopActive ? "preview-watch" : executionPreviewTone,
+          `${executionPreviewStatus} · ${qualityText} · ${antiChopPreviewText}`,
+          executionState.antiChopActive
+            ? "preview-watch"
+            : qualityTone === "buy"
+              ? "preview-bullish"
+              : qualityTone === "sell"
+                ? "preview-bearish"
+                : qualityTone === "prepare"
+                  ? "preview-watch"
+                  : executionPreviewTone,
         );
 
         suppressNextUiChangeNotification = false;
