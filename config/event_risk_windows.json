@@ -1,13 +1,6 @@
 {
   "windows": [
     {
-      "name": "Michigan Consumer Sentiment (Final)",
-      "start": "2026-04-24T13:45:00Z",
-      "end": "2026-04-24T14:45:00Z",
-      "release": "2026-04-24T14:00:00Z",
-      "reason": "Official University of Michigan Surveys of Consumers 2026 release dates list Michigan Consumer Sentiment (Final) for April 24, 2026 at 10:00 ET."
-    },
-    {
       "name": "Conference Board Consumer Confidence",
       "start": "2026-04-28T13:45:00Z",
       "end": "2026-04-28T14:45:00Z",
