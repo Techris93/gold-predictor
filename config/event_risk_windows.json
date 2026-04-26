@@ -804,6 +804,13 @@
       "end": "2026-10-22T13:30:00Z",
       "release": "2026-10-22T12:30:00Z",
       "reason": "Release date from the St. Louis Fed FRED release schedule for October 22, 2026 (Unemployment Insurance Weekly Claims Report)."
+    },
+    {
+      "name": "Michigan Consumer Sentiment (Final)",
+      "start": "2026-10-23T13:45:00Z",
+      "end": "2026-10-23T14:45:00Z",
+      "release": "2026-10-23T14:00:00Z",
+      "reason": "Official University of Michigan Surveys of Consumers 2026 release dates list Michigan Consumer Sentiment (Final) for October 23, 2026 at 10:00 ET."
     }
   ]
 }
