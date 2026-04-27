@@ -1042,6 +1042,455 @@
           scroll-behavior: auto !important;
         }
       }
+
+      .trade-brain-card {
+        display: grid;
+        gap: 16px;
+      }
+
+      .trade-brain-panel-wrap {
+        display: grid;
+        gap: 16px;
+      }
+
+      .trade-brain-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 16px;
+      }
+
+      .trade-brain-meta {
+        display: grid;
+        gap: 6px;
+        max-width: 42rem;
+      }
+
+      .trade-brain-kicker {
+        color: var(--accent);
+        font-size: 0.76rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+
+      .trade-brain-summary {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .trade-brain-stat {
+        display: grid;
+        gap: 6px;
+        padding: 14px;
+        border-radius: 8px;
+        border: 1px solid var(--border-soft);
+        background: rgba(16, 22, 18, 0.78);
+      }
+
+      .trade-brain-stat-label {
+        color: var(--text-muted);
+        font-size: 0.78rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+
+      .trade-brain-stat-value {
+        font-family: "Space Grotesk", sans-serif;
+        font-size: 1.3rem;
+        font-weight: 700;
+      }
+
+      .trade-brain-grid {
+        display: grid;
+        grid-template-columns: minmax(280px, 0.92fr) minmax(0, 1.08fr);
+        gap: 16px;
+      }
+
+      .trade-brain-panel {
+        display: grid;
+        gap: 12px;
+        padding: 16px;
+        border-radius: 8px;
+        border: 1px solid var(--border-soft);
+        background: linear-gradient(
+          180deg,
+          rgba(22, 29, 24, 0.9),
+          rgba(15, 20, 17, 0.92)
+        );
+      }
+
+      .trade-brain-form {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .trade-brain-field {
+        display: grid;
+        gap: 6px;
+      }
+
+      .trade-brain-field label {
+        color: var(--text-muted);
+        font-size: 0.78rem;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+
+      .trade-brain-field input,
+      .trade-brain-field select,
+      .trade-brain-field textarea {
+        width: 100%;
+        padding: 11px 12px;
+        font-size: 16px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: rgba(11, 15, 13, 0.92);
+        color: var(--text-main);
+      }
+
+      .trade-brain-field textarea {
+        resize: vertical;
+        min-height: 84px;
+      }
+
+      .trade-brain-field-full {
+        grid-column: 1 / -1;
+      }
+
+      .trade-brain-actions {
+        grid-column: 1 / -1;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      .trade-brain-assist {
+        display: grid;
+        gap: 10px;
+        padding: 12px;
+        border-radius: 10px;
+        border: 1px solid rgba(214, 196, 94, 0.18);
+        background: linear-gradient(
+          180deg,
+          rgba(28, 36, 31, 0.9),
+          rgba(19, 25, 21, 0.94)
+        );
+      }
+
+      .trade-brain-mode {
+        display: grid;
+        gap: 8px;
+        padding: 12px;
+        border-radius: 10px;
+        border: 1px solid rgba(114, 212, 143, 0.18);
+        background: linear-gradient(
+          180deg,
+          rgba(23, 31, 27, 0.92),
+          rgba(17, 23, 20, 0.94)
+        );
+      }
+
+      .trade-brain-switch {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 12px;
+        align-items: flex-start;
+        cursor: pointer;
+      }
+
+      .trade-brain-switch input {
+        position: absolute;
+        opacity: 0;
+        pointer-events: none;
+      }
+
+      .trade-brain-switch-ui {
+        position: relative;
+        width: 46px;
+        height: 28px;
+        border-radius: 999px;
+        border: 1px solid var(--border-soft);
+        background: rgba(28, 36, 31, 0.92);
+        transition:
+          background 160ms ease,
+          border-color 160ms ease;
+      }
+
+      .trade-brain-switch-ui::after {
+        content: "";
+        position: absolute;
+        top: 3px;
+        left: 3px;
+        width: 20px;
+        height: 20px;
+        border-radius: 50%;
+        background: var(--text-main);
+        transition: transform 160ms ease;
+      }
+
+      .trade-brain-switch input:checked + .trade-brain-switch-ui {
+        border-color: rgba(114, 212, 143, 0.42);
+        background: rgba(114, 212, 143, 0.16);
+      }
+
+      .trade-brain-switch input:checked + .trade-brain-switch-ui::after {
+        transform: translateX(18px);
+      }
+
+      .trade-brain-switch-copy {
+        display: grid;
+        gap: 4px;
+      }
+
+      .trade-brain-switch-title {
+        color: var(--text-main);
+        font-size: 0.92rem;
+        font-weight: 600;
+      }
+
+      .trade-brain-switch-text {
+        color: var(--text-muted);
+        font-size: 0.84rem;
+        line-height: 1.45;
+      }
+
+      .trade-brain-assist-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .trade-brain-assist-item {
+        display: grid;
+        gap: 4px;
+      }
+
+      .trade-brain-assist-label {
+        color: var(--text-muted);
+        font-size: 0.74rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .trade-brain-assist-value {
+        color: var(--text-main);
+        font-size: 0.94rem;
+        line-height: 1.45;
+      }
+
+      .trade-brain-note-hint {
+        color: var(--text-muted);
+        font-size: 0.8rem;
+        line-height: 1.45;
+      }
+
+      .trade-brain-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 2.75rem;
+        padding: 0 14px;
+        border-radius: 8px;
+        border: 1px solid rgba(214, 196, 94, 0.42);
+        background: rgba(214, 196, 94, 0.14);
+        color: var(--accent-strong);
+        font-weight: 600;
+        cursor: pointer;
+      }
+
+      .trade-brain-btn.secondary {
+        border-color: rgba(114, 212, 143, 0.34);
+        background: rgba(114, 212, 143, 0.12);
+        color: var(--bullish);
+      }
+
+      .trade-brain-btn.ghost {
+        border-color: var(--border-soft);
+        background: rgba(24, 31, 26, 0.72);
+        color: var(--text-muted);
+      }
+
+      .trade-brain-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      .trade-brain-feedback {
+        min-height: 1.2rem;
+        color: var(--text-muted);
+        font-size: 0.84rem;
+      }
+
+      .trade-brain-feedback[data-tone="good"] {
+        color: var(--bullish);
+      }
+
+      .trade-brain-feedback[data-tone="warn"] {
+        color: var(--accent);
+      }
+
+      .trade-brain-feedback[data-tone="bad"] {
+        color: var(--bearish);
+      }
+
+      .trade-brain-active-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px 14px;
+      }
+
+      .trade-brain-empty {
+        padding: 14px;
+        border-radius: 8px;
+        border: 1px dashed var(--border);
+        color: var(--text-muted);
+        background: rgba(14, 19, 16, 0.78);
+      }
+
+      .trade-brain-list {
+        list-style: none;
+        display: grid;
+        gap: 8px;
+      }
+
+      .trade-brain-list li,
+      .trade-brain-recent-item,
+      .trade-brain-review {
+        padding: 12px;
+        border-radius: 8px;
+        border: 1px solid var(--border-soft);
+        background: rgba(15, 20, 17, 0.82);
+      }
+
+      .trade-brain-list strong,
+      .trade-brain-recent-head {
+        color: var(--text-main);
+      }
+
+      .trade-brain-recent {
+        display: grid;
+        gap: 8px;
+      }
+
+      .trade-brain-recent-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        font-weight: 600;
+      }
+
+      .trade-brain-recent-sub {
+        color: var(--text-muted);
+        font-size: 0.86rem;
+        line-height: 1.45;
+      }
+
+      .trade-brain-chip-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .trade-brain-chip {
+        display: inline-flex;
+        align-items: center;
+        min-height: 2rem;
+        padding: 0 10px;
+        border-radius: 999px;
+        border: 1px solid var(--border-soft);
+        background: rgba(28, 36, 31, 0.84);
+        color: var(--text-muted);
+        font-size: 0.82rem;
+        white-space: nowrap;
+      }
+
+      .trade-brain-emotions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .trade-brain-emotions button {
+        min-height: 2.2rem;
+        padding: 0 12px;
+        border-radius: 999px;
+        border: 1px solid var(--border-soft);
+        background: rgba(28, 36, 31, 0.84);
+        color: var(--text-main);
+        cursor: pointer;
+      }
+
+      @media (max-width: 900px) {
+        .trade-brain-header {
+          flex-direction: column;
+          align-items: stretch;
+        }
+
+        .trade-brain-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .trade-brain-summary,
+        .trade-brain-active-grid,
+        .trade-brain-form {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 640px) {
+        .trade-brain-card {
+          gap: 14px;
+        }
+
+        .trade-brain-panel {
+          padding: 14px;
+        }
+
+        .trade-brain-summary {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .trade-brain-stat {
+          padding: 12px;
+        }
+
+        .trade-brain-stat-value {
+          font-size: 1.12rem;
+        }
+
+        .trade-brain-assist-grid,
+        .trade-brain-active-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .trade-brain-actions {
+          display: grid;
+          grid-template-columns: 1fr;
+        }
+
+        .trade-brain-btn,
+        .trade-brain-emotions button {
+          width: 100%;
+        }
+
+        .trade-brain-chip {
+          white-space: normal;
+          min-height: auto;
+          line-height: 1.35;
+          padding: 8px 10px;
+        }
+
+        .trade-brain-emotions {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+      }
     </style>
   </head>
   <body>
@@ -1224,7 +1673,9 @@
             </div>
             <div class="metric-row">
               <span class="metric-label">Pivot Context</span>
-              <span class="metric-value compact" id="rs-pivot-context">---</span>
+              <span class="metric-value compact" id="rs-pivot-context"
+                >---</span
+              >
             </div>
           </section>
 
@@ -1376,12 +1827,10 @@
                       >Execution Checklist</span
                     >
                     <span class="decision-toggle-subtext"
-                      >Tap to open execution state, forecast bucket, and checklist
-                      rules</span
+                      >Tap to open execution state, forecast bucket, and
+                      checklist rules</span
                     >
-                    <span
-                      class="decision-toggle-preview"
-                      id="execution-preview"
+                    <span class="decision-toggle-preview" id="execution-preview"
                       >Execution readiness and anti-chop status</span
                     >
                   </span>
@@ -1565,6 +2014,393 @@
             </div>
           </section>
 
+          <section class="section-card section-card-wide trade-brain-card">
+            <button
+              type="button"
+              class="section-toggle"
+              id="trade-brain-toggle"
+              aria-expanded="false"
+              aria-controls="trade-brain-panel"
+              data-expanded-label="Open"
+              data-collapsed-label="Hidden"
+            >
+              <span class="ar-heading-wrap">
+                <span class="section-toggle-label">Trade Brain</span>
+                <span class="section-toggle-subtext"
+                  >Tap to open live trade memory, auto-tracking, and review
+                  analytics</span
+                >
+                <span
+                  class="section-toggle-preview preview-watch"
+                  id="tb-toggle-preview"
+                  >No active trade · 0 closed trades · 0 learned contexts</span
+                >
+              </span>
+              <span class="ar-toggle-meta">
+                <span class="ar-toggle-badge js-toggle-badge">Hidden</span>
+                <svg
+                  class="ar-chevron"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="M6 9l6 6 6-6"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  ></path>
+                </svg>
+              </span>
+            </button>
+
+            <div id="trade-brain-panel" class="trade-brain-panel-wrap" hidden>
+              <div class="trade-brain-meta">
+                <div class="trade-brain-review" id="tb-learning-status">
+                  Learning engine warming up. Close a few trades to start
+                  reinforcement updates.
+                </div>
+                <div
+                  class="trade-brain-chip-row"
+                  id="tb-learning-contexts"
+                ></div>
+                <div class="trade-brain-kicker">Trade Brain</div>
+                <h2 class="section-title">Live Trade Memory</h2>
+                <p class="brand-status" id="tb-summary">
+                  Track one live XAUUSD trade with stop automation, decision
+                  memory, and post-trade review.
+                </p>
+              </div>
+
+              <div class="trade-brain-summary">
+                <div class="trade-brain-stat">
+                  <div class="trade-brain-stat-label">Total Trades</div>
+                  <div class="trade-brain-stat-value" id="tb-stat-total">0</div>
+                </div>
+                <div class="trade-brain-stat">
+                  <div class="trade-brain-stat-label">Win Rate</div>
+                  <div class="trade-brain-stat-value" id="tb-stat-win-rate">
+                    0%
+                  </div>
+                </div>
+                <div class="trade-brain-stat">
+                  <div class="trade-brain-stat-label">Average R</div>
+                  <div class="trade-brain-stat-value" id="tb-stat-avg-r">
+                    0.00R
+                  </div>
+                </div>
+                <div class="trade-brain-stat">
+                  <div class="trade-brain-stat-label">Best Setup</div>
+                  <div class="trade-brain-stat-value" id="tb-stat-best-setup">
+                    ---
+                  </div>
+                </div>
+              </div>
+
+              <div class="trade-brain-grid">
+                <div class="trade-brain-panel">
+                  <h3 class="section-title">Open Trade</h3>
+                  <form class="trade-brain-form" id="tb-create-form">
+                    <div class="trade-brain-mode trade-brain-field-full">
+                      <label class="trade-brain-switch" for="tb-auto-track">
+                        <input
+                          id="tb-auto-track"
+                          name="autoTrack"
+                          type="checkbox"
+                        />
+                        <span
+                          class="trade-brain-switch-ui"
+                          aria-hidden="true"
+                        ></span>
+                        <span class="trade-brain-switch-copy">
+                          <span class="trade-brain-switch-title">
+                            Auto-track qualified predictions
+                          </span>
+                          <span
+                            class="trade-brain-switch-text"
+                            id="tb-auto-track-summary"
+                          >
+                            Manual mode. Predictions pre-fill the form; tracking
+                            starts when you open a trade.
+                          </span>
+                        </span>
+                      </label>
+                      <div
+                        class="trade-brain-note-hint"
+                        id="tb-auto-track-note"
+                      >
+                        Turn this on if you want qualified A/B setups to open an
+                        internal Trade Brain record automatically. No broker
+                        order is sent.
+                      </div>
+                    </div>
+                    <div class="trade-brain-field">
+                      <label for="tb-direction">Direction</label>
+                      <select id="tb-direction" name="direction">
+                        <option value="LONG">Long</option>
+                        <option value="SHORT">Short</option>
+                      </select>
+                    </div>
+                    <div class="trade-brain-field">
+                      <label for="tb-trigger">Setup Trigger</label>
+                      <input
+                        id="tb-trigger"
+                        name="trigger"
+                        type="text"
+                        placeholder="VWAP reclaim"
+                      />
+                    </div>
+                    <div class="trade-brain-assist trade-brain-field-full">
+                      <div class="trade-brain-assist-grid">
+                        <div class="trade-brain-assist-item">
+                          <div class="trade-brain-assist-label">
+                            Learned Setup
+                          </div>
+                          <div
+                            class="trade-brain-assist-value"
+                            id="tb-learning-setup"
+                          >
+                            Setup ranking will appear after a few closed trades.
+                          </div>
+                        </div>
+                        <div class="trade-brain-assist-item">
+                          <div class="trade-brain-assist-label">
+                            Size Guidance
+                          </div>
+                          <div
+                            class="trade-brain-assist-value"
+                            id="tb-learning-sizing"
+                          >
+                            Use base size until reinforcement memory has enough
+                            matching trades.
+                          </div>
+                        </div>
+                      </div>
+                      <div
+                        class="trade-brain-chip-row"
+                        id="tb-learning-setups"
+                      ></div>
+                    </div>
+                    <div class="trade-brain-field">
+                      <label for="tb-entry-price">Entry Price</label>
+                      <input
+                        id="tb-entry-price"
+                        name="price"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                      />
+                    </div>
+                    <div class="trade-brain-field">
+                      <label for="tb-stop-loss">Stop Loss</label>
+                      <input
+                        id="tb-stop-loss"
+                        name="stopLoss"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                      />
+                    </div>
+                    <div class="trade-brain-field">
+                      <label for="tb-risk-dollar">Risk Dollar</label>
+                      <input
+                        id="tb-risk-dollar"
+                        name="riskDollar"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        placeholder="100"
+                      />
+                    </div>
+                    <div class="trade-brain-field">
+                      <label for="tb-position-size">Position Size</label>
+                      <input
+                        id="tb-position-size"
+                        name="positionSize"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        placeholder="1.0"
+                      />
+                    </div>
+                    <div class="trade-brain-field trade-brain-field-full">
+                      <label for="tb-context-note">Entry Context Note</label>
+                      <textarea
+                        id="tb-context-note"
+                        name="contextNote"
+                        rows="3"
+                        placeholder="Optional note about the structure, session, or reason for entry."
+                      ></textarea>
+                      <div
+                        class="trade-brain-note-hint"
+                        id="tb-context-note-hint"
+                      >
+                        Auto if blank: the app will capture the session,
+                        structure, and learning context for you.
+                      </div>
+                    </div>
+                    <div class="trade-brain-actions">
+                      <button
+                        class="trade-brain-btn"
+                        id="tb-create-btn"
+                        type="submit"
+                      >
+                        Open Trade
+                      </button>
+                      <button
+                        class="trade-brain-btn secondary"
+                        id="tb-close-btn"
+                        type="button"
+                        disabled
+                      >
+                        Close Active Trade
+                      </button>
+                      <button
+                        class="trade-brain-btn ghost"
+                        id="tb-snapshot-btn"
+                        type="button"
+                        disabled
+                      >
+                        Save Snapshot
+                      </button>
+                    </div>
+                    <div class="trade-brain-feedback" id="tb-feedback"></div>
+                  </form>
+                </div>
+
+                <div class="trade-brain-panel">
+                  <div class="metric-row">
+                    <span class="metric-label">Active Trade</span>
+                    <span class="metric-value compact" id="tb-active-title"
+                      >No active trade</span
+                    >
+                  </div>
+                  <div class="trade-brain-active-grid">
+                    <div class="metric-row">
+                      <span class="metric-label">Status</span>
+                      <span class="metric-value" id="tb-active-status"
+                        >---</span
+                      >
+                    </div>
+                    <div class="metric-row">
+                      <span class="metric-label">Unrealized</span>
+                      <span class="metric-value" id="tb-active-pnl">---</span>
+                    </div>
+                    <div class="metric-row">
+                      <span class="metric-label">Current Price</span>
+                      <span class="metric-value" id="tb-active-price">---</span>
+                    </div>
+                    <div class="metric-row">
+                      <span class="metric-label">Stop</span>
+                      <span class="metric-value" id="tb-active-stop">---</span>
+                    </div>
+                    <div class="metric-row">
+                      <span class="metric-label">Targets</span>
+                      <span class="metric-value compact" id="tb-active-targets"
+                        >---</span
+                      >
+                    </div>
+                    <div class="metric-row">
+                      <span class="metric-label">Trailing</span>
+                      <span class="metric-value compact" id="tb-active-trailing"
+                        >---</span
+                      >
+                    </div>
+                    <div class="metric-row">
+                      <span class="metric-label">Session</span>
+                      <span class="metric-value" id="tb-active-session"
+                        >---</span
+                      >
+                    </div>
+                    <div class="metric-row">
+                      <span class="metric-label">Structure / Regime</span>
+                      <span class="metric-value compact" id="tb-active-context"
+                        >---</span
+                      >
+                    </div>
+                  </div>
+
+                  <div class="decision-block">
+                    <div class="decision-heading buy">Decision Journal</div>
+                    <ul class="trade-brain-list" id="tb-decision-log">
+                      <li>Waiting for an active trade.</li>
+                    </ul>
+                  </div>
+
+                  <div class="decision-block">
+                    <div class="decision-heading exit">Stop Timeline</div>
+                    <ul class="trade-brain-list" id="tb-stop-history">
+                      <li>No stop updates yet.</li>
+                    </ul>
+                  </div>
+
+                  <div class="trade-brain-field trade-brain-field-full">
+                    <label for="tb-emotion-note">Emotion Note</label>
+                    <textarea
+                      id="tb-emotion-note"
+                      rows="2"
+                      placeholder="Optional note before tagging the current emotion."
+                    ></textarea>
+                    <div
+                      class="trade-brain-note-hint"
+                      id="tb-emotion-note-hint"
+                    >
+                      Auto if blank: the app will log the emotion, price,
+                      unrealized R, and trailing state.
+                    </div>
+                  </div>
+                  <div class="trade-brain-emotions" id="tb-emotion-actions">
+                    <button type="button" data-emotion="calm">Calm</button>
+                    <button type="button" data-emotion="focused">
+                      Focused
+                    </button>
+                    <button type="button" data-emotion="fear">Fear</button>
+                    <button type="button" data-emotion="greed">Greed</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="trade-brain-grid">
+                <div class="trade-brain-panel">
+                  <h3 class="section-title">Recent Trades</h3>
+                  <div class="trade-brain-recent" id="tb-recent-trades">
+                    <div class="trade-brain-empty">
+                      Closed trades will appear here after the first review
+                      cycle.
+                    </div>
+                  </div>
+                </div>
+
+                <div class="trade-brain-panel">
+                  <h3 class="section-title">Review + Analytics</h3>
+                  <div class="trade-brain-review" id="tb-review-grade">
+                    No closed trades yet. The latest review grade and comparison
+                    will appear here.
+                  </div>
+                  <ul class="trade-brain-list" id="tb-review-lessons">
+                    <li>
+                      Post-trade lessons will populate after the first closed
+                      trade.
+                    </li>
+                  </ul>
+                  <div
+                    class="trade-brain-chip-row"
+                    id="tb-analytics-setups"
+                  ></div>
+                  <div
+                    class="trade-brain-chip-row"
+                    id="tb-analytics-sessions"
+                  ></div>
+                  <div
+                    class="trade-brain-chip-row"
+                    id="tb-analytics-emotions"
+                  ></div>
+                </div>
+              </div>
+            </div>
+          </section>
+
           <section class="section-card section-card-wide ar-card card-ar">
             <button
               type="button"
@@ -1640,6 +2476,7 @@
       aria-atomic="false"
     ></div>
 
+    <script src="{{ url_for('static', filename='trade_brain.js') }}"></script>
     <script>
       let indicatorSocket = null;
       let serviceWorkerRegistration = null;
@@ -1693,7 +2530,8 @@
           ),
         );
         const widthShifted =
-          lastViewportWidth > 0 && Math.abs(nextWidth - lastViewportWidth) >= 80;
+          lastViewportWidth > 0 &&
+          Math.abs(nextWidth - lastViewportWidth) >= 80;
         lastViewportWidth = nextWidth;
 
         if (
@@ -2077,9 +2915,8 @@
         const notificationTag = String(
           payload?.notification_tag || `${title}|${body}`,
         ).trim();
-        const suppressDuplicateUiAlert = shouldSuppressUiNotification(
-          notificationTag,
-        );
+        const suppressDuplicateUiAlert =
+          shouldSuppressUiNotification(notificationTag);
 
         if (isAllowedAlert && !suppressDuplicateUiAlert) {
           showPushToast(title, body);
@@ -2270,21 +3107,22 @@
             ? session.bar_session
             : {};
         const currentSession =
-          session.current_session &&
-          typeof session.current_session === "object"
+          session.current_session && typeof session.current_session === "object"
             ? session.current_session
             : {};
         const barTimestampUtc =
-          barSession.timestampUtc || session.barTimestampUtc || ta?.bar_timestamp_utc;
+          barSession.timestampUtc ||
+          session.barTimestampUtc ||
+          ta?.bar_timestamp_utc;
         const isMarketClosed = Boolean(
           currentSession.isMarketClosed ??
-            session.isMarketClosed ??
-            ta?.market_closed,
+          session.isMarketClosed ??
+          ta?.market_closed,
         );
         const isHolidaySchedule = Boolean(
           currentSession.isHolidaySchedule ??
-            session.isHolidaySchedule ??
-            ta?.market_is_holiday_schedule,
+          session.isHolidaySchedule ??
+          ta?.market_is_holiday_schedule,
         );
         return {
           session,
@@ -2370,11 +3208,9 @@
           .filter(
             (token) =>
               token &&
-              ![
-                "preview-bullish",
-                "preview-bearish",
-                "preview-watch",
-              ].includes(token),
+              !["preview-bullish", "preview-bearish", "preview-watch"].includes(
+                token,
+              ),
           )
           .join(" ");
         el.className = `${baseClass}${tone ? ` ${tone}` : ""}`;
@@ -2550,7 +3386,8 @@
         }
 
         indicatorSocket = io({
-          transports: ["websocket", "polling"],
+          transports: ["polling"],
+          upgrade: false,
           reconnection: true,
           reconnectionAttempts: 50,
           reconnectionDelay: 1000,
@@ -3130,7 +3967,9 @@
             : {};
         const grade = safeText(quality.grade, "No Trade");
         const score = Number(quality.score);
-        const scoreText = Number.isFinite(score) ? `${score.toFixed(0)}/100` : "n/a";
+        const scoreText = Number.isFinite(score)
+          ? `${score.toFixed(0)}/100`
+          : "n/a";
         const mode = safeText(quality.mode, "No mode");
         const direction = safeText(quality.direction, "Neutral");
         const status = String(quality.status || "blocked").toLowerCase();
@@ -3153,9 +3992,13 @@
         const stop = stopLoss && typeof stopLoss === "object" ? stopLoss : {};
         const price = formatPriceLevel(stop.price);
         const distance = Number(stop.distance);
-        const distanceText = Number.isFinite(distance) ? ` · risk ${distance.toFixed(2)}` : "";
+        const distanceText = Number.isFinite(distance)
+          ? ` · risk ${distance.toFixed(2)}`
+          : "";
         const atrMultiple = Number(stop.atrMultiple);
-        const atrText = Number.isFinite(atrMultiple) ? ` · ${atrMultiple.toFixed(2)}x ATR` : "";
+        const atrText = Number.isFinite(atrMultiple)
+          ? ` · ${atrMultiple.toFixed(2)}x ATR`
+          : "";
         const basis = safeText(stop.basis, "No structural stop available");
         return price ? `${price} · ${basis}${distanceText}${atrText}` : basis;
       }
@@ -3168,7 +4011,9 @@
             const price = formatPriceLevel(item.price);
             if (!price) return "";
             const rMultiple = Number(item.rMultiple);
-            const rText = Number.isFinite(rMultiple) ? ` · ${rMultiple.toFixed(2)}R` : "";
+            const rText = Number.isFinite(rMultiple)
+              ? ` · ${rMultiple.toFixed(2)}R`
+              : "";
             const basis = safeText(item.basis, "");
             const basisText = basis ? ` · ${basis}` : "";
             return `${safeText(item.label, "TP")} ${price}${rText}${basisText}`;
@@ -3214,9 +4059,12 @@
                   : ""
           }`;
         }
-        if (entryEl) entryEl.innerText = formatExecutionQualityEntry(quality.entry);
-        if (stopEl) stopEl.innerText = formatExecutionQualityStop(quality.stopLoss);
-        if (targetsEl) targetsEl.innerText = formatExecutionQualityTargets(quality.targets);
+        if (entryEl)
+          entryEl.innerText = formatExecutionQualityEntry(quality.entry);
+        if (stopEl)
+          stopEl.innerText = formatExecutionQualityStop(quality.stopLoss);
+        if (targetsEl)
+          targetsEl.innerText = formatExecutionQualityTargets(quality.targets);
         if (rrEl) {
           const rr = Number(quality.riskReward);
           const rrText = Number.isFinite(rr) ? `${rr.toFixed(2)}R` : "n/a";
@@ -3443,13 +4291,15 @@
         }
         const marketSessionState = getCurrentMarketSessionState(ta);
         sourceEl.innerText = formatMarketDataStatus(ta);
-        sourceEl.style.color = marketSessionState.isMarketClosed || marketSessionState.isHolidaySchedule
-          ? "var(--text-muted)"
-          : ta.stale_data
-            ? "var(--bearish)"
-            : dataSourceText.includes("Real-Time")
-              ? "var(--accent-strong)"
-              : "var(--text-muted)";
+        sourceEl.style.color =
+          marketSessionState.isMarketClosed ||
+          marketSessionState.isHolidaySchedule
+            ? "var(--text-muted)"
+            : ta.stale_data
+              ? "var(--bearish)"
+              : dataSourceText.includes("Real-Time")
+                ? "var(--accent-strong)"
+                : "var(--text-muted)";
 
         const badge = document.getElementById("verdict-badge");
         badge.innerText = verdict;
@@ -3535,7 +4385,8 @@
         const regimeLadderEl = document.getElementById("rs-warning-ladder");
         const regimeContextEl = document.getElementById("rs-context");
         const regimePivotsEl = document.getElementById("rs-pivots");
-        const regimePivotContextEl = document.getElementById("rs-pivot-context");
+        const regimePivotContextEl =
+          document.getElementById("rs-pivot-context");
 
         const bigMoveRisk = Number(regimeState.big_move_risk || 0);
         const breakoutBias = regimeState.breakout_bias || "Neutral";
@@ -3600,7 +4451,9 @@
               .toLowerCase();
             const mins = Number(item?.minutes);
             const duplicateOfNext =
-              name && normalizedNextEventName && name === normalizedNextEventName;
+              name &&
+              normalizedNextEventName &&
+              name === normalizedNextEventName;
             if (duplicateOfNext) return false;
             return (
               arr.findIndex((candidate) => {
@@ -3651,8 +4504,7 @@
           const sameSessionLabel =
             barLabel &&
             currentLabel &&
-            barLabel.trim().toLowerCase() ===
-              currentLabel.trim().toLowerCase();
+            barLabel.trim().toLowerCase() === currentLabel.trim().toLowerCase();
           const vwapDelta = Number(structureContext.distSessionVwapPct || 0);
           const vwapBiasText = getVwapBiasLabel(vwapDelta);
           const orbState = getRoundedSignalState(
@@ -3716,21 +4568,9 @@
             pivotLevels?.s2,
           );
           const pivotParts = [
-            formatCompactLevelPair(
-              "PP",
-              pivotPoint,
-              pivotPoint,
-            ),
-            formatCompactLevelPair(
-              "R1/S1",
-              pivotResistance1,
-              pivotSupport1,
-            ),
-            formatCompactLevelPair(
-              "R2/S2",
-              pivotResistance2,
-              pivotSupport2,
-            ),
+            formatCompactLevelPair("PP", pivotPoint, pivotPoint),
+            formatCompactLevelPair("R1/S1", pivotResistance1, pivotSupport1),
+            formatCompactLevelPair("R2/S2", pivotResistance2, pivotSupport2),
           ].filter(Boolean);
           if (regimePivotsEl) {
             regimePivotsEl.innerText = pivotParts.length
@@ -3778,7 +4618,7 @@
           tradeGuidance.buyLevel === "Weak"
             ? "preview-bearish"
             : (tradeGuidance.buyLevel === "Strong" ||
-                tradeGuidance.buyLevel === "Watch") &&
+                  tradeGuidance.buyLevel === "Watch") &&
                 tradeGuidance.sellLevel === "Weak"
               ? "preview-bullish"
               : tradeGuidance.exitLevel === "High"
@@ -3896,6 +4736,12 @@
                   ? "preview-watch"
                   : executionPreviewTone,
         );
+        if (
+          window.TradeBrainUI &&
+          typeof window.TradeBrainUI.syncFromPrediction === "function"
+        ) {
+          window.TradeBrainUI.syncFromPrediction(data);
+        }
 
         suppressNextUiChangeNotification = false;
       }
@@ -3914,6 +4760,12 @@
         setCollapsibleSectionExpanded(
           "guidance-toggle",
           "guidance-panel",
+          false,
+        );
+        initCollapsibleSectionToggle("trade-brain-toggle", "trade-brain-panel");
+        setCollapsibleSectionExpanded(
+          "trade-brain-toggle",
+          "trade-brain-panel",
           false,
         );
         initCollapsibleSectionToggle("execution-toggle", "execution-panel");
@@ -3941,6 +4793,12 @@
           "Alerts: structure + VWAP / ORB / sweep + key execution quality",
           true,
         );
+        if (
+          window.TradeBrainUI &&
+          typeof window.TradeBrainUI.init === "function"
+        ) {
+          window.TradeBrainUI.init();
+        }
         ensureServiceWorker().then(() => {
           if (
             "Notification" in window &&
@@ -3952,6 +4810,13 @@
         fetchPrediction();
         fetchAutoresearchSummary();
         initIndicatorSocket();
+        if (
+          window.TradeBrainUI &&
+          typeof window.TradeBrainUI.attachSocket === "function" &&
+          indicatorSocket
+        ) {
+          window.TradeBrainUI.attachSocket(indicatorSocket);
+        }
 
         document.addEventListener("visibilitychange", () => {
           if (

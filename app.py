@@ -1,5 +1,5 @@
 from flask import Flask, jsonify, render_template, request, send_from_directory
-from flask_socketio import SocketIO
+from flask_socketio import SocketIO, join_room, leave_room
 import copy
 import hashlib
 import json
@@ -16,6 +16,7 @@ from tools.research_runtime import create_research_brief, load_job_bundle, resea
 from tools.signal_engine import (
     compute_prediction_from_ta,
 )
+from tools.trade_brain import TradeBrainService
 
 try:
     from pywebpush import WebPushException, webpush
@@ -76,6 +77,19 @@ EXECUTION_QUALITY_ALERT_CONFIRMATION_COUNT = _read_int_env("EXECUTION_QUALITY_AL
 EXECUTION_QUALITY_CLEAR_CONFIRMATION_COUNT = _read_int_env("EXECUTION_QUALITY_CLEAR_CONFIRMATION_COUNT", 3, 1)
 BOUNDARY_WOBBLE_COOLDOWN_SECONDS = _read_int_env("BOUNDARY_WOBBLE_COOLDOWN_SECONDS", 1200, 0)
 ENTER_STAGE_PROTECT_SECONDS = _read_int_env("ENTER_STAGE_PROTECT_SECONDS", 900, 0)
+STABLE_DECISION_BUFFER_BUCKET_SECONDS = _read_int_env("STABLE_DECISION_BUFFER_BUCKET_SECONDS", 30, 5)
+STABLE_DECISION_BUFFER_MAX_BARS = _read_int_env("STABLE_DECISION_BUFFER_MAX_BARS", 5, 3)
+STABLE_DECISION_BUFFER_WINDOW_SECONDS = _read_int_env("STABLE_DECISION_BUFFER_WINDOW_SECONDS", 150, 30)
+STABLE_DECISION_REEVALUATION_BARS = _read_int_env("STABLE_DECISION_REEVALUATION_BARS", 3, 1)
+STABLE_DECISION_CANDIDATE_SECONDS = _read_int_env("STABLE_DECISION_CANDIDATE_SECONDS", 90, 30)
+STABLE_DECISION_INVALIDATION_SECONDS = _read_int_env("STABLE_DECISION_INVALIDATION_SECONDS", 60, 30)
+STABLE_DECISION_LOCK_SECONDS = _read_int_env("STABLE_DECISION_LOCK_SECONDS", 300, 0)
+STABLE_DECISION_FLIP_WINDOW_SECONDS = _read_int_env("STABLE_DECISION_FLIP_WINDOW_SECONDS", 600, 60)
+STABLE_DECISION_REPEAT_SUPPRESS_SECONDS = _read_int_env("STABLE_DECISION_REPEAT_SUPPRESS_SECONDS", 300, 0)
+STABLE_DECISION_OSCILLATION_SECONDS = _read_int_env("STABLE_DECISION_OSCILLATION_SECONDS", 180, 0)
+STABLE_DECISION_CONFIDENCE_FLIP_PENALTY = _read_int_env("STABLE_DECISION_CONFIDENCE_FLIP_PENALTY", 15, 0)
+STABLE_DECISION_HISTORY_LIMIT = _read_int_env("STABLE_DECISION_HISTORY_LIMIT", 10, 3)
+DECISION_CHURN_LOG_LIMIT = _read_int_env("DECISION_CHURN_LOG_LIMIT", 200, 20)
 NOTIFY_EXIT_READS = _read_bool_env("NOTIFY_EXIT_READS", True)
 RR200_MAX_SIGNALS_PER_DAY = _read_int_env("RR200_MAX_SIGNALS_PER_DAY", 5, 1)
 RR200_MIN_SIGNAL_SPACING_SECONDS = _read_int_env("RR200_MIN_SIGNAL_SPACING_SECONDS", 2700, 0)
@@ -110,6 +124,9 @@ REGIME_MEMORY_FILE = BASE_DIR / "tools" / "reports" / "regime_memory_state.json"
 LIVE_SIGNAL_OUTCOMES_FILE = BASE_DIR / "tools" / "reports" / "live_signal_outcomes.json"
 LIVE_SIGNAL_SUMMARY_FILE = BASE_DIR / "tools" / "reports" / "live_signal_summary.json"
 RR200_SIGNAL_COUNTER_FILE = BASE_DIR / "tools" / "reports" / "rr200_signal_counter.json"
+TRADE_BRAIN_STATE_FILE = BASE_DIR / "tools" / "reports" / "trade_brain_state.json"
+STABLE_DECISION_STATE_FILE = BASE_DIR / "tools" / "reports" / "stable_decision_state.json"
+DECISION_CHURN_LOG_FILE = BASE_DIR / "tools" / "reports" / "decision_churn_log.json"
 VAPID_PUBLIC_KEY = os.getenv("VAPID_PUBLIC_KEY", "")
 VAPID_PRIVATE_KEY = os.getenv("VAPID_PRIVATE_KEY", "")
 VAPID_CLAIMS_SUBJECT = os.getenv("VAPID_CLAIMS_SUBJECT", "mailto:alerts@example.com")
@@ -125,6 +142,294 @@ CHANGE_SUMMARY_ORDER = [
     "micro_orb_state",
     "micro_sweep_state",
 ]
+trade_brain_service = TradeBrainService(TRADE_BRAIN_STATE_FILE)
+
+
+def _trade_brain_float(value, default=None):
+    try:
+        if value in (None, ""):
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _trade_brain_first_float(*values, default=None):
+    for value in values:
+        parsed = _trade_brain_float(value, None)
+        if parsed is not None:
+            return parsed
+    return default
+
+
+def _get_request_user_id(default="anonymous"):
+    raw = request.headers.get("x-user-id") or request.args.get("userId") or default
+    text = str(raw or "").strip()
+    return text or default
+
+
+def _get_socket_user_id(payload=None, default="anonymous"):
+    if isinstance(payload, dict):
+        raw = payload.get("userId") or payload.get("user_id")
+        text = str(raw or "").strip()
+        if text:
+            return text
+    return default
+
+
+def _trade_room(trade_id):
+    return f"trade:{trade_id}"
+
+
+def _build_trade_brain_market_data(ta_data, regime_state=None):
+    ta_data = ta_data if isinstance(ta_data, dict) else {}
+    regime_state = regime_state if isinstance(regime_state, dict) else {}
+    price_action = ta_data.get("price_action") if isinstance(ta_data.get("price_action"), dict) else {}
+    structure_context = ta_data.get("structure_context") if isinstance(ta_data.get("structure_context"), dict) else {}
+    session_context = ta_data.get("session_context") if isinstance(ta_data.get("session_context"), dict) else {}
+    current_session = session_context.get("current_session") if isinstance(session_context.get("current_session"), dict) else {}
+
+    price = _trade_brain_first_float(
+        ta_data.get("current_price"),
+        ta_data.get("price"),
+        ta_data.get("close"),
+        default=None,
+    )
+    vwap = _trade_brain_first_float(
+        ta_data.get("session_vwap"),
+        ta_data.get("vwap"),
+        ta_data.get("SESSION_VWAP"),
+        structure_context.get("sessionVwap"),
+        price,
+    )
+    structure = (
+        price_action.get("structure")
+        or ta_data.get("market_structure")
+        or structure_context.get("marketStructure")
+        or "neutral"
+    )
+    regime = (
+        regime_state.get("event_regime")
+        or regime_state.get("eventRegime")
+        or regime_state.get("warning_ladder")
+        or regime_state.get("warningLadder")
+        or ta_data.get("volatility_regime")
+        or session_context.get("marketStatus")
+        or "normal"
+    )
+    return {
+        "price": price,
+        "adx": _trade_brain_first_float(ta_data.get("adx_14"), ta_data.get("ADX_14"), default=0.0),
+        "vwap": vwap,
+        "atrDollar": _trade_brain_first_float(ta_data.get("atr_14"), ta_data.get("ATR_14"), default=0.0),
+        "atrPercent": _trade_brain_first_float(ta_data.get("atr_percent"), ta_data.get("ATR_PERCENT"), default=0.0),
+        "session": session_context.get("currentLabel") or current_session.get("label") or "Unknown",
+        "structure": structure,
+        "regime": str(regime),
+    }
+
+
+def _trade_brain_direction_from_prediction(prediction):
+    if not isinstance(prediction, dict):
+        return None
+
+    stable_decision = prediction.get("StableDecision") if isinstance(prediction.get("StableDecision"), dict) else {}
+    stable_direction = str(stable_decision.get("direction") or "").strip().lower()
+    if stable_direction == "long":
+        return "LONG"
+    if stable_direction == "short":
+        return "SHORT"
+
+    execution_quality = prediction.get("ExecutionQuality") if isinstance(prediction.get("ExecutionQuality"), dict) else {}
+    execution_direction = str(execution_quality.get("direction") or "").strip().lower()
+    if execution_direction == "long":
+        return "LONG"
+    if execution_direction == "short":
+        return "SHORT"
+
+    decision_status = prediction.get("DecisionStatus") if isinstance(prediction.get("DecisionStatus"), dict) else {}
+    decision_direction = str(decision_status.get("status") or "").strip().lower()
+    if decision_direction in {"buy", "long"}:
+        return "LONG"
+    if decision_direction in {"sell", "short"}:
+        return "SHORT"
+
+    verdict = str(prediction.get("verdict") or "").strip().lower()
+    if verdict.startswith("bull"):
+        return "LONG"
+    if verdict.startswith("bear"):
+        return "SHORT"
+
+    guidance = prediction.get("TradeGuidance") if isinstance(prediction.get("TradeGuidance"), dict) else {}
+    buy_level = str(guidance.get("buyLevel") or "").strip().lower()
+    sell_level = str(guidance.get("sellLevel") or "").strip().lower()
+    if buy_level == "strong" and sell_level != "strong":
+        return "LONG"
+    if sell_level == "strong" and buy_level != "strong":
+        return "SHORT"
+    return None
+
+
+def _apply_trade_brain_learning_to_prediction(prediction, learning_adjustment):
+    if not isinstance(prediction, dict):
+        return prediction
+    if not isinstance(learning_adjustment, dict) or not learning_adjustment.get("active"):
+        return prediction
+
+    adjusted = copy.deepcopy(prediction)
+    delta = int(learning_adjustment.get("confidenceDelta") or 0)
+    adjusted["confidence"] = max(0, min(100, int(adjusted.get("confidence") or 50) + delta))
+    guidance = dict(adjusted.get("TradeGuidance", {}) or {})
+    learning_note = str(learning_adjustment.get("message") or "").strip()
+    top_setup = learning_adjustment.get("topSetup") if isinstance(learning_adjustment.get("topSetup"), dict) else {}
+    sizing = learning_adjustment.get("sizing") if isinstance(learning_adjustment.get("sizing"), dict) else {}
+    existing_summary = str(guidance.get("summary") or "").strip()
+    guidance["learningNote"] = learning_note
+    guidance["learningConfidenceDelta"] = delta
+
+    summary_segments = [existing_summary] if existing_summary else []
+    if learning_note:
+        summary_segments.append(f"Reinforcement memory: {learning_note}")
+
+    if top_setup.get("setup"):
+        guidance["learningSetup"] = copy.deepcopy(top_setup)
+        summary_segments.append(
+            f"Preferred learned setup: {top_setup['setup']} from {int(top_setup.get('samples') or 0)} similar trades."
+        )
+
+    if sizing.get("active"):
+        guidance["learningSizing"] = copy.deepcopy(sizing)
+        size_note = str(sizing.get("summary") or "").strip()
+        if size_note:
+            summary_segments.append(size_note)
+
+    guidance["summary"] = " ".join(segment for segment in summary_segments if segment)
+    adjusted["TradeGuidance"] = guidance
+    adjusted["TradeBrainLearning"] = copy.deepcopy(learning_adjustment)
+    return adjusted
+
+
+def _apply_trade_brain_learning_to_execution_quality(execution_quality, learning_adjustment):
+    if not isinstance(execution_quality, dict):
+        return execution_quality
+    if not isinstance(learning_adjustment, dict) or not learning_adjustment.get("active"):
+        return execution_quality
+
+    adjusted = copy.deepcopy(execution_quality)
+    delta = int(learning_adjustment.get("confidenceDelta") or 0)
+    top_setup = learning_adjustment.get("topSetup") if isinstance(learning_adjustment.get("topSetup"), dict) else {}
+    sizing = learning_adjustment.get("sizing") if isinstance(learning_adjustment.get("sizing"), dict) else {}
+    score = _trade_brain_first_float(adjusted.get("score"), default=None)
+    if score is not None:
+        adjusted["score"] = max(0.0, min(100.0, round(score + (delta * 1.5), 1)))
+    adjusted["learning"] = copy.deepcopy(learning_adjustment)
+    learning_note = str(learning_adjustment.get("message") or "").strip()
+    if sizing.get("summary"):
+        existing_position_note = str(adjusted.get("positionSizeNote") or "").strip()
+        sizing_note = str(sizing.get("summary") or "").strip()
+        adjusted["positionSizeNote"] = (
+            f"{existing_position_note} · {sizing_note}"
+            if existing_position_note and sizing_note not in existing_position_note
+            else sizing_note or existing_position_note
+        )
+
+    if top_setup.get("setup"):
+        setup_name = str(top_setup.get("setup") or "").strip()
+        setup_note = (
+            f"Learned setup bias: {setup_name} from {int(top_setup.get('samples') or 0)} similar trades "
+            f"averaging {float(top_setup.get('avgReward', 0.0) or 0.0):+.2f}R."
+        )
+        recommendation_score = float(top_setup.get("recommendationScore", 0.0) or 0.0)
+        existing_setup = str(adjusted.get("setup") or "").strip()
+        if recommendation_score > 0:
+            if setup_name and setup_name.lower() not in existing_setup.lower():
+                adjusted["setup"] = (
+                    f"{existing_setup} · Prefer {setup_name}"
+                    if existing_setup
+                    else f"Prefer {setup_name}"
+                )
+            reasons = list(adjusted.get("reasons") or [])
+            if setup_note not in reasons:
+                reasons.insert(0, setup_note)
+            adjusted["reasons"] = reasons[:6]
+        elif recommendation_score < 0:
+            if setup_name and setup_name.lower() not in existing_setup.lower():
+                adjusted["setup"] = (
+                    f"{existing_setup} · Avoid {setup_name}"
+                    if existing_setup
+                    else f"Avoid {setup_name}"
+                )
+            blockers = list(adjusted.get("blockers") or [])
+            if setup_note not in blockers:
+                blockers.insert(0, setup_note)
+            adjusted["blockers"] = blockers[:6]
+
+    if delta > 0:
+        reasons = list(adjusted.get("reasons") or [])
+        if learning_note and learning_note not in reasons:
+            reasons.insert(0, learning_note)
+        adjusted["reasons"] = reasons[:6]
+    elif delta < 0:
+        blockers = list(adjusted.get("blockers") or [])
+        if learning_note and learning_note not in blockers:
+            blockers.insert(0, learning_note)
+        adjusted["blockers"] = blockers[:6]
+    return adjusted
+
+
+def _enrich_trade_create_payload(payload, user_id):
+    payload = copy.deepcopy(payload if isinstance(payload, dict) else {})
+    dashboard = trade_brain_service.get_dashboard_payload(user_id=user_id)
+    market_data = dashboard.get("marketData") if isinstance(dashboard.get("marketData"), dict) else {}
+    merged_context = dict(market_data)
+    incoming_context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+    merged_context.update(incoming_context)
+    payload["context"] = merged_context
+    if payload.get("price") in (None, "") and market_data.get("price") is not None:
+        payload["price"] = market_data.get("price")
+    return payload
+
+
+def _emit_trade_brain_stats(dashboard, sid=None):
+    if not isinstance(dashboard, dict):
+        return
+    payload = {
+        "stats": dashboard.get("stats") or {},
+        "dashboard": dashboard,
+    }
+    if sid:
+        socketio.emit("stats:update", payload, to=sid)
+        return
+    socketio.emit("stats:update", payload)
+
+
+def _emit_trade_brain_trade(event_name, trade, dashboard, sid=None):
+    payload = {
+        "trade": trade,
+        "dashboard": dashboard,
+    }
+    if sid:
+        socketio.emit(event_name, payload, to=sid)
+        return
+    socketio.emit(event_name, payload)
+
+
+def _emit_trade_brain_events(events, trade=None, dashboard=None, sid=None):
+    emitted = False
+    for event in events or []:
+        event_name = str(event.get("type") or "").strip()
+        if not event_name:
+            continue
+        emitted = True
+        if event_name in {"trade:created", "trade:updated", "trade:closed"}:
+            _emit_trade_brain_trade(event_name, trade, dashboard, sid=sid)
+            continue
+        if sid:
+            socketio.emit(event_name, event, to=sid)
+        else:
+            socketio.emit(event_name, event)
+    if emitted:
+        _emit_trade_brain_stats(dashboard, sid=sid)
 def _load_subscriptions():
     if not SUBSCRIPTIONS_FILE.exists():
         return []
@@ -1616,6 +1921,967 @@ def _execution_quality_alert_signal(execution_quality):
     return "No Trade"
 
 
+def _utc_iso_timestamp(ts):
+    try:
+        ts_value = int(float(ts or 0))
+    except (TypeError, ValueError):
+        ts_value = 0
+    if ts_value <= 0:
+        return None
+    return (
+        datetime.fromtimestamp(ts_value, tz=timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+
+
+def _parse_utc_timestamp(value, default=0):
+    if isinstance(value, (int, float)):
+        return int(value)
+    text = str(value or "").strip()
+    if not text:
+        return int(default or 0)
+    normalized = text[:-1] + "+00:00" if text.endswith("Z") else text
+    try:
+        return int(datetime.fromisoformat(normalized).timestamp())
+    except ValueError:
+        return int(default or 0)
+
+
+def _stable_decision_bucket_ts(now_ts):
+    now_ts = int(now_ts or time.time())
+    bucket = max(STABLE_DECISION_BUFFER_BUCKET_SECONDS, 1)
+    return (now_ts // bucket) * bucket
+
+
+def _stable_decision_state_rank(state_name):
+    return {
+        "SCANNING": 0,
+        "INVALIDATED": 0,
+        "EXITED": 0,
+        "CANDIDATE": 1,
+        "CONFIRMED": 2,
+        "ACTIVE": 3,
+    }.get(str(state_name or "SCANNING"), 0)
+
+
+def _stable_decision_quality_status(decision_state):
+    state_name = str(decision_state or "SCANNING")
+    if state_name == "CANDIDATE":
+        return "watchlist"
+    if state_name in {"CONFIRMED", "ACTIVE"}:
+        return "ready"
+    return "blocked"
+
+
+def _stable_decision_session_label(ta_data):
+    ta_data = ta_data if isinstance(ta_data, dict) else {}
+    session_context = ta_data.get("session_context") if isinstance(ta_data.get("session_context"), dict) else {}
+    return str(
+        session_context.get("currentLabel")
+        or session_context.get("label")
+        or session_context.get("bar_session")
+        or "Unknown"
+    )
+
+
+def _stable_decision_bar_timestamp(ta_data, now_ts):
+    ta_data = ta_data if isinstance(ta_data, dict) else {}
+    session_context = ta_data.get("session_context") if isinstance(ta_data.get("session_context"), dict) else {}
+    return str(
+        ta_data.get("bar_timestamp_utc")
+        or session_context.get("barTimestampUtc")
+        or session_context.get("currentTimestampUtc")
+        or _utc_iso_timestamp(now_ts)
+        or ""
+    )
+
+
+def _stable_decision_signal_setup(execution_quality):
+    execution_quality = execution_quality if isinstance(execution_quality, dict) else {}
+    signal = _execution_quality_alert_signal(execution_quality)
+    if signal.startswith("Watchlist "):
+        return signal[len("Watchlist "):].strip() or "No Clean Entry"
+    parts = signal.split(" ", 1)
+    if parts and parts[0] in {"A", "B", "C"} and len(parts) == 2:
+        return parts[1].strip() or "No Clean Entry"
+    setup = str(execution_quality.get("setup") or "No Clean Entry").strip() or "No Clean Entry"
+    risk_reward = _coerce_float(execution_quality.get("riskReward"), 0.0) or 0.0
+    if signal.startswith("No Trade") and risk_reward >= 1.15:
+        if risk_reward >= 2.5:
+            rr_bucket = ">=2.5R"
+        elif risk_reward >= 2.0:
+            rr_bucket = ">=2.0R"
+        elif risk_reward >= 1.5:
+            rr_bucket = ">=1.5R"
+        else:
+            rr_bucket = ">=1.15R"
+        if rr_bucket not in setup:
+            setup = f"{setup} {rr_bucket}"
+    return setup
+
+
+def _stable_decision_direction(prediction, decision_status, execution_quality):
+    execution_quality = execution_quality if isinstance(execution_quality, dict) else {}
+    decision_status = decision_status if isinstance(decision_status, dict) else {}
+    direction = str(execution_quality.get("direction") or "").strip()
+    if direction in {"Long", "Short"}:
+        return direction
+    status = str(decision_status.get("status") or "").strip().lower()
+    if status == "buy":
+        return "Long"
+    if status == "sell":
+        return "Short"
+    verdict = str((prediction or {}).get("verdict") or "").strip()
+    if verdict == "Bullish":
+        return "Long"
+    if verdict == "Bearish":
+        return "Short"
+    return "Neutral"
+
+
+def _stable_decision_structure_opposes(direction, market_structure):
+    structure_text = str(market_structure or "").strip().lower()
+    if direction == "Long":
+        return any(
+            token in structure_text
+            for token in ("bearish", "breakdown", "rejection", "lower high", "distribution")
+        )
+    if direction == "Short":
+        return any(
+            token in structure_text
+            for token in ("bullish", "breakout", "reclaim", "higher low", "accumulation")
+        )
+    return False
+
+
+def _stable_decision_reason(previous_decision, raw_profile):
+    previous_decision = previous_decision if isinstance(previous_decision, dict) else {}
+    raw_profile = raw_profile if isinstance(raw_profile, dict) else {}
+    previous_session = str(previous_decision.get("session") or "").strip()
+    current_session = str(raw_profile.get("session") or "").strip()
+    if (
+        previous_session
+        and previous_session != "Unknown"
+        and current_session
+        and previous_session != current_session
+    ):
+        return "SESSION_CHANGE"
+
+    previous_direction = str(previous_decision.get("direction") or "Neutral")
+    current_direction = str(raw_profile.get("direction") or "Neutral")
+    if previous_direction in {"Long", "Short"} and current_direction in {"Long", "Short"}:
+        if previous_direction != current_direction:
+            return "STRUCTURE_BREAK"
+    if _stable_decision_structure_opposes(previous_direction, raw_profile.get("market_structure")):
+        return "STRUCTURE_BREAK"
+    return "MOMENTUM_SHIFT"
+
+
+def _stable_decision_target_state(previous_decision, raw_profile):
+    previous_decision = previous_decision if isinstance(previous_decision, dict) else {}
+    raw_profile = raw_profile if isinstance(raw_profile, dict) else {}
+    previous_state = str(previous_decision.get("decision_state") or "SCANNING")
+    direction = str(raw_profile.get("direction") or "Neutral")
+    confidence = int(raw_profile.get("confidence") or 0)
+    quality_grade = str(raw_profile.get("execution_quality") or "No Trade")
+    execution_status = str(raw_profile.get("execution_status") or "stand_aside")
+    action_state = str(raw_profile.get("action_state") or "WAIT")
+
+    if action_state in {"LONG_ACTIVE", "SHORT_ACTIVE"} or execution_status == "hold":
+        return "ACTIVE"
+
+    actionable = direction in {"Long", "Short"} and quality_grade in {"A", "B", "C"}
+    if not actionable or confidence < 60:
+        if previous_state in {"CONFIRMED", "ACTIVE", "CANDIDATE"}:
+            return "INVALIDATED"
+        return "SCANNING"
+    if confidence > 90:
+        return "ACTIVE"
+    if confidence >= 75:
+        return "CONFIRMED"
+    return "CANDIDATE"
+
+
+def _stable_decision_default_payload(now_ts=None, session="Unknown", bar_timestamp=None):
+    now_ts = int(now_ts or time.time())
+    lock_until = _utc_iso_timestamp(now_ts)
+    next_evaluation = _utc_iso_timestamp(now_ts + STABLE_DECISION_BUFFER_BUCKET_SECONDS)
+    bar_value = str(bar_timestamp or _utc_iso_timestamp(now_ts) or "")
+    return {
+        "symbol": "XAUUSD",
+        "decision_state": "SCANNING",
+        "setup_type": "No Clean Entry",
+        "execution_quality": "No Trade",
+        "confidence": 0,
+        "decision_locked_until": lock_until,
+        "flip_count_10m": 0,
+        "change_reason": "TIME_EXPIRED",
+        "session": str(session or "Unknown"),
+        "bar_timestamp": bar_value,
+        "next_evaluation": next_evaluation,
+        "signature": "Neutral|No Clean Entry|No Trade",
+        "signal_signature": "Neutral|No Clean Entry|No Trade",
+        "direction": "Neutral",
+        "suppression_reason": "",
+        "hold_reason": "",
+        "locked": False,
+    }
+
+
+def _default_stable_decision_state(now_ts=None):
+    now_ts = int(now_ts or time.time())
+    return {
+        "version": 1,
+        "observation_buffer": [],
+        "signal_buffer": [],
+        "decision_ring": [],
+        "flip_history": [],
+        "decision_lock_until_ts": 0,
+        "last_decision_time_ts": 0,
+        "last_evaluation_bucket_ts": 0,
+        "last_suppression_reason": "",
+        "last_hold_reason": "",
+        "stable_decision": _stable_decision_default_payload(now_ts=now_ts),
+        "recent_churn": [],
+    }
+
+
+def _reset_stable_decision_state_if_stale(state, ta_data, now_ts=None):
+    now_ts = int(now_ts or time.time())
+    state = copy.deepcopy(state if isinstance(state, dict) else _default_stable_decision_state(now_ts))
+    stable_decision = state.get("stable_decision") if isinstance(state.get("stable_decision"), dict) else {}
+    last_decision_time_ts = int(state.get("last_decision_time_ts", 0) or 0)
+    if last_decision_time_ts and (now_ts - last_decision_time_ts) > STABLE_DECISION_FLIP_WINDOW_SECONDS:
+        return _default_stable_decision_state(now_ts)
+
+    current_bar_ts = _parse_utc_timestamp(_stable_decision_bar_timestamp(ta_data, now_ts), default=0)
+    stored_bar_ts = _parse_utc_timestamp(stable_decision.get("bar_timestamp"), default=0)
+    if current_bar_ts and stored_bar_ts:
+        stale_gap_seconds = max(STABLE_DECISION_BUFFER_WINDOW_SECONDS * 2, 600)
+        if abs(current_bar_ts - stored_bar_ts) > stale_gap_seconds:
+            return _default_stable_decision_state(now_ts)
+
+    return state
+
+
+def _stable_decision_observation(ta_data, regime_state, now_ts):
+    ta_data = ta_data if isinstance(ta_data, dict) else {}
+    structure_context = ta_data.get("structure_context") if isinstance(ta_data.get("structure_context"), dict) else {}
+    volatility_regime = ta_data.get("volatility_regime") if isinstance(ta_data.get("volatility_regime"), dict) else {}
+    price_action = ta_data.get("price_action") if isinstance(ta_data.get("price_action"), dict) else {}
+    return {
+        "bucket_ts": _stable_decision_bucket_ts(now_ts),
+        "ts": int(now_ts),
+        "bar_timestamp": _stable_decision_bar_timestamp(ta_data, now_ts),
+        "session": _stable_decision_session_label(ta_data),
+        "adx": round(_coerce_float(volatility_regime.get("adx_14"), 0.0) or 0.0, 4),
+        "vwap_delta": round(_coerce_float(structure_context.get("distSessionVwapPct"), 0.0) or 0.0, 4),
+        "orb_state": int(round(_coerce_float(structure_context.get("openingRangeBreak"), 0.0) or 0.0)),
+        "market_structure": str(price_action.get("structure") or "Consolidating"),
+        "event_regime": str((regime_state or {}).get("event_regime") or "normal"),
+    }
+
+
+def _stable_decision_prune_buffer(items, now_ts):
+    now_ts = int(now_ts or time.time())
+    items = list(items or [])
+    minimum_ts = now_ts - STABLE_DECISION_BUFFER_WINDOW_SECONDS
+    recent_items = [item for item in items if int(item.get("ts", now_ts) or now_ts) >= minimum_ts]
+    return recent_items[-STABLE_DECISION_BUFFER_MAX_BARS:]
+
+
+def _stable_decision_aggregate_observations(observation_buffer):
+    observation_buffer = list(observation_buffer or [])
+    if not observation_buffer:
+        return {"adx": 0.0, "vwap_delta": 0.0, "orb_state": 0}
+    count = max(len(observation_buffer), 1)
+    adx = sum(_coerce_float(item.get("adx"), 0.0) or 0.0 for item in observation_buffer) / count
+    vwap_delta = sum(_coerce_float(item.get("vwap_delta"), 0.0) or 0.0 for item in observation_buffer) / count
+    orb_mean = sum(int(item.get("orb_state", 0) or 0) for item in observation_buffer) / count
+    if orb_mean >= 0.4:
+        orb_state = 1
+    elif orb_mean <= -0.4:
+        orb_state = -1
+    else:
+        orb_state = 0
+    return {
+        "adx": round(adx, 2),
+        "vwap_delta": round(vwap_delta, 4),
+        "orb_state": orb_state,
+    }
+
+
+def _update_stable_decision_buffer(state, ta_data, regime_state, now_ts=None):
+    now_ts = int(now_ts or time.time())
+    state = copy.deepcopy(state if isinstance(state, dict) else _default_stable_decision_state(now_ts))
+    observation_buffer = list(state.get("observation_buffer") or [])
+    observation = _stable_decision_observation(ta_data, regime_state, now_ts)
+    if observation_buffer and int(observation_buffer[-1].get("bucket_ts", -1)) == observation["bucket_ts"]:
+        observation_buffer[-1] = observation
+    else:
+        observation_buffer.append(observation)
+    observation_buffer = _stable_decision_prune_buffer(observation_buffer, now_ts)
+    state["observation_buffer"] = observation_buffer
+
+    aggregated = _stable_decision_aggregate_observations(observation_buffer)
+    buffered_ta = copy.deepcopy(ta_data if isinstance(ta_data, dict) else {})
+    volatility_regime = dict(buffered_ta.get("volatility_regime") or {})
+    structure_context = dict(buffered_ta.get("structure_context") or {})
+    volatility_regime["adx_14"] = aggregated["adx"]
+    structure_context["distSessionVwapPct"] = aggregated["vwap_delta"]
+    structure_context["openingRangeBreak"] = aggregated["orb_state"]
+    buffered_ta["volatility_regime"] = volatility_regime
+    buffered_ta["structure_context"] = structure_context
+    buffered_ta["decision_buffer"] = {
+        "bars": len(observation_buffer),
+        "window_seconds": STABLE_DECISION_BUFFER_WINDOW_SECONDS,
+        "aggregated": aggregated,
+    }
+    return state, buffered_ta
+
+
+def _build_stable_decision_raw_profile(
+    prediction,
+    ta_data,
+    regime_state,
+    decision_status,
+    execution_state,
+    execution_quality,
+    recent_flip_count,
+    now_ts,
+):
+    ta_data = ta_data if isinstance(ta_data, dict) else {}
+    regime_state = regime_state if isinstance(regime_state, dict) else {}
+    decision_status = decision_status if isinstance(decision_status, dict) else {}
+    execution_quality = execution_quality if isinstance(execution_quality, dict) else {}
+    direction = _stable_decision_direction(prediction, decision_status, execution_quality)
+    setup_type = _stable_decision_signal_setup(execution_quality)
+    market_structure = str(((ta_data.get("price_action") or {}).get("structure")) or "Consolidating")
+    quality_grade = str(execution_quality.get("grade") or "No Trade").strip() or "No Trade"
+    score = int(round(_coerce_float(execution_quality.get("score"), 0.0) or 0.0))
+    adjusted_confidence = max(
+        0,
+        min(100, score - (recent_flip_count * STABLE_DECISION_CONFIDENCE_FLIP_PENALTY)),
+    )
+    raw_profile = {
+        "direction": direction,
+        "setup_type": setup_type,
+        "execution_quality": quality_grade if quality_grade in {"A", "B", "C"} else "No Trade",
+        "confidence": adjusted_confidence,
+        "session": _stable_decision_session_label(ta_data),
+        "bar_timestamp": _stable_decision_bar_timestamp(ta_data, now_ts),
+        "market_structure": market_structure,
+        "event_regime": str(regime_state.get("event_regime") or "normal"),
+        "execution_status": str((execution_state or {}).get("status") or "stand_aside"),
+        "action_state": str((execution_state or {}).get("actionState") or "WAIT"),
+    }
+    raw_profile["signal_signature"] = (
+        f"{raw_profile['direction']}|{raw_profile['setup_type']}|{raw_profile['execution_quality']}"
+    )
+    raw_profile["target_state"] = _stable_decision_target_state({}, raw_profile)
+    raw_profile["signature"] = f"{raw_profile['signal_signature']}|{raw_profile['target_state']}"
+    return raw_profile
+
+
+def _stable_decision_recent_flip_count(flip_history, now_ts):
+    now_ts = int(now_ts or time.time())
+    return len(
+        [
+            item
+            for item in list(flip_history or [])
+            if now_ts - int(item.get("ts", now_ts) or now_ts) <= STABLE_DECISION_FLIP_WINDOW_SECONDS
+        ]
+    )
+
+
+def _stable_decision_update_signal_buffer(state, raw_profile, now_ts=None):
+    now_ts = int(now_ts or time.time())
+    state = copy.deepcopy(state if isinstance(state, dict) else _default_stable_decision_state(now_ts))
+    signal_buffer = list(state.get("signal_buffer") or [])
+    signal_entry = {
+        "bucket_ts": _stable_decision_bucket_ts(now_ts),
+        "ts": now_ts,
+        "direction": raw_profile.get("direction"),
+        "setup_type": raw_profile.get("setup_type"),
+        "execution_quality": raw_profile.get("execution_quality"),
+        "confidence": raw_profile.get("confidence"),
+        "target_state": raw_profile.get("target_state"),
+        "session": raw_profile.get("session"),
+        "signal_signature": raw_profile.get("signal_signature"),
+        "signature": raw_profile.get("signature"),
+    }
+    if signal_buffer and int(signal_buffer[-1].get("bucket_ts", -1)) == signal_entry["bucket_ts"]:
+        signal_buffer[-1] = signal_entry
+    else:
+        signal_buffer.append(signal_entry)
+    signal_buffer = _stable_decision_prune_buffer(signal_buffer, now_ts)
+    state["signal_buffer"] = signal_buffer
+    return state, signal_buffer
+
+
+def _stable_decision_consecutive_matches(signal_buffer, signal_signature):
+    signal_buffer = list(signal_buffer or [])
+    count = 0
+    first_ts = 0
+    for item in reversed(signal_buffer):
+        if str(item.get("signal_signature") or "") != str(signal_signature or ""):
+            break
+        count += 1
+        first_ts = int(item.get("ts", 0) or 0)
+    duration = 0
+    if count and first_ts:
+        duration = max(0, int(signal_buffer[-1].get("ts", first_ts) or first_ts) - first_ts)
+    return count, duration
+
+
+def _stable_decision_consecutive_opposition(signal_buffer, stable_decision):
+    signal_buffer = list(signal_buffer or [])
+    stable_decision = stable_decision if isinstance(stable_decision, dict) else {}
+    stable_direction = str(stable_decision.get("direction") or "Neutral")
+    stable_signature = str(stable_decision.get("signal_signature") or "")
+    count = 0
+    first_ts = 0
+    for item in reversed(signal_buffer):
+        direction = str(item.get("direction") or "Neutral")
+        signal_signature = str(item.get("signal_signature") or "")
+        target_state = str(item.get("target_state") or "SCANNING")
+        if stable_direction == "Long":
+            is_opposing = direction == "Short" or target_state in {"SCANNING", "INVALIDATED"}
+        elif stable_direction == "Short":
+            is_opposing = direction == "Long" or target_state in {"SCANNING", "INVALIDATED"}
+        else:
+            is_opposing = signal_signature != stable_signature and target_state in {"CANDIDATE", "CONFIRMED", "ACTIVE"}
+        if not is_opposing:
+            break
+        count += 1
+        first_ts = int(item.get("ts", 0) or 0)
+    duration = 0
+    if count and first_ts:
+        duration = max(0, int(signal_buffer[-1].get("ts", first_ts) or first_ts) - first_ts)
+    return count, duration
+
+
+def _stable_decision_buffer_new_bars(state, now_ts=None):
+    now_ts = int(now_ts or time.time())
+    state = state if isinstance(state, dict) else {}
+    last_bucket = int(state.get("last_evaluation_bucket_ts", 0) or 0)
+    observation_buffer = list(state.get("observation_buffer") or [])
+    return len(
+        [
+            item
+            for item in observation_buffer
+            if int(item.get("bucket_ts", now_ts) or now_ts) > last_bucket
+        ]
+    )
+
+
+def _append_decision_churn_log(event):
+    event = event if isinstance(event, dict) else {}
+    payload = _load_json_file(DECISION_CHURN_LOG_FILE, {"events": []})
+    events = list(payload.get("events") or [])
+    events.append(event)
+    events = events[-DECISION_CHURN_LOG_LIMIT:]
+    _save_json_file(DECISION_CHURN_LOG_FILE, {"events": events})
+
+
+def _record_stable_decision_churn(state, event, persist=False):
+    state = state if isinstance(state, dict) else _default_stable_decision_state()
+    event = event if isinstance(event, dict) else {}
+    recent_churn = list(state.get("recent_churn") or [])
+    recent_churn.append(event)
+    state["recent_churn"] = recent_churn[-50:]
+    state["last_suppression_reason"] = str(event.get("suppression_reason") or "")
+    state["last_hold_reason"] = str(event.get("hold_reason") or "")
+    if persist:
+        _append_decision_churn_log(event)
+    return state
+
+
+def _stable_decision_with_timing_fields(stable_decision, state, now_ts=None):
+    now_ts = int(now_ts or time.time())
+    stable_decision = dict(stable_decision or _stable_decision_default_payload(now_ts=now_ts))
+    lock_until_ts = int(state.get("decision_lock_until_ts", 0) or 0)
+    new_bars = _stable_decision_buffer_new_bars(state, now_ts)
+    remaining_bars = max(0, STABLE_DECISION_REEVALUATION_BARS - new_bars)
+    next_bucket_ts = _stable_decision_bucket_ts(now_ts) + STABLE_DECISION_BUFFER_BUCKET_SECONDS
+    if remaining_bars:
+        next_eval_ts = next_bucket_ts + max(0, remaining_bars - 1) * STABLE_DECISION_BUFFER_BUCKET_SECONDS
+    else:
+        next_eval_ts = next_bucket_ts
+    if lock_until_ts > now_ts:
+        next_eval_ts = max(next_eval_ts, lock_until_ts)
+    stable_decision["decision_locked_until"] = _utc_iso_timestamp(lock_until_ts) or stable_decision.get("decision_locked_until")
+    stable_decision["next_evaluation"] = _utc_iso_timestamp(next_eval_ts) or stable_decision.get("next_evaluation")
+    stable_decision["locked"] = lock_until_ts > now_ts
+    stable_decision["suppression_reason"] = str(state.get("last_suppression_reason") or stable_decision.get("suppression_reason") or "")
+    stable_decision["hold_reason"] = str(state.get("last_hold_reason") or stable_decision.get("hold_reason") or "")
+    stable_decision["flip_count_10m"] = _stable_decision_recent_flip_count(state.get("flip_history"), now_ts)
+    return stable_decision
+
+
+def _clear_execution_quality_trade_plan(execution_quality):
+    execution_quality = dict(execution_quality or {})
+    execution_quality["entry"] = {
+        "low": None,
+        "high": None,
+        "mid": None,
+        "text": "Wait for a cleaner location",
+    }
+    execution_quality["stopLoss"] = {
+        "price": None,
+        "basis": "No structural stop available",
+        "distance": None,
+        "atrMultiple": None,
+    }
+    execution_quality["targets"] = [
+        {
+            "label": "TP1",
+            "price": None,
+            "basis": "No target available",
+            "rMultiple": None,
+        },
+        {
+            "label": "TP2",
+            "price": None,
+            "basis": "No runner target available",
+            "rMultiple": None,
+        },
+    ]
+    execution_quality["riskReward"] = 0.0
+    execution_quality["positionSizeNote"] = "Skip until blockers clear"
+    execution_quality["invalidations"] = [
+        "No trade until VWAP, ORB, pivots, and ADX align.",
+    ]
+    return execution_quality
+
+
+def _stable_decision_apply_payload_overrides(
+    stable_decision,
+    decision_status,
+    execution_state,
+    execution_quality,
+):
+    stable_decision = dict(stable_decision or {})
+    decision_status = dict(decision_status or {})
+    execution_state = dict(execution_state or {})
+    execution_quality = dict(execution_quality or {})
+
+    decision_state = str(stable_decision.get("decision_state") or "SCANNING")
+    direction = str(stable_decision.get("direction") or "Neutral")
+    quality_status = _stable_decision_quality_status(decision_state)
+    raw_direction = str(execution_quality.get("direction") or "Neutral")
+
+    execution_quality["rawScore"] = execution_quality.get("score")
+    execution_quality["rawGrade"] = execution_quality.get("grade")
+    execution_quality["rawDirection"] = raw_direction
+    execution_quality["score"] = int(stable_decision.get("confidence") or 0)
+    execution_quality["grade"] = str(stable_decision.get("execution_quality") or "No Trade")
+    execution_quality["status"] = quality_status
+    execution_quality["setup"] = str(stable_decision.get("setup_type") or execution_quality.get("setup") or "No Clean Entry")
+    execution_quality["direction"] = direction
+    execution_quality["decisionState"] = decision_state
+    execution_quality["decisionLockedUntil"] = stable_decision.get("decision_locked_until")
+    execution_quality["flipCount10m"] = stable_decision.get("flip_count_10m")
+    execution_quality["changeReason"] = stable_decision.get("change_reason")
+    execution_quality["nextEvaluation"] = stable_decision.get("next_evaluation")
+    execution_quality["suppressionReason"] = stable_decision.get("suppression_reason")
+
+    plan_direction_mismatch = (
+        raw_direction in {"Long", "Short"}
+        and direction in {"Long", "Short"}
+        and raw_direction != direction
+    )
+    if (
+        execution_quality["grade"] == "No Trade"
+        or quality_status == "blocked"
+        or plan_direction_mismatch
+    ):
+        execution_quality = _clear_execution_quality_trade_plan(execution_quality)
+
+    if decision_state == "SCANNING":
+        decision_status["status"] = "wait"
+        decision_status["text"] = "Stable decision engine is scanning. Hold for cleaner confirmation."
+        execution_state["status"] = "stand_aside"
+        execution_state["title"] = "Scanning"
+        execution_state["text"] = decision_status["text"]
+        execution_state["action"] = "hold"
+        execution_state["actionState"] = "WAIT"
+        execution_state["entryAllowed"] = False
+        execution_state["exitRecommended"] = False
+    elif decision_state == "CANDIDATE":
+        decision_status["status"] = "wait"
+        decision_status["text"] = f"Watchlist only. {stable_decision.get('setup_type') or 'Setup'} is building but not yet confirmed."
+        execution_state["status"] = "prepare"
+        execution_state["title"] = "Candidate Setup"
+        execution_state["text"] = decision_status["text"]
+        execution_state["action"] = "prepare"
+        execution_state["actionState"] = "SETUP_LONG" if direction == "Long" else "SETUP_SHORT" if direction == "Short" else "WAIT"
+        execution_state["entryAllowed"] = False
+        execution_state["exitRecommended"] = False
+    elif decision_state in {"CONFIRMED", "ACTIVE"}:
+        existing_status = str(execution_state.get("status") or "stand_aside")
+        existing_action_state = str(execution_state.get("actionState") or "WAIT")
+        existing_active_state = existing_action_state in {"LONG_ACTIVE", "SHORT_ACTIVE"} or existing_status == "hold"
+        if existing_active_state:
+            if direction in {"Long", "Short"}:
+                decision_status["status"] = "buy" if direction == "Long" else "sell"
+            if not str(decision_status.get("text") or "").strip():
+                decision_status["text"] = (
+                    "Safer to look for a buy. Long state is confirmed with acceptable tradeability."
+                    if direction == "Long"
+                    else "Safer to look for a sell. Short state is confirmed with acceptable tradeability."
+                    if direction == "Short"
+                    else "Active execution state is confirmed."
+                )
+            execution_state["status"] = existing_status or "hold"
+            execution_state["title"] = str(
+                execution_state.get("title")
+                or ("Active Execution" if decision_state == "ACTIVE" else "Confirmed Setup")
+            )
+            execution_state["text"] = str(
+                execution_state.get("text")
+                or decision_status.get("text")
+                or "Execution state is active and aligned."
+            )
+            execution_state["action"] = str(execution_state.get("action") or existing_status or "enter")
+            execution_state["actionState"] = existing_action_state or (
+                "LONG_ACTIVE" if direction == "Long" else "SHORT_ACTIVE" if direction == "Short" else "WAIT"
+            )
+            execution_state["entryAllowed"] = bool(execution_state.get("entryAllowed", True))
+            execution_state["exitRecommended"] = bool(execution_state.get("exitRecommended", False))
+        else:
+            decision_status["status"] = "buy" if direction == "Long" else "sell" if direction == "Short" else "wait"
+            state_label = "Active execution" if decision_state == "ACTIVE" else "Confirmed setup"
+            decision_status["text"] = f"{state_label}. {stable_decision.get('setup_type') or 'Directional setup'} is stable enough to act on."
+            execution_state["status"] = "enter"
+            execution_state["title"] = "Active Execution" if decision_state == "ACTIVE" else "Confirmed Setup"
+            execution_state["text"] = decision_status["text"]
+            execution_state["action"] = "enter"
+            execution_state["actionState"] = "LONG_ACTIVE" if direction == "Long" else "SHORT_ACTIVE" if direction == "Short" else "WAIT"
+            execution_state["entryAllowed"] = True
+            execution_state["exitRecommended"] = False
+    else:
+        decision_status["status"] = "exit"
+        decision_status["text"] = f"Setup invalidated. {stable_decision.get('change_reason') or 'MOMENTUM_SHIFT'} broke the prior idea."
+        execution_state["status"] = "stand_aside"
+        execution_state["title"] = "Setup Invalidated"
+        execution_state["text"] = decision_status["text"]
+        execution_state["action"] = "hold"
+        execution_state["actionState"] = "WAIT"
+        execution_state["entryAllowed"] = False
+        execution_state["exitRecommended"] = False
+        execution_quality["grade"] = "No Trade"
+        execution_quality["status"] = "blocked"
+
+    decision_status["decisionState"] = decision_state
+    decision_status["decisionLockedUntil"] = stable_decision.get("decision_locked_until")
+    decision_status["changeReason"] = stable_decision.get("change_reason")
+    decision_status["flipCount10m"] = stable_decision.get("flip_count_10m")
+    decision_status["suppressionReason"] = stable_decision.get("suppression_reason")
+
+    execution_state["decisionState"] = decision_state
+    execution_state["decisionLockedUntil"] = stable_decision.get("decision_locked_until")
+    execution_state["changeReason"] = stable_decision.get("change_reason")
+    execution_state["flipCount10m"] = stable_decision.get("flip_count_10m")
+    execution_state["antiFlipLockActive"] = bool(stable_decision.get("locked"))
+    return stable_decision, decision_status, execution_state, execution_quality
+
+
+def _apply_stable_decision_controls(
+    state,
+    prediction,
+    ta_data,
+    regime_state,
+    decision_status,
+    execution_state,
+    execution_quality,
+    now_ts=None,
+    persist_churn=False,
+):
+    now_ts = int(now_ts or time.time())
+    state = copy.deepcopy(state if isinstance(state, dict) else _default_stable_decision_state(now_ts))
+    stable_decision = dict(state.get("stable_decision") or _stable_decision_default_payload(now_ts=now_ts))
+    previous_decision = dict(stable_decision)
+
+    flip_history = [
+        item
+        for item in list(state.get("flip_history") or [])
+        if now_ts - int(item.get("ts", now_ts) or now_ts) <= STABLE_DECISION_FLIP_WINDOW_SECONDS
+    ]
+    state["flip_history"] = flip_history
+    recent_flip_count = _stable_decision_recent_flip_count(flip_history, now_ts)
+
+    raw_profile = _build_stable_decision_raw_profile(
+        prediction,
+        ta_data,
+        regime_state,
+        decision_status,
+        execution_state,
+        execution_quality,
+        recent_flip_count,
+        now_ts,
+    )
+    raw_profile["target_state"] = _stable_decision_target_state(previous_decision, raw_profile)
+    raw_profile["signature"] = f"{raw_profile['signal_signature']}|{raw_profile['target_state']}"
+
+    state, signal_buffer = _stable_decision_update_signal_buffer(state, raw_profile, now_ts)
+    same_signal_count, same_signal_duration = _stable_decision_consecutive_matches(
+        signal_buffer,
+        raw_profile.get("signal_signature"),
+    )
+    opposing_count, opposing_duration = _stable_decision_consecutive_opposition(
+        signal_buffer,
+        previous_decision,
+    )
+    new_bars = _stable_decision_buffer_new_bars(state, now_ts)
+
+    raw_execution_is_active = (
+        str(raw_profile.get("action_state") or "WAIT") in {"LONG_ACTIVE", "SHORT_ACTIVE"}
+        or str(raw_profile.get("execution_status") or "stand_aside") == "hold"
+    )
+
+    if raw_profile["target_state"] in {"CONFIRMED", "ACTIVE"} and not raw_execution_is_active:
+        if same_signal_count < STABLE_DECISION_REEVALUATION_BARS or same_signal_duration < STABLE_DECISION_CANDIDATE_SECONDS:
+            raw_profile["target_state"] = "CANDIDATE"
+            raw_profile["signature"] = f"{raw_profile['signal_signature']}|{raw_profile['target_state']}"
+    if previous_decision.get("decision_state") in {"CONFIRMED", "ACTIVE"}:
+        if opposing_count < 2 and opposing_duration < STABLE_DECISION_INVALIDATION_SECONDS:
+            if raw_profile["target_state"] == "INVALIDATED":
+                raw_profile["target_state"] = str(previous_decision.get("decision_state") or "CONFIRMED")
+                raw_profile["signature"] = f"{raw_profile['signal_signature']}|{raw_profile['target_state']}"
+
+    allow_reevaluation = not state.get("last_evaluation_bucket_ts") or new_bars >= STABLE_DECISION_REEVALUATION_BARS
+    if previous_decision.get("decision_state") in {"CONFIRMED", "ACTIVE"} and (
+        opposing_count >= 2 or opposing_duration >= STABLE_DECISION_INVALIDATION_SECONDS
+    ):
+        allow_reevaluation = True
+
+    if not allow_reevaluation:
+        state["stable_decision"] = _stable_decision_with_timing_fields(previous_decision, state, now_ts)
+        stable_decision, decision_status, execution_state, execution_quality = _stable_decision_apply_payload_overrides(
+            state["stable_decision"],
+            decision_status,
+            execution_state,
+            execution_quality,
+        )
+        state["stable_decision"] = stable_decision
+        return stable_decision, decision_status, execution_state, execution_quality, state
+
+    state["last_evaluation_bucket_ts"] = _stable_decision_bucket_ts(now_ts)
+    state["last_suppression_reason"] = ""
+    state["last_hold_reason"] = ""
+
+    target_state = str(raw_profile.get("target_state") or "SCANNING")
+    previous_state = str(previous_decision.get("decision_state") or "SCANNING")
+    previous_signal_signature = str(previous_decision.get("signal_signature") or "")
+    change_reason = _stable_decision_reason(previous_decision, raw_profile)
+
+    lock_until_ts = int(state.get("decision_lock_until_ts", 0) or 0)
+    lock_active = lock_until_ts > now_ts
+    same_signal = raw_profile.get("signal_signature") == previous_signal_signature and previous_signal_signature
+    upgrade = same_signal and _stable_decision_state_rank(target_state) > _stable_decision_state_rank(previous_state)
+    downgrade = same_signal and _stable_decision_state_rank(target_state) < _stable_decision_state_rank(previous_state)
+    changed_signal = raw_profile.get("signal_signature") != previous_signal_signature
+    decision_changed = target_state != previous_state or changed_signal
+
+    if downgrade and lock_active:
+        target_state = previous_state
+        decision_changed = False
+
+    if decision_changed and lock_active and not upgrade:
+        hold_reason = f"HOLD: {previous_decision.get('setup_type') or 'previous decision'}"
+        churn_event = {
+            "ts": now_ts,
+            "suppression_reason": "LOCKED",
+            "hold_reason": hold_reason,
+            "from": previous_decision,
+            "candidate": {
+                "decision_state": raw_profile.get("target_state"),
+                "setup_type": raw_profile.get("setup_type"),
+                "execution_quality": raw_profile.get("execution_quality"),
+                "confidence": raw_profile.get("confidence"),
+                "change_reason": change_reason,
+            },
+        }
+        state = _record_stable_decision_churn(state, churn_event, persist=persist_churn)
+        state["stable_decision"] = _stable_decision_with_timing_fields(previous_decision, state, now_ts)
+        stable_decision, decision_status, execution_state, execution_quality = _stable_decision_apply_payload_overrides(
+            state["stable_decision"],
+            decision_status,
+            execution_state,
+            execution_quality,
+        )
+        state["stable_decision"] = stable_decision
+        return stable_decision, decision_status, execution_state, execution_quality, state
+
+    decision_ring = list(state.get("decision_ring") or [])
+    decision_ring = decision_ring[-STABLE_DECISION_HISTORY_LIMIT:]
+    candidate_signature = f"{raw_profile['signal_signature']}|{target_state}"
+    if decision_changed:
+        recent_repeat = next(
+            (
+                item
+                for item in reversed(decision_ring)
+                if item.get("signature") == candidate_signature
+                and now_ts - int(item.get("ts", now_ts) or now_ts) <= STABLE_DECISION_REPEAT_SUPPRESS_SECONDS
+            ),
+            None,
+        )
+        if recent_repeat and candidate_signature != str(previous_decision.get("signature") or ""):
+            hold_reason = f"HOLD: {previous_decision.get('setup_type') or 'previous decision'}"
+            churn_event = {
+                "ts": now_ts,
+                "suppression_reason": "REPEAT",
+                "hold_reason": hold_reason,
+                "from": previous_decision,
+                "candidate": {
+                    "decision_state": target_state,
+                    "setup_type": raw_profile.get("setup_type"),
+                    "execution_quality": raw_profile.get("execution_quality"),
+                    "confidence": raw_profile.get("confidence"),
+                    "change_reason": change_reason,
+                },
+            }
+            state = _record_stable_decision_churn(state, churn_event, persist=persist_churn)
+            state["stable_decision"] = _stable_decision_with_timing_fields(previous_decision, state, now_ts)
+            stable_decision, decision_status, execution_state, execution_quality = _stable_decision_apply_payload_overrides(
+                state["stable_decision"],
+                decision_status,
+                execution_state,
+                execution_quality,
+            )
+            state["stable_decision"] = stable_decision
+            return stable_decision, decision_status, execution_state, execution_quality, state
+
+        if len(decision_ring) >= 2:
+            immediate_previous = decision_ring[-1]
+            prior_previous = decision_ring[-2]
+            if (
+                prior_previous.get("signature") == candidate_signature
+                and immediate_previous.get("signature") != candidate_signature
+                and now_ts - int(immediate_previous.get("ts", now_ts) or now_ts) <= STABLE_DECISION_OSCILLATION_SECONDS
+            ):
+                hold_reason = f"HOLD: {previous_decision.get('setup_type') or 'previous decision'}"
+                churn_event = {
+                    "ts": now_ts,
+                    "suppression_reason": "OSCILLATION",
+                    "hold_reason": hold_reason,
+                    "from": previous_decision,
+                    "candidate": {
+                        "decision_state": target_state,
+                        "setup_type": raw_profile.get("setup_type"),
+                        "execution_quality": raw_profile.get("execution_quality"),
+                        "confidence": raw_profile.get("confidence"),
+                        "change_reason": change_reason,
+                    },
+                }
+                state = _record_stable_decision_churn(state, churn_event, persist=persist_churn)
+                state["stable_decision"] = _stable_decision_with_timing_fields(previous_decision, state, now_ts)
+                stable_decision, decision_status, execution_state, execution_quality = _stable_decision_apply_payload_overrides(
+                    state["stable_decision"],
+                    decision_status,
+                    execution_state,
+                    execution_quality,
+                )
+                state["stable_decision"] = stable_decision
+                return stable_decision, decision_status, execution_state, execution_quality, state
+
+    output_setup = raw_profile.get("setup_type") or "No Clean Entry"
+    output_grade = raw_profile.get("execution_quality") or "No Trade"
+    output_confidence = int(raw_profile.get("confidence") or 0)
+    if target_state == "SCANNING":
+        output_grade = "No Trade"
+        output_confidence = min(output_confidence, 59)
+    elif target_state == "INVALIDATED":
+        output_setup = str(previous_decision.get("setup_type") or output_setup)
+        output_grade = "No Trade"
+        output_confidence = min(output_confidence, 59)
+    elif output_grade not in {"A", "B", "C"}:
+        output_grade = "B" if target_state in {"CONFIRMED", "ACTIVE"} else "C"
+
+    stable_decision = {
+        "symbol": "XAUUSD",
+        "decision_state": target_state,
+        "setup_type": output_setup,
+        "execution_quality": output_grade,
+        "confidence": output_confidence,
+        "decision_locked_until": _utc_iso_timestamp(now_ts + STABLE_DECISION_LOCK_SECONDS),
+        "flip_count_10m": recent_flip_count,
+        "change_reason": change_reason if decision_changed else str(previous_decision.get("change_reason") or change_reason),
+        "session": str(raw_profile.get("session") or previous_decision.get("session") or "Unknown"),
+        "bar_timestamp": str(raw_profile.get("bar_timestamp") or previous_decision.get("bar_timestamp") or _utc_iso_timestamp(now_ts) or ""),
+        "next_evaluation": _utc_iso_timestamp(now_ts + STABLE_DECISION_BUFFER_BUCKET_SECONDS),
+        "signal_signature": str(raw_profile.get("signal_signature") or "Neutral|No Clean Entry|No Trade"),
+        "signature": candidate_signature,
+        "direction": str(raw_profile.get("direction") or "Neutral"),
+        "suppression_reason": "",
+        "hold_reason": "",
+        "locked": False,
+    }
+
+    previous_direction = str(previous_decision.get("direction") or "Neutral")
+    current_signal_signature = str(raw_profile.get("signal_signature") or "")
+    is_flip = bool(
+        previous_signal_signature
+        and current_signal_signature
+        and previous_direction in {"Long", "Short"}
+        and current_signal_signature != previous_signal_signature
+    )
+
+    if decision_changed:
+        flip_event = {
+            "ts": now_ts,
+            "from": str(previous_decision.get("signature") or ""),
+            "to": candidate_signature,
+            "reason": stable_decision.get("change_reason"),
+        }
+        flip_history = list(state.get("flip_history") or [])
+        if is_flip:
+            flip_history.append(flip_event)
+            flip_history = flip_history[-50:]
+            state["flip_history"] = flip_history
+        if is_flip and _stable_decision_recent_flip_count(flip_history, now_ts) > 3:
+            state = _record_stable_decision_churn(
+                state,
+                {
+                    "ts": now_ts,
+                    "suppression_reason": "FLIP_ALERT",
+                    "hold_reason": "Flip count exceeded 3 within 10 minutes.",
+                    "from": previous_decision,
+                    "candidate": stable_decision,
+                },
+                persist=persist_churn,
+            )
+        decision_ring.append(
+            {
+                "ts": now_ts,
+                "signature": candidate_signature,
+                "decision_state": stable_decision.get("decision_state"),
+                "setup_type": stable_decision.get("setup_type"),
+                "execution_quality": stable_decision.get("execution_quality"),
+                "confidence": stable_decision.get("confidence"),
+                "session": stable_decision.get("session"),
+                "bar_timestamp": stable_decision.get("bar_timestamp"),
+            }
+        )
+        decision_ring = decision_ring[-STABLE_DECISION_HISTORY_LIMIT:]
+        state["decision_ring"] = decision_ring
+        state["last_decision_time_ts"] = now_ts
+        state["decision_lock_until_ts"] = now_ts + STABLE_DECISION_LOCK_SECONDS
+    stable_decision = _stable_decision_with_timing_fields(stable_decision, state, now_ts)
+    state["stable_decision"] = stable_decision
+    stable_decision, decision_status, execution_state, execution_quality = _stable_decision_apply_payload_overrides(
+        stable_decision,
+        decision_status,
+        execution_state,
+        execution_quality,
+    )
+    state["stable_decision"] = stable_decision
+    return stable_decision, decision_status, execution_state, execution_quality, state
+
+
 def _derive_dashboard_action(payload, ta_data=None):
     payload = payload if isinstance(payload, dict) else {}
     ta_data = ta_data if isinstance(ta_data, dict) else (
@@ -2603,6 +3869,7 @@ def _sanitize_client_prediction_payload(payload):
         "TradePlaybook",
         "DashboardAction",
         "RR200Signal",
+        "TradeBrainRuntime",
     ):
         sanitized.pop(key, None)
 
@@ -4137,6 +5404,7 @@ def _extract_indicator_snapshot(payload, previous_snapshot=None):
     regime_state = payload.get("RegimeState", {}) if isinstance(payload, dict) else {}
     execution_state = payload.get("ExecutionState", {}) if isinstance(payload, dict) else {}
     execution_quality = payload.get("ExecutionQuality", {}) if isinstance(payload, dict) else {}
+    stable_decision = payload.get("StableDecision", {}) if isinstance(payload, dict) else {}
     structure_context = ta_data.get("structure_context", {}) if isinstance(ta_data, dict) else {}
     previous_snapshot = previous_snapshot if isinstance(previous_snapshot, dict) else {}
     try:
@@ -4160,6 +5428,20 @@ def _extract_indicator_snapshot(payload, previous_snapshot=None):
         execution_quality_raw_signal,
         previous_snapshot,
     )
+    stable_lock_until_ts = _parse_utc_timestamp(
+        (stable_decision or {}).get("decision_locked_until"),
+        default=0,
+    )
+    stable_lock_active = stable_lock_until_ts > int(time.time())
+    if stable_lock_active:
+        if previous_snapshot.get("market_structure") is not None:
+            pa = dict(pa or {})
+            pa["structure"] = previous_snapshot.get("market_structure")
+        micro_vwap_delta = previous_snapshot.get("micro_vwap_delta_pct", micro_vwap_delta)
+        execution_quality_signal = previous_snapshot.get("execution_quality_signal", execution_quality_signal)
+        execution_quality_raw_signal = previous_snapshot.get("execution_quality_raw_signal", execution_quality_raw_signal)
+        micro_orb_state = previous_snapshot.get("micro_orb_state", micro_orb_state)
+        micro_sweep_state = previous_snapshot.get("micro_sweep_state", micro_sweep_state)
     return {
         "warning_ladder": (regime_state.get("warning_ladder") if isinstance(regime_state, dict) else None),
         "event_regime": (regime_state.get("event_regime") if isinstance(regime_state, dict) else None),
@@ -4399,8 +5681,9 @@ def _rr200_delivery_allowed(now_ts):
     return _rr200_should_deliver(counter, now_ts)
 
 
-def _build_prediction_response():
+def _build_prediction_response(user_id="anonymous"):
     """Central prediction builder used by both HTTP and websocket monitor."""
+    now_ts = int(time.time())
     ta_data = predict_gold.get_technical_analysis()
     if not isinstance(ta_data, dict):
         ta_data = {"error": "Technical analysis payload is invalid."}
@@ -4436,6 +5719,18 @@ def _build_prediction_response():
     prediction = _stabilize_prediction(
         raw_prediction,
         ta_data,
+    )
+    initial_regime_state = dict(prediction.get("RegimeState", {}) or {})
+    trade_brain_market_data = _build_trade_brain_market_data(ta_data, initial_regime_state)
+    raw_learning_direction = _trade_brain_direction_from_prediction(prediction)
+    learning_adjustment = trade_brain_service.get_learning_adjustment(
+        direction=raw_learning_direction,
+        market_data=trade_brain_market_data,
+        user_id=user_id,
+    )
+    prediction = _apply_trade_brain_learning_to_prediction(
+        prediction,
+        learning_adjustment,
     )
     market_state = _build_market_state_from_prediction(prediction)
     regime_state = dict(prediction.get("RegimeState", {}) or {})
@@ -4495,11 +5790,82 @@ def _build_prediction_response():
     execution_state["actionState"] = str(
         execution_state.get("actionState") or "WAIT"
     )
+    aligned_contract = _align_dashboard_response_contract(
+        {
+            "MarketState": market_state,
+            "ExecutionPermission": execution_permission,
+            "TradePlaybook": trade_playbook,
+            "ExecutionState": execution_state,
+        }
+    )
+    execution_state = dict(aligned_contract.get("ExecutionState") or execution_state)
+    decision_status = _align_decision_status_with_execution_state(
+        decision_status,
+        execution_state,
+    )
+
+    stable_decision_state = _load_json_file(
+        STABLE_DECISION_STATE_FILE,
+        _default_stable_decision_state(now_ts),
+    )
+    stable_decision_state = _reset_stable_decision_state_if_stale(
+        stable_decision_state,
+        ta_data,
+        now_ts,
+    )
+    stable_decision_state, buffered_ta_data = _update_stable_decision_buffer(
+        stable_decision_state,
+        ta_data,
+        regime_state,
+        now_ts,
+    )
     execution_quality = _build_execution_quality_plan(
+        buffered_ta_data,
+        regime_state,
+        decision_status,
+        execution_state,
+    )
+    execution_quality = _apply_trade_brain_learning_to_execution_quality(
+        execution_quality,
+        learning_adjustment,
+    )
+    stable_decision, decision_status, execution_state, execution_quality, stable_decision_state = _apply_stable_decision_controls(
+        stable_decision_state,
+        prediction,
         ta_data,
         regime_state,
         decision_status,
         execution_state,
+        execution_quality,
+        now_ts=now_ts,
+        persist_churn=True,
+    )
+    _save_json_file(STABLE_DECISION_STATE_FILE, stable_decision_state)
+    trade_brain_result = None
+    if trade_brain_market_data.get("price") is not None:
+        trade_brain_result = trade_brain_service.evaluate_active_trade(
+            trade_brain_market_data["price"],
+            trade_brain_market_data,
+            user_id=user_id,
+        )
+    final_trade_brain_direction = _trade_brain_direction_from_prediction(
+        {
+            **prediction,
+            "StableDecision": stable_decision,
+            "ExecutionQuality": execution_quality,
+            "DecisionStatus": decision_status,
+        }
+    )
+    trade_brain_dashboard = trade_brain_service.get_dashboard_payload(
+        user_id=user_id,
+        market_data=trade_brain_market_data,
+        learning_direction=final_trade_brain_direction,
+        learning_setup=execution_quality.get("setup"),
+    )
+    response_learning_adjustment = (
+        trade_brain_dashboard.get("learning", {}).get("currentAdjustment")
+        if isinstance(trade_brain_dashboard.get("learning"), dict)
+        else {}
     )
 
     response_payload = {
@@ -4513,6 +5879,13 @@ def _build_prediction_response():
         "ExecutionState": execution_state,
         "DecisionStatus": decision_status,
         "ExecutionQuality": execution_quality,
+        "StableDecision": stable_decision,
+        "TradeBrain": trade_brain_dashboard,
+        "TradeBrainLearning": copy.deepcopy(response_learning_adjustment or {}),
+        "TradeBrainRuntime": {
+            "trade": trade_brain_result.get("trade") if isinstance(trade_brain_result, dict) else None,
+            "events": trade_brain_result.get("events", []) if isinstance(trade_brain_result, dict) else [],
+        },
     }
 
     return response_payload, 200
@@ -4531,6 +5904,13 @@ def _indicator_monitor_loop():
 
             payload, status_code = _build_prediction_response()
             if status_code == 200:
+                trade_brain_runtime = payload.get("TradeBrainRuntime") if isinstance(payload, dict) else {}
+                if isinstance(trade_brain_runtime, dict) and trade_brain_runtime.get("events"):
+                    _emit_trade_brain_events(
+                        trade_brain_runtime.get("events"),
+                        trade=trade_brain_runtime.get("trade"),
+                        dashboard=payload.get("TradeBrain"),
+                    )
                 current_snapshot = _extract_indicator_snapshot(
                     payload,
                     previous_snapshot=last_snapshot,
@@ -4733,6 +6113,86 @@ def _on_socket_connect():
 def _on_socket_disconnect():
     with _monitor_lock:
         _monitor_state["clients"] = max(0, _monitor_state["clients"] - 1)
+
+
+@socketio.on("trade:subscribe")
+def _on_trade_subscribe(payload):
+    trade_id = str((payload or {}).get("tradeId") or "").strip() if isinstance(payload, dict) else ""
+    if not trade_id:
+        return
+    join_room(_trade_room(trade_id))
+    user_id = _get_socket_user_id(payload)
+    trade = trade_brain_service.get_active_trade(user_id=user_id)
+    if trade and trade.get("id") == trade_id:
+        dashboard = trade_brain_service.get_dashboard_payload(user_id=user_id)
+        _emit_trade_brain_trade("trade:updated", trade, dashboard, sid=request.sid)
+
+
+@socketio.on("trade:unsubscribe")
+def _on_trade_unsubscribe(payload):
+    trade_id = str((payload or {}).get("tradeId") or "").strip() if isinstance(payload, dict) else ""
+    if not trade_id:
+        return
+    leave_room(_trade_room(trade_id))
+
+
+@socketio.on("trade:evaluate")
+def _on_trade_evaluate(payload):
+    payload = payload if isinstance(payload, dict) else {}
+    user_id = _get_socket_user_id(payload)
+    market_data = payload.get("marketData") if isinstance(payload.get("marketData"), dict) else {}
+    price = _trade_brain_first_float(payload.get("price"), market_data.get("price"), default=None)
+    if price is None:
+        socketio.emit("trade:error", {"message": "Missing price."}, to=request.sid)
+        return
+    result = trade_brain_service.evaluate_active_trade(
+        price,
+        market_data,
+        decision=payload.get("decision"),
+        user_id=user_id,
+    )
+    if result is None:
+        socketio.emit("trade:error", {"message": "No active trade to evaluate."}, to=request.sid)
+        return
+    if result.get("events"):
+        _emit_trade_brain_trade("trade:updated", result.get("trade"), result.get("dashboard"), sid=request.sid)
+        _emit_trade_brain_events(result.get("events"), trade=result.get("trade"), dashboard=result.get("dashboard"))
+        return
+    _emit_trade_brain_trade("trade:updated", result.get("trade"), result.get("dashboard"), sid=request.sid)
+    _emit_trade_brain_stats(result.get("dashboard"), sid=request.sid)
+
+
+@socketio.on("emotion:tag")
+def _on_emotion_tag(payload):
+    payload = payload if isinstance(payload, dict) else {}
+    trade_id = str(payload.get("tradeId") or "").strip()
+    if not trade_id:
+        socketio.emit("trade:error", {"message": "Missing tradeId."}, to=request.sid)
+        return
+    user_id = _get_socket_user_id(payload)
+    try:
+        result = trade_brain_service.tag_emotion(
+            trade_id,
+            payload.get("emotion"),
+            note=payload.get("note"),
+            price=_trade_brain_float(payload.get("price"), None),
+            unrealized_r=_trade_brain_float(payload.get("unrealizedR"), None),
+            user_id=user_id,
+        )
+    except KeyError as exc:
+        socketio.emit("trade:error", {"message": str(exc)}, to=request.sid)
+        return
+    dashboard = trade_brain_service.get_dashboard_payload(user_id=user_id)
+    _emit_trade_brain_trade("trade:updated", result.get("trade"), dashboard)
+    socketio.emit("emotion:updated", result.get("event"))
+    _emit_trade_brain_stats(dashboard)
+
+
+@socketio.on("stats:request")
+def _on_stats_request(payload):
+    user_id = _get_socket_user_id(payload)
+    dashboard = trade_brain_service.get_dashboard_payload(user_id=user_id)
+    _emit_trade_brain_stats(dashboard, sid=request.sid)
 
 @app.after_request
 def apply_security_headers(response):
@@ -5004,10 +6464,135 @@ def post_research_brief():
     except Exception as exc:
         return jsonify({"status": "error", "message": str(exc)}), 500
 
+
+@app.route('/api/trades', methods=['GET', 'POST'])
+def handle_trades():
+    user_id = _get_request_user_id()
+    if request.method == 'POST':
+        payload = _enrich_trade_create_payload(request.get_json(silent=True) or {}, user_id)
+        try:
+            trade = trade_brain_service.enter_trade(payload, user_id=user_id)
+        except ValueError as exc:
+            return jsonify({"status": "error", "message": str(exc)}), 400
+        dashboard = trade_brain_service.get_dashboard_payload(user_id=user_id)
+        _emit_trade_brain_trade("trade:created", trade, dashboard)
+        _emit_trade_brain_stats(dashboard)
+        return jsonify({"status": "success", "trade": trade, "dashboard": dashboard}), 201
+
+    page = int(request.args.get('page', 1) or 1)
+    limit = int(request.args.get('limit', 50) or 50)
+    status = request.args.get('status')
+    listing = trade_brain_service.list_trades(user_id=user_id, status=status, page=page, limit=limit)
+    return jsonify({"status": "success", **listing}), 200
+
+
+@app.route('/api/trades/active')
+def get_active_trade():
+    user_id = _get_request_user_id()
+    dashboard = trade_brain_service.get_dashboard_payload(user_id=user_id)
+    return jsonify({"status": "success", "trade": dashboard.get("activeTrade"), "dashboard": dashboard}), 200
+
+
+@app.route('/api/trades/<trade_id>', methods=['PATCH'])
+def patch_trade(trade_id):
+    user_id = _get_request_user_id()
+    payload = request.get_json(silent=True) or {}
+    try:
+        trade = trade_brain_service.update_trade(trade_id, payload, user_id=user_id)
+    except KeyError as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 404
+    dashboard = trade_brain_service.get_dashboard_payload(user_id=user_id)
+    _emit_trade_brain_trade("trade:updated", trade, dashboard)
+    _emit_trade_brain_stats(dashboard)
+    return jsonify({"status": "success", "trade": trade, "dashboard": dashboard}), 200
+
+
+@app.route('/api/trades/<trade_id>/close', methods=['POST'])
+def close_trade(trade_id):
+    user_id = _get_request_user_id()
+    payload = request.get_json(silent=True) or {}
+    exit_price = _trade_brain_first_float(payload.get("exitPrice"), payload.get("price"), default=None)
+    if exit_price is None:
+        return jsonify({"status": "error", "message": "Missing exitPrice."}), 400
+    try:
+        result = trade_brain_service.close_trade(
+            trade_id,
+            exit_price=exit_price,
+            reason=str(payload.get("reason") or "MANUAL_EXIT"),
+            reasoning=str(payload.get("reasoning") or "Closed manually."),
+            emotion=str(payload.get("emotion") or "calm"),
+            final_pnl=_trade_brain_float(payload.get("finalPnL"), None),
+            final_r=_trade_brain_float(payload.get("finalR"), None),
+            user_id=user_id,
+        )
+    except KeyError as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 404
+    dashboard = trade_brain_service.get_dashboard_payload(user_id=user_id)
+    _emit_trade_brain_trade("trade:closed", result.get("trade"), dashboard)
+    _emit_trade_brain_stats(dashboard)
+    return jsonify({"status": "success", "trade": result.get("trade"), "dashboard": dashboard}), 200
+
+
+@app.route('/api/trades/<trade_id>/review')
+def get_trade_review(trade_id):
+    user_id = _get_request_user_id()
+    try:
+        review = trade_brain_service.get_review(trade_id, user_id=user_id)
+    except KeyError as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 404
+    return jsonify({"status": "success", "review": review}), 200
+
+
+@app.route('/api/trades/<trade_id>/snapshot', methods=['POST'])
+def post_trade_snapshot(trade_id):
+    user_id = _get_request_user_id()
+    payload = request.get_json(silent=True) or {}
+    try:
+        snapshot = trade_brain_service.record_snapshot(trade_id, payload, user_id=user_id)
+    except KeyError as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 404
+    return jsonify({"status": "success", "snapshot": snapshot}), 200
+
+
+@app.route('/api/stats')
+def get_trade_brain_stats():
+    user_id = _get_request_user_id()
+    return jsonify({"status": "success", "stats": trade_brain_service.get_stats(user_id=user_id)}), 200
+
+
+@app.route('/api/analytics/setups')
+def get_trade_setup_analytics():
+    user_id = _get_request_user_id()
+    return jsonify({"status": "success", "setups": trade_brain_service.get_setup_analytics(user_id=user_id)}), 200
+
+
+@app.route('/api/analytics/emotions')
+def get_trade_emotion_analytics():
+    user_id = _get_request_user_id()
+    return jsonify({"status": "success", "emotions": trade_brain_service.get_emotion_analytics(user_id=user_id)}), 200
+
+
+@app.route('/api/analytics/sessions')
+def get_trade_session_analytics():
+    user_id = _get_request_user_id()
+    return jsonify({"status": "success", "sessions": trade_brain_service.get_session_analytics(user_id=user_id)}), 200
+
+
+@app.route('/api/analytics/r-distribution')
+def get_trade_r_distribution():
+    user_id = _get_request_user_id()
+    return jsonify({"status": "success", "distribution": trade_brain_service.get_r_distribution(user_id=user_id)}), 200
+
+
+@app.route('/api/analytics/monthly')
+def get_trade_monthly_analytics():
+    user_id = _get_request_user_id()
+    return jsonify({"status": "success", "monthly": trade_brain_service.get_monthly_analytics(user_id=user_id)}), 200
+
 @app.route('/api/predict')
 def get_prediction():
     try:
-        payload, status_code = _build_prediction_response()
+        payload, status_code = _build_prediction_response(user_id=_get_request_user_id())
         return jsonify(_sanitize_client_prediction_payload(payload)), status_code
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
@@ -5027,6 +6612,7 @@ def get_health():
             "has_cached_snapshot": isinstance(getattr(predict_gold, "LAST_CROSS_ASSET_CONTEXT", None), dict),
         }
         live_signal_summary = _load_json_file(LIVE_SIGNAL_SUMMARY_FILE, {})
+        trade_brain_dashboard = trade_brain_service.get_dashboard_payload()
         return jsonify({
             "status": "ok",
             "runtime": {
@@ -5042,6 +6628,12 @@ def get_health():
             "prediction_cache": ta_status,
             "cross_asset_cache": cross_asset_status,
             "live_signal_summary": live_signal_summary,
+            "trade_brain": {
+                "active_trade": trade_brain_dashboard.get("activeTrade"),
+                "stats": trade_brain_dashboard.get("stats"),
+                "notifications": trade_brain_dashboard.get("notifications"),
+                "learning": trade_brain_dashboard.get("learning"),
+            },
         }), 200
     except Exception as exc:
         return jsonify({"status": "error", "message": str(exc)}), 500
