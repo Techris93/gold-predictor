@@ -2871,7 +2871,7 @@
             if (perm === "granted") {
               showPushToast(
                 "Alerts enabled",
-                "You will now receive XAUUSD indicator alerts.",
+                "You will now receive XAUUSD and Trade Brain alerts.",
               );
               subscribeBackgroundPush();
             } else {
@@ -2909,6 +2909,39 @@
         _applyIndicatorPayload(queuedPayload);
       }
 
+      function deliverUiNotification(options) {
+        const payload = options && typeof options === "object" ? options : {};
+        const title = String(payload.title || "XAUUSD Alert").trim();
+        const body = String(payload.body || "").trim();
+        const notificationTag = String(
+          payload.notificationTag || `${title}|${body}`,
+        ).trim();
+        const suppressDuplicateUiAlert =
+          shouldSuppressUiNotification(notificationTag);
+
+        if (suppressDuplicateUiAlert) {
+          return false;
+        }
+
+        showPushToast(title, body);
+
+        const canShowBrowserNotification =
+          document.visibilityState !== "visible" &&
+          "Notification" in window &&
+          Notification.permission === "granted" &&
+          (payload.ignoreBackgroundPushGate || !backgroundPushEnabled);
+
+        if (canShowBrowserNotification) {
+          new Notification(title, {
+            body,
+            tag: notificationTag || "xauusd-alert",
+            renotify: false,
+          });
+        }
+
+        return true;
+      }
+
       function _applyIndicatorPayload(payload) {
         const title = payload?.title || "XAUUSD Direction / Grade Changed";
         const body =
@@ -2919,25 +2952,11 @@
         const notificationTag = String(
           payload?.notification_tag || `${title}|${body}`,
         ).trim();
-        const suppressDuplicateUiAlert =
-          shouldSuppressUiNotification(notificationTag);
-
-        if (isAllowedAlert && !suppressDuplicateUiAlert) {
-          showPushToast(title, body);
-        }
-
-        if (
-          isAllowedAlert &&
-          !suppressDuplicateUiAlert &&
-          !backgroundPushEnabled &&
-          document.visibilityState !== "visible" &&
-          "Notification" in window &&
-          Notification.permission === "granted"
-        ) {
-          new Notification(title, {
+        if (isAllowedAlert) {
+          deliverUiNotification({
+            title,
             body,
-            tag: notificationTag || "xauusd-alert",
-            renotify: false,
+            notificationTag,
           });
         }
 
@@ -3281,6 +3300,11 @@
           }
         }, 14000);
       }
+
+      window.GoldPredictorNotifications = {
+        notify: deliverUiNotification,
+        requestPermission: requestAlertsPermission,
+      };
 
       function humanizeWords(value) {
         const text = String(value || "").trim();

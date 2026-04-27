@@ -230,6 +230,64 @@
     node.dataset.tone = tone || "";
   }
 
+  function currentSocketUserId(payload) {
+    if (!payload || typeof payload !== "object") {
+      return "";
+    }
+    const payloadUserId = safeText(payload.userId, "");
+    if (payloadUserId) {
+      return payloadUserId;
+    }
+    const tradeUserId = safeText(payload.trade?.userId, "");
+    if (tradeUserId) {
+      return tradeUserId;
+    }
+    return "";
+  }
+
+  function payloadMatchesCurrentUser(payload) {
+    const payloadUserId = currentSocketUserId(payload);
+    if (!payloadUserId) {
+      return false;
+    }
+    return payloadUserId === getUserId();
+  }
+
+  function notifyTradeBrainLifecycle(title, body, notificationTag) {
+    const notify = window.GoldPredictorNotifications?.notify;
+    if (typeof notify !== "function") {
+      return;
+    }
+    notify({
+      title,
+      body,
+      notificationTag,
+      ignoreBackgroundPushGate: true,
+    });
+  }
+
+  function buildTradeCreatedNotification(trade) {
+    const nextTrade = trade && typeof trade === "object" ? trade : {};
+    const direction = safeText(nextTrade.direction, "Trade");
+    const trigger = safeText(nextTrade.entry?.trigger, "Manual entry");
+    return {
+      title: `Trade Brain opened: ${direction}`,
+      body: `${trigger} at ${formatPrice(nextTrade.entry?.price)}`,
+      notificationTag: `trade-brain:created:${safeText(nextTrade.id, "unknown")}`,
+    };
+  }
+
+  function buildTradeClosedNotification(trade) {
+    const nextTrade = trade && typeof trade === "object" ? trade : {};
+    const direction = safeText(nextTrade.direction, "Trade");
+    const exitReason = humanizeToken(nextTrade.exit?.reason, "Closed");
+    return {
+      title: `Trade Brain closed: ${direction}`,
+      body: `${formatR(nextTrade.exit?.finalR)} · ${exitReason}`,
+      notificationTag: `trade-brain:closed:${safeText(nextTrade.id, "unknown")}`,
+    };
+  }
+
   function setText(id, value, fallback = "---") {
     const node = byId(id);
     if (!node) {
@@ -1220,6 +1278,14 @@
         body: payload,
       });
       renderDashboard(data.dashboard || {});
+      if (data && data.trade) {
+        const notification = buildTradeCreatedNotification(data.trade);
+        notifyTradeBrainLifecycle(
+          notification.title,
+          notification.body,
+          notification.notificationTag,
+        );
+      }
       setFeedback("Trade opened and linked to the live monitor.", "good");
     } catch (error) {
       setFeedback(error.message || "Could not open the trade.", "bad");
@@ -1253,6 +1319,14 @@
         },
       );
       renderDashboard(data.dashboard || {});
+      if (data && data.trade) {
+        const notification = buildTradeClosedNotification(data.trade);
+        notifyTradeBrainLifecycle(
+          notification.title,
+          notification.body,
+          notification.notificationTag,
+        );
+      }
       setFeedback("Active trade closed.", "good");
     } catch (error) {
       setFeedback(error.message || "Could not close the active trade.", "bad");
@@ -1383,35 +1457,69 @@
     }
     socket.__tradeBrainBound = true;
     socket.on("trade:created", (payload) => {
+      if (!payloadMatchesCurrentUser(payload)) {
+        return;
+      }
       if (payload && payload.dashboard) {
         renderDashboard(payload.dashboard);
+      }
+      if (payload && payload.trade) {
+        const notification = buildTradeCreatedNotification(payload.trade);
+        notifyTradeBrainLifecycle(
+          notification.title,
+          notification.body,
+          notification.notificationTag,
+        );
       }
       setFeedback("Trade opened and synced to the live feed.", "good");
     });
     socket.on("trade:updated", (payload) => {
+      if (!payloadMatchesCurrentUser(payload)) {
+        return;
+      }
       if (payload && payload.dashboard) {
         renderDashboard(payload.dashboard);
       }
     });
     socket.on("trade:closed", (payload) => {
+      if (!payloadMatchesCurrentUser(payload)) {
+        return;
+      }
       if (payload && payload.dashboard) {
         renderDashboard(payload.dashboard);
+      }
+      if (payload && payload.trade) {
+        const notification = buildTradeClosedNotification(payload.trade);
+        notifyTradeBrainLifecycle(
+          notification.title,
+          notification.body,
+          notification.notificationTag,
+        );
       }
       setFeedback("Trade closed and reviewed.", "good");
     });
     socket.on("trade:alert", (payload) => {
+      if (!payloadMatchesCurrentUser(payload)) {
+        return;
+      }
       if (payload && payload.message) {
         setFeedback(payload.message, "warn");
       }
       refreshDashboard();
     });
     socket.on("emotion:updated", (payload) => {
+      if (!payloadMatchesCurrentUser(payload)) {
+        return;
+      }
       if (payload && payload.message) {
         setFeedback(payload.message, "good");
       }
       refreshDashboard();
     });
     socket.on("stats:update", (payload) => {
+      if (!payloadMatchesCurrentUser(payload)) {
+        return;
+      }
       if (payload && payload.dashboard) {
         renderDashboard(payload.dashboard);
       }

@@ -391,10 +391,11 @@ def _enrich_trade_create_payload(payload, user_id):
     return payload
 
 
-def _emit_trade_brain_stats(dashboard, sid=None):
+def _emit_trade_brain_stats(dashboard, sid=None, user_id=None):
     if not isinstance(dashboard, dict):
         return
     payload = {
+        "userId": str(user_id or "").strip() or None,
         "stats": dashboard.get("stats") or {},
         "dashboard": dashboard,
     }
@@ -404,8 +405,10 @@ def _emit_trade_brain_stats(dashboard, sid=None):
     socketio.emit("stats:update", payload)
 
 
-def _emit_trade_brain_trade(event_name, trade, dashboard, sid=None):
+def _emit_trade_brain_trade(event_name, trade, dashboard, sid=None, user_id=None):
+    resolved_user_id = str(user_id or ((trade or {}).get("userId") if isinstance(trade, dict) else "") or "").strip() or None
     payload = {
+        "userId": resolved_user_id,
         "trade": trade,
         "dashboard": dashboard,
     }
@@ -415,7 +418,8 @@ def _emit_trade_brain_trade(event_name, trade, dashboard, sid=None):
     socketio.emit(event_name, payload)
 
 
-def _emit_trade_brain_events(events, trade=None, dashboard=None, sid=None):
+def _emit_trade_brain_events(events, trade=None, dashboard=None, sid=None, user_id=None):
+    resolved_user_id = str(user_id or ((trade or {}).get("userId") if isinstance(trade, dict) else "") or "").strip() or None
     emitted = False
     for event in events or []:
         event_name = str(event.get("type") or "").strip()
@@ -423,14 +427,17 @@ def _emit_trade_brain_events(events, trade=None, dashboard=None, sid=None):
             continue
         emitted = True
         if event_name in {"trade:created", "trade:updated", "trade:closed"}:
-            _emit_trade_brain_trade(event_name, trade, dashboard, sid=sid)
+            _emit_trade_brain_trade(event_name, trade, dashboard, sid=sid, user_id=resolved_user_id)
             continue
+        event_payload = dict(event) if isinstance(event, dict) else {"message": str(event)}
+        if resolved_user_id and not event_payload.get("userId"):
+            event_payload["userId"] = resolved_user_id
         if sid:
-            socketio.emit(event_name, event, to=sid)
+            socketio.emit(event_name, event_payload, to=sid)
         else:
-            socketio.emit(event_name, event)
+            socketio.emit(event_name, event_payload)
     if emitted:
-        _emit_trade_brain_stats(dashboard, sid=sid)
+        _emit_trade_brain_stats(dashboard, sid=sid, user_id=resolved_user_id)
 def _load_subscriptions():
     if not SUBSCRIPTIONS_FILE.exists():
         return []
@@ -6506,8 +6513,8 @@ def handle_trades():
         except ValueError as exc:
             return jsonify({"status": "error", "message": str(exc)}), 400
         dashboard = trade_brain_service.get_dashboard_payload(user_id=user_id)
-        _emit_trade_brain_trade("trade:created", trade, dashboard)
-        _emit_trade_brain_stats(dashboard)
+        _emit_trade_brain_trade("trade:created", trade, dashboard, user_id=user_id)
+        _emit_trade_brain_stats(dashboard, user_id=user_id)
         return jsonify({"status": "success", "trade": trade, "dashboard": dashboard}), 201
 
     page = int(request.args.get('page', 1) or 1)
@@ -6533,8 +6540,8 @@ def patch_trade(trade_id):
     except KeyError as exc:
         return jsonify({"status": "error", "message": str(exc)}), 404
     dashboard = trade_brain_service.get_dashboard_payload(user_id=user_id)
-    _emit_trade_brain_trade("trade:updated", trade, dashboard)
-    _emit_trade_brain_stats(dashboard)
+    _emit_trade_brain_trade("trade:updated", trade, dashboard, user_id=user_id)
+    _emit_trade_brain_stats(dashboard, user_id=user_id)
     return jsonify({"status": "success", "trade": trade, "dashboard": dashboard}), 200
 
 
@@ -6559,8 +6566,8 @@ def close_trade(trade_id):
     except KeyError as exc:
         return jsonify({"status": "error", "message": str(exc)}), 404
     dashboard = trade_brain_service.get_dashboard_payload(user_id=user_id)
-    _emit_trade_brain_trade("trade:closed", result.get("trade"), dashboard)
-    _emit_trade_brain_stats(dashboard)
+    _emit_trade_brain_trade("trade:closed", result.get("trade"), dashboard, user_id=user_id)
+    _emit_trade_brain_stats(dashboard, user_id=user_id)
     return jsonify({"status": "success", "trade": result.get("trade"), "dashboard": dashboard}), 200
 
 
