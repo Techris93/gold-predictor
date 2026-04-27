@@ -9,6 +9,7 @@ import re
 import threading
 import time
 from datetime import datetime, timezone
+from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 import requests
 from tools import predict_gold
@@ -616,7 +617,7 @@ def _notification_fingerprint(changes):
 def _normalize_fingerprint_value(key, value):
     if key == "micro_vwap_delta_pct":
         numeric = _coerce_float(value, None)
-        return round(numeric, 2) if numeric is not None else value
+        return _round_display_value(numeric, 2, value) if numeric is not None else value
     if key in {"micro_orb_state", "micro_sweep_state"}:
         return _coerce_directional_state(value)
     if key == "execution_quality_signal":
@@ -857,11 +858,18 @@ def _vwap_band_label(value):
     return f"{band_floor:+.1f}% to {band_ceil:+.1f}%"
 
 
-def _raw_vwap_bias_label(value):
+def _round_display_value(value, digits=2, default=0.0):
     try:
-        numeric = float(value)
+        quantizer = Decimal("1").scaleb(-int(digits))
+        return float(
+            Decimal(str(value)).quantize(quantizer, rounding=ROUND_HALF_UP)
+        )
     except Exception:
-        numeric = 0.0
+        return default
+
+
+def _raw_vwap_bias_label(value):
+    numeric = _round_display_value(value, 2, 0.0)
     if numeric >= 0.30:
         return "Bullish"
     if numeric >= 0.10:
@@ -900,27 +908,32 @@ def _stabilize_vwap_bias_label(value, previous_label=None):
     if not previous_label or previous_label == raw_label:
         return raw_label
 
-    try:
-        numeric = float(value)
-    except Exception:
-        numeric = 0.0
+    numeric = _round_display_value(value, 2, 0.0)
 
     hysteresis = float(VWAP_BIAS_ALERT_HYSTERESIS_PCT)
+    neutral_lower = _round_display_value(-0.10 - hysteresis, 2, -0.12)
+    neutral_upper = _round_display_value(0.10 + hysteresis, 2, 0.12)
+    mild_bearish_lower = _round_display_value(-0.30 - hysteresis, 2, -0.32)
+    mild_bearish_upper = _round_display_value(-0.10 + hysteresis, 2, -0.08)
+    bearish_upper = _round_display_value(-0.30 + hysteresis, 2, -0.28)
+    mild_bullish_lower = _round_display_value(0.10 - hysteresis, 2, 0.08)
+    mild_bullish_upper = _round_display_value(0.30 + hysteresis, 2, 0.32)
+    bullish_lower = _round_display_value(0.30 - hysteresis, 2, 0.28)
 
     if previous_label == "Neutral":
-        if -0.10 - hysteresis < numeric < 0.10 + hysteresis:
+        if neutral_lower < numeric < neutral_upper:
             return "Neutral"
     elif previous_label == "Mild Bearish":
-        if -0.30 - hysteresis < numeric <= -0.10 + hysteresis:
+        if mild_bearish_lower < numeric <= mild_bearish_upper:
             return "Mild Bearish"
     elif previous_label == "Bearish":
-        if numeric <= -0.30 + hysteresis:
+        if numeric <= bearish_upper:
             return "Bearish"
     elif previous_label == "Mild Bullish":
-        if 0.10 - hysteresis <= numeric < 0.30 + hysteresis:
+        if mild_bullish_lower <= numeric < mild_bullish_upper:
             return "Mild Bullish"
     elif previous_label == "Bullish":
-        if numeric >= 0.30 - hysteresis:
+        if numeric >= bullish_lower:
             return "Bullish"
 
     return raw_label
@@ -1624,13 +1637,13 @@ def _build_execution_quality_plan(ta_data, regime_state, decision_status, execut
     reasons = []
     blockers = []
 
-    if vwap_delta >= 0.30:
+    if vwap_bias == "Bullish":
         long_score += 3.0
-    elif vwap_delta >= 0.10:
+    elif vwap_bias == "Mild Bullish":
         long_score += 2.0
-    elif vwap_delta <= -0.30:
+    elif vwap_bias == "Bearish":
         short_score += 3.0
-    elif vwap_delta <= -0.10:
+    elif vwap_bias == "Mild Bearish":
         short_score += 2.0
 
     if orb_state > 0:
@@ -1658,8 +1671,8 @@ def _build_execution_quality_plan(ta_data, regime_state, decision_status, execut
         short_score += 2.0
 
     direction = "Neutral"
-    if mode == "Range Reversion" and abs(vwap_delta) >= 0.30:
-        direction = "Short" if vwap_delta > 0 else "Long"
+    if mode == "Range Reversion" and vwap_bias in {"Bullish", "Bearish"}:
+        direction = "Short" if vwap_bias == "Bullish" else "Long"
         reasons.append("Range mode uses VWAP extension for mean reversion.")
     elif long_score >= short_score + 1.5:
         direction = "Long"
@@ -2942,6 +2955,7 @@ def _derive_dashboard_action(payload, ta_data=None):
     warning_ladder = str(regime_state.get("warning_ladder") or "Normal").strip()
     event_regime = str(regime_state.get("event_regime") or "normal").strip()
     big_move_risk = _coerce_float(regime_state.get("big_move_risk"), 0.0) or 0.0
+    big_move_risk_bucket = _big_move_risk_bucket(big_move_risk)
     action_state = str(
         market_state.get("action_state")
         or execution_state.get("actionState")
@@ -3582,7 +3596,7 @@ def _derive_dashboard_action(payload, ta_data=None):
         }
 
     if (
-        big_move_risk >= 56.0
+        big_move_risk_bucket in {"Elevated", "Extreme"}
         and breakout_bias == "Neutral"
         and direction_bias == "Neutral"
         and micro_bull_count == 0
@@ -4019,10 +4033,7 @@ def _confidence_bucket(confidence):
 
 
 def _big_move_risk_bucket(score):
-    try:
-        value = float(score or 0)
-    except Exception:
-        value = 0.0
+    value = _round_display_value(score or 0, 2, 0.0)
     if value >= 70:
         return "Extreme"
     if value >= 56:
@@ -5407,10 +5418,11 @@ def _extract_indicator_snapshot(payload, previous_snapshot=None):
     stable_decision = payload.get("StableDecision", {}) if isinstance(payload, dict) else {}
     structure_context = ta_data.get("structure_context", {}) if isinstance(ta_data, dict) else {}
     previous_snapshot = previous_snapshot if isinstance(previous_snapshot, dict) else {}
-    try:
-        micro_vwap_delta = round(float(structure_context.get("distSessionVwapPct") or 0.0), 3)
-    except Exception:
-        micro_vwap_delta = 0.0
+    micro_vwap_delta = _round_display_value(
+        structure_context.get("distSessionVwapPct") or 0.0,
+        2,
+        0.0,
+    )
     try:
         micro_orb_state = int(round(float(structure_context.get("openingRangeBreak") or 0.0)))
     except Exception:

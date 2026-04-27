@@ -1562,6 +1562,97 @@ class DashboardPayloadContractTests(unittest.TestCase):
         self.assertGreaterEqual(plan["stopLoss"]["atrMultiple"], 1.25)
         self.assertIn("fixed targets", plan["riskManagement"]["text"])
 
+    def test_execution_quality_range_reversion_uses_display_precision_at_vwap_boundary(self):
+        ta_payload = _sample_ta_payload()
+        ta_payload["current_price"] = 4800.0
+        ta_payload["price_action"]["structure"] = "Consolidating"
+        ta_payload["volatility_regime"].update(
+            {
+                "market_regime": "Range",
+                "adx_14": 18.0,
+                "atr_14": 8.0,
+                "atr_percent": 0.16,
+            }
+        )
+        ta_payload["structure_context"].update(
+            {
+                "openingRangeBreak": 0,
+                "sessionVwap": 4798.0,
+                "distSessionVwapPct": 0.299,
+                "pivotPoint": 4797.0,
+                "pivotResistance1": 4806.0,
+                "pivotSupport1": 4788.0,
+                "pivotResistance2": 4818.0,
+                "pivotSupport2": 4772.0,
+            }
+        )
+        ta_payload["support_resistance"].update(
+            {
+                "nearest_support": {"label": "VWAP", "price": 4798.0},
+                "nearest_resistance": {"label": "Recent Swing High", "price": 4806.0},
+                "pivot_levels": {
+                    "pp": 4797.0,
+                    "r1": 4806.0,
+                    "s1": 4788.0,
+                    "r2": 4818.0,
+                    "s2": 4772.0,
+                },
+            }
+        )
+
+        plan = app_module._build_execution_quality_plan(
+            ta_payload,
+            {"breakout_bias": "Neutral"},
+            {"status": "wait", "text": "Wait for range edge confirmation."},
+            {"actionState": "WAIT", "status": "stand_aside"},
+        )
+
+        self.assertEqual(plan["direction"], "Short")
+        self.assertEqual(plan["setup"], "VWAP Stretch Reversion Short")
+
+    def test_big_move_risk_bucket_uses_display_precision_at_threshold(self):
+        self.assertEqual(app_module._big_move_risk_bucket(55.995), "Elevated")
+        self.assertEqual(app_module._big_move_risk_bucket(39.995), "Watch")
+
+    def test_dashboard_action_uses_rounded_big_move_risk_bucket_for_stand_aside(self):
+        payload = {
+            "TechnicalAnalysis": {
+                "current_price": 4800.0,
+                "price_action": {"structure": "Consolidating"},
+                "structure_context": {
+                    "distSessionVwapPct": 0.0,
+                    "openingRangeBreak": 0,
+                    "sweepReclaimSignal": 0,
+                },
+                "support_resistance": {},
+            },
+            "MarketState": {
+                "directional_bias": "Neutral",
+                "action": "hold",
+                "action_state": "WAIT",
+            },
+            "RegimeState": {
+                "big_move_risk": 55.995,
+                "breakout_bias": "Neutral",
+                "warning_ladder": "Normal",
+                "event_regime": "normal",
+            },
+            "TradeGuidance": {
+                "buyLevel": "Weak",
+                "sellLevel": "Weak",
+                "exitLevel": "Low",
+                "summary": "",
+            },
+            "DecisionStatus": {"status": "wait"},
+            "ExecutionPermission": {"status": "no_trade"},
+            "ExecutionState": {"status": "stand_aside", "actionState": "WAIT"},
+        }
+
+        action = app_module._derive_dashboard_action(payload)
+
+        self.assertEqual(action["label"], "Stand Aside")
+        self.assertEqual(action["variant"], "High Big Move Risk but no direction")
+
     def test_execution_quality_blocks_low_reward_to_risk_location(self):
         ta_payload = _sample_ta_payload()
         ta_payload["current_price"] = 4800.0

@@ -2502,10 +2502,14 @@
         "micro_orb_state",
         "micro_sweep_state",
       ]);
+      const VWAP_BIAS_DISPLAY_HYSTERESIS_PCT = 0.02;
       const UI_NOTIFICATION_DEDUPE_WINDOW_MS = 15 * 60 * 1000;
       let backgroundPushEnabled = hasPersistedPushEnable();
       let lastUiNotificationKey = "";
       let lastUiNotificationAt = 0;
+      const liveSignalDisplayState = {
+        microVwapBias: "",
+      };
 
       function syncViewportHeight(options = {}) {
         const { allowShrink = false } = options || {};
@@ -3782,6 +3786,13 @@
         return Number.isFinite(numeric) ? Math.round(numeric) : 0;
       }
 
+      function roundMetricValue(value, decimals = 2) {
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric)) return Number.NaN;
+        const factor = 10 ** decimals;
+        return Math.round((numeric + Number.EPSILON) * factor) / factor;
+      }
+
       function getOrbStateLabel(value) {
         return value > 0 ? "Bullish" : value < 0 ? "Bearish" : "Neutral";
       }
@@ -3790,18 +3801,89 @@
         return value > 0 ? "Bullish" : value < 0 ? "Bearish" : "None";
       }
 
-      function getVwapBiasLabel(value) {
-        const numeric = Number(value);
+      function getVwapBiasLabel(value, previousLabel = "") {
+        const numeric = roundMetricValue(value, 2);
         if (!Number.isFinite(numeric)) return "Neutral";
-        if (numeric >= 0.3) return "Bullish";
-        if (numeric >= 0.1) return "Mild Bullish";
-        if (numeric > -0.1) return "Neutral";
-        if (numeric > -0.3) return "Mild Bearish";
-        return "Bearish";
+        const rawLabel =
+          numeric >= 0.3
+            ? "Bullish"
+            : numeric >= 0.1
+              ? "Mild Bullish"
+              : numeric > -0.1
+                ? "Neutral"
+                : numeric > -0.3
+                  ? "Mild Bearish"
+                  : "Bearish";
+        const previous = String(previousLabel || "").trim();
+        if (!previous || previous === rawLabel) return rawLabel;
+        const neutralLower = roundMetricValue(
+          -0.1 - VWAP_BIAS_DISPLAY_HYSTERESIS_PCT,
+          2,
+        );
+        const neutralUpper = roundMetricValue(
+          0.1 + VWAP_BIAS_DISPLAY_HYSTERESIS_PCT,
+          2,
+        );
+        const mildBearishLower = roundMetricValue(
+          -0.3 - VWAP_BIAS_DISPLAY_HYSTERESIS_PCT,
+          2,
+        );
+        const mildBearishUpper = roundMetricValue(
+          -0.1 + VWAP_BIAS_DISPLAY_HYSTERESIS_PCT,
+          2,
+        );
+        const bearishUpper = roundMetricValue(
+          -0.3 + VWAP_BIAS_DISPLAY_HYSTERESIS_PCT,
+          2,
+        );
+        const mildBullishLower = roundMetricValue(
+          0.1 - VWAP_BIAS_DISPLAY_HYSTERESIS_PCT,
+          2,
+        );
+        const mildBullishUpper = roundMetricValue(
+          0.3 + VWAP_BIAS_DISPLAY_HYSTERESIS_PCT,
+          2,
+        );
+        const bullishLower = roundMetricValue(
+          0.3 - VWAP_BIAS_DISPLAY_HYSTERESIS_PCT,
+          2,
+        );
+
+        if (previous === "Neutral") {
+          if (neutralLower < numeric && numeric < neutralUpper) {
+            return "Neutral";
+          }
+        } else if (previous === "Mild Bearish") {
+          if (mildBearishLower < numeric && numeric <= mildBearishUpper) {
+            return "Mild Bearish";
+          }
+        } else if (previous === "Bearish") {
+          if (numeric <= bearishUpper) {
+            return "Bearish";
+          }
+        } else if (previous === "Mild Bullish") {
+          if (mildBullishLower <= numeric && numeric < mildBullishUpper) {
+            return "Mild Bullish";
+          }
+        } else if (previous === "Bullish") {
+          if (numeric >= bullishLower) {
+            return "Bullish";
+          }
+        }
+
+        return rawLabel;
       }
 
-      function getMicrostructureTone(vwapDelta, orbState, sweepState) {
-        const vwapBias = getVwapBiasLabel(vwapDelta);
+      function getMicrostructureTone(vwapBiasOrDelta, orbState, sweepState) {
+        const vwapBias = [
+          "Bullish",
+          "Mild Bullish",
+          "Neutral",
+          "Mild Bearish",
+          "Bearish",
+        ].includes(String(vwapBiasOrDelta || "").trim())
+          ? String(vwapBiasOrDelta || "").trim()
+          : getVwapBiasLabel(vwapBiasOrDelta);
         const vwapTone =
           vwapBias === "Bullish" || vwapBias === "Mild Bullish"
             ? 1
@@ -3814,7 +3896,7 @@
       }
 
       function getBigMoveRiskBucket(value) {
-        const numeric = Number(value);
+        const numeric = roundMetricValue(value, 2);
         if (!Number.isFinite(numeric)) return "Low";
         if (numeric >= 70) return "Extreme";
         if (numeric >= 56) return "Elevated";
@@ -4388,12 +4470,13 @@
         const regimePivotContextEl =
           document.getElementById("rs-pivot-context");
 
-        const bigMoveRisk = Number(regimeState.big_move_risk || 0);
+        const bigMoveRisk = roundMetricValue(regimeState.big_move_risk, 2);
+        const bigMoveRiskValue = Number.isFinite(bigMoveRisk) ? bigMoveRisk : 0;
         const breakoutBias = regimeState.breakout_bias || "Neutral";
         const eventRegimeText = regimeState.event_regime || "normal";
         const warningLadderText = regimeState.warning_ladder || "Normal";
-        const bigMoveRiskBucket = getBigMoveRiskBucket(bigMoveRisk);
-        regimeRiskEl.innerText = `${bigMoveRisk.toFixed(2)} / 100 · ${bigMoveRiskBucket}`;
+        const bigMoveRiskBucket = getBigMoveRiskBucket(bigMoveRiskValue);
+        regimeRiskEl.innerText = `${bigMoveRiskValue.toFixed(2)} / 100 · ${bigMoveRiskBucket}`;
         regimeRiskEl.className = `metric-value ${bigMoveRiskBucket === "Extreme" ? "value-bearish" : bigMoveRiskBucket === "Elevated" || bigMoveRiskBucket === "Watch" ? "value-watch" : ""}`;
         regimeProbEl.innerText = `${Number(regimeState.expansion_probability_30m || 0).toFixed(1)}% / ${Number(regimeState.expansion_probability_60m || 0).toFixed(1)}%`;
         regimeBiasEl.innerText = breakoutBias;
@@ -4505,8 +4588,16 @@
             barLabel &&
             currentLabel &&
             barLabel.trim().toLowerCase() === currentLabel.trim().toLowerCase();
-          const vwapDelta = Number(structureContext.distSessionVwapPct || 0);
-          const vwapBiasText = getVwapBiasLabel(vwapDelta);
+          const vwapDelta = roundMetricValue(
+            structureContext.distSessionVwapPct,
+            2,
+          );
+          const vwapDeltaValue = Number.isFinite(vwapDelta) ? vwapDelta : 0;
+          const vwapBiasText = getVwapBiasLabel(
+            vwapDeltaValue,
+            liveSignalDisplayState.microVwapBias,
+          );
+          liveSignalDisplayState.microVwapBias = vwapBiasText;
           const orbState = getRoundedSignalState(
             structureContext.openingRangeBreak,
           );
@@ -4531,10 +4622,10 @@
                 ? ` · Holiday schedule ${marketSession.holidayName}`
                 : "";
             sessionContextEl.innerText = sameSessionLabel
-              ? `Session ${barLabel} · Bar ${barTimeText} · Now ${currentTimeText} · VWAP ${vwapDelta.toFixed(2)}% ${vwapBiasText} · ${orbText} · ${sweepText}${holidayText}`
-              : `Bar ${barLabel} ${barTimeText} · Now ${currentLabel} ${currentTimeText} · VWAP ${vwapDelta.toFixed(2)}% ${vwapBiasText} · ${orbText} · ${sweepText}${holidayText}`;
+              ? `Session ${barLabel} · Bar ${barTimeText} · Now ${currentTimeText} · VWAP ${vwapDeltaValue.toFixed(2)}% ${vwapBiasText} · ${orbText} · ${sweepText}${holidayText}`
+              : `Bar ${barLabel} ${barTimeText} · Now ${currentLabel} ${currentTimeText} · VWAP ${vwapDeltaValue.toFixed(2)}% ${vwapBiasText} · ${orbText} · ${sweepText}${holidayText}`;
             const microstructureTone = getMicrostructureTone(
-              vwapDelta,
+              vwapBiasText,
               orbState,
               sweepState,
             );

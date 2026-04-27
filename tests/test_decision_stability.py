@@ -98,6 +98,68 @@ class StableDecisionEngineTests(unittest.TestCase):
 
         self.assertEqual(direction, "LONG")
 
+    def test_micro_vwap_notification_snapshot_ignores_hidden_third_decimal_boundary_wobble(self):
+        previous_snapshot = {"micro_vwap_bias": "Mild Bullish", "micro_vwap_delta_pct": 0.11}
+        dip_payload = {
+            "TechnicalAnalysis": {
+                "structure_context": {
+                    "distSessionVwapPct": 0.079,
+                }
+            }
+        }
+
+        dip_snapshot = app_module._extract_indicator_snapshot(
+            dip_payload,
+            previous_snapshot=previous_snapshot,
+        )
+
+        self.assertEqual(dip_snapshot["micro_vwap_delta_pct"], 0.08)
+        self.assertEqual(dip_snapshot["micro_vwap_bias"], "Mild Bullish")
+        self.assertFalse(
+            app_module._is_material_change(
+                {
+                    "micro_vwap_bias": {
+                        "previous": previous_snapshot["micro_vwap_bias"],
+                        "current": dip_snapshot["micro_vwap_bias"],
+                    },
+                    "micro_vwap_delta_pct": {
+                        "previous": previous_snapshot["micro_vwap_delta_pct"],
+                        "current": dip_snapshot["micro_vwap_delta_pct"],
+                    },
+                }
+            )
+        )
+
+        rebound_payload = {
+            "TechnicalAnalysis": {
+                "structure_context": {
+                    "distSessionVwapPct": 0.141,
+                }
+            }
+        }
+
+        rebound_snapshot = app_module._extract_indicator_snapshot(
+            rebound_payload,
+            previous_snapshot=dip_snapshot,
+        )
+
+        self.assertEqual(rebound_snapshot["micro_vwap_delta_pct"], 0.14)
+        self.assertEqual(rebound_snapshot["micro_vwap_bias"], "Mild Bullish")
+        self.assertFalse(
+            app_module._is_material_change(
+                {
+                    "micro_vwap_bias": {
+                        "previous": dip_snapshot["micro_vwap_bias"],
+                        "current": rebound_snapshot["micro_vwap_bias"],
+                    },
+                    "micro_vwap_delta_pct": {
+                        "previous": dip_snapshot["micro_vwap_delta_pct"],
+                        "current": rebound_snapshot["micro_vwap_delta_pct"],
+                    },
+                }
+            )
+        )
+
     def test_promotes_candidate_only_after_buffered_confirmation_window(self):
         base_ts = 1710000000
         state = app_module._default_stable_decision_state(base_ts)
