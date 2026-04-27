@@ -1,6 +1,9 @@
 (function () {
   const STORAGE_KEY = "gold_predictor_trade_brain_user_id";
   const AUTO_TRACK_KEY = "gold_predictor_trade_brain_auto_track";
+  const TRADE_NOTIFICATION_HISTORY_KEY =
+    "gold_predictor_trade_brain_seen_notification_tags";
+  const MAX_TRADE_NOTIFICATION_HISTORY = 24;
   const DEFAULT_AUTO_TRACK_ENABLED = true;
   const state = {
     dashboard: null,
@@ -11,6 +14,8 @@
     autoTrackEnabled: DEFAULT_AUTO_TRACK_ENABLED,
     autoTrackInFlight: false,
     lastAutoTradeSignature: null,
+    seenTradeNotificationTags: null,
+    seenTradeNotificationUserId: null,
   };
 
   function byId(id) {
@@ -127,6 +132,74 @@
       return DEFAULT_AUTO_TRACK_ENABLED;
     }
     return DEFAULT_AUTO_TRACK_ENABLED;
+  }
+
+  function tradeNotificationStorageKey() {
+    return `${TRADE_NOTIFICATION_HISTORY_KEY}:${getUserId()}`;
+  }
+
+  function seenTradeNotificationTags() {
+    const userId = getUserId();
+    if (
+      state.seenTradeNotificationTags instanceof Set &&
+      state.seenTradeNotificationUserId === userId
+    ) {
+      return state.seenTradeNotificationTags;
+    }
+
+    let tags = [];
+    try {
+      const parsed = JSON.parse(
+        window.localStorage.getItem(tradeNotificationStorageKey()) || "[]",
+      );
+      if (Array.isArray(parsed)) {
+        tags = parsed
+          .map((value) => String(value || "").trim())
+          .filter(Boolean)
+          .slice(-MAX_TRADE_NOTIFICATION_HISTORY);
+      }
+    } catch (_) {
+      tags = [];
+    }
+
+    state.seenTradeNotificationTags = new Set(tags);
+    state.seenTradeNotificationUserId = userId;
+    return state.seenTradeNotificationTags;
+  }
+
+  function hasSeenTradeNotification(notificationTag) {
+    const normalizedTag = String(notificationTag || "").trim();
+    if (!normalizedTag) {
+      return false;
+    }
+    return seenTradeNotificationTags().has(normalizedTag);
+  }
+
+  function rememberTradeNotification(notificationTag) {
+    const normalizedTag = String(notificationTag || "").trim();
+    if (!normalizedTag) {
+      return;
+    }
+
+    const tags = seenTradeNotificationTags();
+    if (tags.has(normalizedTag)) {
+      return;
+    }
+
+    tags.add(normalizedTag);
+    const serializedTags = Array.from(tags).slice(
+      -MAX_TRADE_NOTIFICATION_HISTORY,
+    );
+    state.seenTradeNotificationTags = new Set(serializedTags);
+
+    try {
+      window.localStorage.setItem(
+        tradeNotificationStorageKey(),
+        JSON.stringify(serializedTags),
+      );
+    } catch (_) {
+      // Ignore storage failures and keep the in-memory dedupe set.
+    }
   }
 
   function setAutoTrackEnabled(enabled) {
@@ -254,16 +327,27 @@
   }
 
   function notifyTradeBrainLifecycle(title, body, notificationTag) {
+    const normalizedTag = String(notificationTag || "").trim();
+    if (normalizedTag && hasSeenTradeNotification(normalizedTag)) {
+      return false;
+    }
+
     const notify = window.GoldPredictorNotifications?.notify;
     if (typeof notify !== "function") {
-      return;
+      return false;
     }
-    notify({
+
+    const notified = notify({
       title,
       body,
-      notificationTag,
+      notificationTag: normalizedTag,
       ignoreBackgroundPushGate: true,
     });
+
+    if (notified && normalizedTag) {
+      rememberTradeNotification(normalizedTag);
+    }
+    return notified;
   }
 
   function buildTradeCreatedNotification(trade) {
@@ -286,6 +370,63 @@
       body: `${formatR(nextTrade.exit?.finalR)} · ${exitReason}`,
       notificationTag: `trade-brain:closed:${safeText(nextTrade.id, "unknown")}`,
     };
+  }
+
+  function latestClosedTradeFromDashboard(dashboard) {
+    const recentTrades = Array.isArray(dashboard?.recentTrades)
+      ? dashboard.recentTrades
+      : [];
+    return (
+      recentTrades.find(
+        (trade) =>
+          trade &&
+          safeText(trade.status, "").toUpperCase() === "CLOSED" &&
+          trade.exit,
+      ) || null
+    );
+  }
+
+  function maybeNotifyDashboardLifecycle(previousDashboard, nextDashboard) {
+    const previousActiveTrade =
+      previousDashboard && typeof previousDashboard.activeTrade === "object"
+        ? previousDashboard.activeTrade
+        : null;
+    const nextActiveTrade =
+      nextDashboard && typeof nextDashboard.activeTrade === "object"
+        ? nextDashboard.activeTrade
+        : null;
+    const previousActiveTradeId = safeText(previousActiveTrade?.id, "");
+    const nextActiveTradeId = safeText(nextActiveTrade?.id, "");
+
+    if (
+      nextActiveTrade &&
+      nextActiveTradeId &&
+      safeText(nextActiveTrade.status, "").toUpperCase() === "ACTIVE" &&
+      nextActiveTradeId !== previousActiveTradeId
+    ) {
+      const notification = buildTradeCreatedNotification(nextActiveTrade);
+      notifyTradeBrainLifecycle(
+        notification.title,
+        notification.body,
+        notification.notificationTag,
+      );
+    }
+
+    const latestClosedTrade = latestClosedTradeFromDashboard(nextDashboard);
+    const latestClosedTradeId = safeText(latestClosedTrade?.id, "");
+    if (
+      previousActiveTradeId &&
+      latestClosedTradeId &&
+      latestClosedTradeId === previousActiveTradeId &&
+      latestClosedTradeId !== nextActiveTradeId
+    ) {
+      const notification = buildTradeClosedNotification(latestClosedTrade);
+      notifyTradeBrainLifecycle(
+        notification.title,
+        notification.body,
+        notification.notificationTag,
+      );
+    }
   }
 
   function setText(id, value, fallback = "---") {
@@ -1138,6 +1279,7 @@
   }
 
   function renderDashboard(dashboard) {
+    const previousDashboard = currentDashboard();
     state.dashboard =
       dashboard && typeof dashboard === "object" ? dashboard : {};
     const nextDashboard = currentDashboard();
@@ -1175,6 +1317,7 @@
         deriveMarketDataFromPrediction(state.latestPrediction),
     );
     updateAutoTrackUi();
+    maybeNotifyDashboardLifecycle(previousDashboard, nextDashboard);
   }
 
   function dashboardHasTrackedData(dashboard) {
