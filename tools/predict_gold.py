@@ -39,54 +39,14 @@ from tools.twelvedata_market_data import (
 )
 from tools.event_regime import annotate_event_regime_features, compute_event_regime_snapshot
 from tools.price_action import classify_price_action
-from tools.signal_engine import build_ta_payload_from_row, normalize_strategy_params, prepare_historical_features
+from tools.signal_engine import (
+    DEFAULT_STRATEGY_PARAMS as SIGNAL_ENGINE_DEFAULT_STRATEGY_PARAMS,
+    build_ta_payload_from_row,
+    normalize_strategy_params,
+    prepare_historical_features,
+)
 
-DEFAULT_STRATEGY_PARAMS = {
-    "ema_short": 20,
-    "ema_long": 50,
-    "rsi_window": 14,
-    "rsi_overbought": 70,
-    "rsi_oversold": 20,
-    "adx_window": 14,
-    "adx_trending_threshold": 22,
-    "adx_weak_trend_threshold": 18,
-    "atr_window": 14,
-    "atr_trending_percent_threshold": 0.25,
-    "cmf_window": 14,
-    "cmf_strong_buy_threshold": 0.1,
-    "cmf_strong_sell_threshold": -0.1,
-    "trend_base_weight": 2.5,
-    "alignment_weight": 1.2,
-    "trend_regime_bonus": 1.0,
-    "weak_trend_bonus": 0.4,
-    "strong_volume_weight": 2.0,
-    "bias_volume_weight": 1.0,
-    "breakout_weight": 0.0,
-    "structure_weight": 0.0,
-    "swing_structure_weight": 0.0,
-    "drift_weight": 1.0,
-    "range_pressure_weight": 0.0,
-    "engulfing_weight": 1.0,
-    "reversal_candle_weight": 0.6,
-    "rsi_extreme_weight": 1.5,
-    "rsi_warning_weight": 0.6,
-    "rsi_warning_band": 10,
-    "verdict_margin_threshold": 1.2,
-    "confidence_margin_multiplier": 8.0,
-    "confidence_evidence_multiplier": 1.4,
-    "rangebound_penalty": 8.0,
-    "weak_trend_penalty": 3.0,
-    "volume_unavailable_penalty": 5.0,
-    "mixed_alignment_penalty": 6.0,
-    "neutral_confidence_cap": 63,
-    "event_watch_setup_weight": 0.35,
-    "event_breakout_setup_weight": 0.7,
-    "event_directional_setup_weight": 1.15,
-    "event_momentum_setup_weight": 1.55,
-    "event_alignment_boost": 0.35,
-    "event_conflict_penalty": 0.85,
-    "mtf_intervals": ["15min", "1h", "4h"],
-}
+DEFAULT_STRATEGY_PARAMS = SIGNAL_ENGINE_DEFAULT_STRATEGY_PARAMS.copy()
 
 
 def _load_json_config(relative_path, fallback):

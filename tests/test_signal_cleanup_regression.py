@@ -11,8 +11,16 @@ from tools import predict_gold
 from tools.event_regime import compute_event_regime_snapshot
 from tools.predict_gold import _normalize_ta_payload_schema
 from tools.signal_engine import (
+    DEFAULT_STRATEGY_PARAMS as SIGNAL_ENGINE_DEFAULT_STRATEGY_PARAMS,
+    _build_rr_signal_state,
+    _apply_regime_overrides,
+    _breakout_watch_gate_params,
     _build_session_context_from_datetime,
+    _calculate_anticipatory_breakout_context,
+    _stabilize_runtime_regime_state,
     build_ta_payload_from_row,
+    compute_prediction_from_ta,
+    normalize_strategy_params,
 )
 
 
@@ -136,12 +144,275 @@ def _apply_current_session(payload, current_session):
     return payload
 
 
+def _anticipatory_bearish_ta_payload():
+    payload = _sample_ta_payload()
+    current_session = _build_session_context_from_datetime(
+        pd.Timestamp("2026-04-21T02:15:00Z")
+    )
+    _apply_current_session(payload, current_session)
+    payload["current_price"] = 4698.0
+    payload["ema_trend"] = "Bearish"
+    payload["ema_20"] = 4700.8
+    payload["ema_50"] = 4704.3
+    payload["volatility_regime"] = {
+        "market_regime": "Weak Trend",
+        "adx_14": 20.0,
+        "atr_14": 8.2,
+        "atr_percent": 0.18,
+    }
+    payload["multi_timeframe"].update(
+        {
+            "m15_trend": "Bearish",
+            "h1_trend": "Neutral",
+            "h4_trend": "Neutral",
+            "alignment_score": -1,
+            "alignment_label": "Mixed / Low Alignment",
+        }
+    )
+    payload["market_regime_scores"] = {
+        "trend_probability": 0.66,
+        "expansion_probability": 0.72,
+        "chop_probability": 0.18,
+    }
+    payload["price_action"].update(
+        {
+            "structure": "Bearish Breakdown",
+            "latest_candle_pattern": "None",
+        }
+    )
+    payload["momentum_features"].update(
+        {
+            "macdHistogram": -0.21,
+            "macdHistogramSlope": -0.05,
+            "volumeZScore": 2.0,
+            "volumeSpike": 1,
+        }
+    )
+    payload["structure_context"].update(
+        {
+            "openingRangeBreak": -1,
+            "sweepReclaimSignal": 0,
+            "sweepReclaimQuality": 0.0,
+            "sessionVwap": 4702.2,
+            "distSessionVwapPct": -0.09,
+        }
+    )
+    payload["support_resistance"].update(
+        {
+            "reaction": "Bearish Breakdown Through Support",
+            "support_distance_pct": 0.08,
+            "resistance_distance_pct": 0.33,
+        }
+    )
+    payload["event_regime"] = {
+        "breakout_bias": "Bearish",
+        "warning_ladder": "Directional Expansion Likely",
+        "event_regime": "range_expansion",
+        "big_move_risk": 73.0,
+        "expansion_probability_30m": 67.0,
+        "expansion_probability_60m": 72.0,
+        "cross_asset_bias": "Bearish",
+        "feature_hits": {},
+        "components": {
+            "bias_delta": -1.2,
+            "fakeout_risk_score": 1.8,
+        },
+    }
+    payload["_regime_memory"] = {
+        "warning_ladder": "Normal",
+        "event_regime": "normal",
+        "breakout_bias": "Neutral",
+        "raw_warning_ladder": "Normal",
+        "raw_warning_streak": 0,
+        "warning_dwell_bars": 0,
+        "breakout_bias_dwell_bars": 0,
+    }
+    return payload
+
+
 class _FakeResponse:
     def __init__(self, text):
         self.text = text
 
     def raise_for_status(self):
         return None
+
+
+class SignalEngineEarlySetupTests(unittest.TestCase):
+    def test_predict_gold_defaults_track_signal_engine_defaults(self):
+        self.assertEqual(
+            predict_gold.DEFAULT_STRATEGY_PARAMS["breakout_weight"],
+            SIGNAL_ENGINE_DEFAULT_STRATEGY_PARAMS["breakout_weight"],
+        )
+        self.assertEqual(
+            predict_gold.DEFAULT_STRATEGY_PARAMS["structure_weight"],
+            SIGNAL_ENGINE_DEFAULT_STRATEGY_PARAMS["structure_weight"],
+        )
+        self.assertEqual(
+            predict_gold.DEFAULT_STRATEGY_PARAMS["warning_min_dwell_bars"],
+            SIGNAL_ENGINE_DEFAULT_STRATEGY_PARAMS["warning_min_dwell_bars"],
+        )
+        self.assertEqual(
+            predict_gold.DEFAULT_STRATEGY_PARAMS["rr_signal_trade_hours_utc"],
+            SIGNAL_ENGINE_DEFAULT_STRATEGY_PARAMS["rr_signal_trade_hours_utc"],
+        )
+
+    def test_active_strategy_params_keep_live_runtime_relaxed(self):
+        params = predict_gold.get_active_strategy_params()
+
+        self.assertEqual(params["ema_short"], 20)
+        self.assertEqual(params["ema_long"], 50)
+        self.assertEqual(params["adx_trending_threshold"], 20)
+        self.assertEqual(params["atr_trending_percent_threshold"], 0.18)
+        self.assertEqual(params["breakout_weight"], 1.4)
+        self.assertEqual(params["structure_weight"], 1.2)
+        self.assertEqual(params["warning_min_dwell_bars"], 1)
+        self.assertEqual(params["transition_setup_tradeability_floor"], 45.0)
+        self.assertEqual(params["rr_signal_min_confidence"], 60.0)
+        self.assertEqual(params["rr_signal_trade_hours_utc"], [])
+
+    def test_event_breakout_profile_keeps_relaxed_runtime_overrides(self):
+        params, profile = _apply_regime_overrides(
+            predict_gold.get_active_strategy_params(),
+            {
+                "volatility_regime": {"market_regime": "Weak Trend"},
+                "event_regime": {
+                    "warning_ladder": "Expansion Watch",
+                    "event_regime": "breakout_watch",
+                },
+            },
+        )
+
+        self.assertEqual(profile, "event_breakout")
+        self.assertEqual(params["warning_min_dwell_bars"], 1)
+        self.assertEqual(params["anti_chop_tradeability_floor"], 45.0)
+        self.assertEqual(params["meta_fakeout_prob_cap"], 0.58)
+        self.assertEqual(params["ema_short"], 20)
+        self.assertEqual(params["ema_long"], 50)
+
+    def test_anticipatory_breakout_scores_bearish_structure_rejection_stack(self):
+        context = _calculate_anticipatory_breakout_context(
+            strategy_params=normalize_strategy_params(),
+            current_price=4698.0,
+            ema_20=4700.8,
+            ema_50=4704.3,
+            adx_14=20.0,
+            volume_zscore=2.0,
+            volume_spike=True,
+            trend="Bearish",
+            alignment_score=-1,
+            pa_struct="Bearish Breakdown",
+            sr_reaction="Bearish Breakdown Through Support",
+            support_distance_pct=0.08,
+            resistance_distance_pct=0.33,
+            opening_range_break=-1,
+            sweep_reclaim_signal=0,
+            dist_session_vwap_pct=-0.09,
+        )
+
+        self.assertEqual(context["direction"], "Bearish")
+        self.assertGreaterEqual(context["score"], 55.0)
+        self.assertGreater(context["trigger_boost"], 0.0)
+
+    def test_runtime_regime_state_promotes_warning_without_multibar_dwell(self):
+        regime_state = {
+            "warning_ladder": "Directional Expansion Likely",
+            "event_regime": "range_expansion",
+            "breakout_bias": "Bearish",
+            "big_move_risk": 79.0,
+            "expansion_probability_60m": 82.0,
+            "components": {"bias_delta": -1.4},
+        }
+        stabilized, next_memory = _stabilize_runtime_regime_state(
+            regime_state=regime_state,
+            memory={
+                "warning_ladder": "Normal",
+                "event_regime": "normal",
+                "breakout_bias": "Neutral",
+                "raw_warning_ladder": "Normal",
+                "raw_warning_streak": 0,
+                "warning_dwell_bars": 0,
+                "breakout_bias_dwell_bars": 0,
+            },
+            strategy_params=normalize_strategy_params(),
+        )
+
+        self.assertEqual(stabilized["warning_ladder"], "Directional Expansion Likely")
+        self.assertEqual(next_memory["warning_ladder"], "Directional Expansion Likely")
+
+    def test_rr_signal_allows_asia_session_when_directional_stack_is_clean(self):
+        ta_payload = _anticipatory_bearish_ta_payload()
+        rr_signal = _build_rr_signal_state(
+            ta_data=ta_payload,
+            strategy_params=normalize_strategy_params(),
+            verdict="Bearish",
+            directional_bias="Bearish",
+            directional_bias_source="anticipatory_break",
+            direction_timeframe="15m",
+            regime_label="transition",
+            alignment_label="Mixed / Low Alignment",
+            action_state="SHORT_ACTIVE",
+            confidence=72,
+            direction_score=7.2,
+            tradeability_score=58.0,
+            stability_score=74.0,
+            expected_edge_pct=0.05,
+            meta_scores={
+                "fakeout_probability": 0.18,
+                "exit_risk_probability": 0.12,
+            },
+            regime_state={
+                "breakout_bias": "Bearish",
+                "warning_ladder": "Directional Expansion Likely",
+                "big_move_risk": 73.0,
+                "expansion_probability_30m": 67.0,
+                "expansion_probability_60m": 72.0,
+            },
+            no_trade_reasons=[],
+            direction_probabilities={"down_30m": 0.66, "down_60m": 0.68},
+            move_bucket_state={
+                "probabilities": {"1.0_atr": 0.58, "1.5_atr": 0.42, "2.0_atr": 0.28},
+                "selected_target_key": "1.0_atr",
+                "selected_target_atr": 1.0,
+                "target_move_atr_raw": 1.0,
+                "selected_probability": 0.58,
+                "projected_move_atr": 1.25,
+                "projected_move_pips": 230.0,
+                "atr_move_pips": 160.0,
+            },
+        )
+
+        self.assertTrue(rr_signal["sessionAllowed"])
+        self.assertNotIn("Outside preferred London/NY session window", rr_signal["blockers"])
+        self.assertNotIn("B-grade is disabled in low-liquidity session", rr_signal["blockers"])
+
+    def test_prediction_promotes_bearish_breakdown_before_h1_confirmation(self):
+        prediction = compute_prediction_from_ta(_anticipatory_bearish_ta_payload())
+
+        self.assertEqual(prediction["directionalBias"], "Bearish")
+        self.assertIn(prediction["actionState"], {"SETUP_SHORT", "SHORT_ACTIVE"})
+        self.assertGreaterEqual(prediction["FeatureHits"]["anticipatory_score"], 55.0)
+
+    def test_breakout_watch_gate_params_relax_for_strong_directional_stack(self):
+        params = _breakout_watch_gate_params(
+            warning_ladder="Expansion Watch",
+            event_regime_label="breakout_watch",
+            directional_bias="Bearish",
+            h4_filter_pass=True,
+            directional_conviction=0.6757,
+            directional_trigger_score=2.1,
+            trigger_min_score=1.3,
+            direction_probability_floor=0.56,
+            anti_chop_tradeability_floor=68.0,
+            breakout_setup_tradeability_floor=28.0,
+            breakout_active_tradeability_floor=32.0,
+        )
+
+        self.assertTrue(params["relaxation_active"])
+        self.assertEqual(params["anti_chop_tradeability_floor"], 28.0)
+        self.assertEqual(params["fakeout_risk_threshold"], 6.1)
+        self.assertEqual(params["fakeout_probability_buffer"], 0.2)
+        self.assertEqual(params["fakeout_probability_cap_floor"], 0.62)
 
 
 class DashboardPayloadContractTests(unittest.TestCase):

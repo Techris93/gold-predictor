@@ -7,6 +7,9 @@ tools/reports/live_signal_outcomes.json
 tools/reports/live_signal_summary.json
 tools/reports/playbook_state.json
 tools/reports/prediction_state.json
+tools/reports/decision_churn_log.json
+tools/reports/stable_decision_state.json
+tools/reports/trade_brain_state.json
 tools/reports/quant_guided_tuning.json
 tools/reports/quant_tuning_results.json
 tools/reports/regime_memory_state.json

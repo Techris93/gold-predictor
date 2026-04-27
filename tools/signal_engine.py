@@ -31,10 +31,10 @@ DEFAULT_STRATEGY_PARAMS = {
     "rsi_overbought": 70,
     "rsi_oversold": 20,
     "adx_window": 14,
-    "adx_trending_threshold": 22,
+    "adx_trending_threshold": 20,
     "adx_weak_trend_threshold": 18,
     "atr_window": 14,
-    "atr_trending_percent_threshold": 0.25,
+    "atr_trending_percent_threshold": 0.18,
     "cmf_window": 14,
     "cmf_strong_buy_threshold": 0.1,
     "cmf_strong_sell_threshold": -0.1,
@@ -44,11 +44,11 @@ DEFAULT_STRATEGY_PARAMS = {
     "weak_trend_bonus": 0.4,
     "strong_volume_weight": 2.0,
     "bias_volume_weight": 1.0,
-    "breakout_weight": 0.0,
-    "structure_weight": 0.0,
-    "swing_structure_weight": 0.0,
+    "breakout_weight": 1.4,
+    "structure_weight": 1.2,
+    "swing_structure_weight": 1.2,
     "drift_weight": 1.0,
-    "range_pressure_weight": 0.0,
+    "range_pressure_weight": 0.45,
     "engulfing_weight": 1.0,
     "reversal_candle_weight": 0.6,
     "rsi_extreme_weight": 1.5,
@@ -59,7 +59,7 @@ DEFAULT_STRATEGY_PARAMS = {
     "macd_hist_slope_scale": 0.06,
     "volume_spike_trigger_weight": 0.5,
     "volume_spike_zscore_threshold": 1.8,
-    "verdict_margin_threshold": 1.2,
+    "verdict_margin_threshold": 1.0,
     "confidence_margin_multiplier": 8.0,
     "confidence_evidence_multiplier": 1.4,
     "rangebound_penalty": 8.0,
@@ -84,9 +84,9 @@ DEFAULT_STRATEGY_PARAMS = {
     "stability_conflict_penalty": 10.0,
     "stability_mixed_alignment_penalty": 10.0,
     "high_tradeability_threshold": 68.0,
-    "medium_tradeability_threshold": 52.0,
+    "medium_tradeability_threshold": 45.0,
     "direction_entry_threshold": 8.0,
-    "direction_hold_threshold": 5.0,
+    "direction_hold_threshold": 4.0,
     "exit_risk_threshold": 6.0,
     "mtf_intervals": ["15min", "1h", "4h"],
     "expansion_watch_threshold": 48.0,
@@ -104,8 +104,8 @@ DEFAULT_STRATEGY_PARAMS = {
     "anti_chop_penalty": 8.0,
     "warning_upshift_buffer": 3.5,
     "warning_downshift_buffer": 7.0,
-    "warning_min_dwell_bars": 5,
-    "warning_raw_streak_required": 2,
+    "warning_min_dwell_bars": 1,
+    "warning_raw_streak_required": 1,
     "breakout_bias_deadband": 0.9,
     "breakout_bias_hold_bars": 4,
     "fakeout_risk_penalty": 6.0,
@@ -114,8 +114,8 @@ DEFAULT_STRATEGY_PARAMS = {
     "meta_exit_prob_cap": 0.58,
     "min_expected_edge_pct": 0.06,
     "direction_probability_floor": 0.56,
-    "transition_setup_tradeability_floor": 54.0,
-    "transition_setup_entry_prob_floor": 0.57,
+    "transition_setup_tradeability_floor": 45.0,
+    "transition_setup_entry_prob_floor": 0.55,
     "breakout_setup_tradeability_floor": 28.0,
     "breakout_setup_direction_prob_30_floor": 0.62,
     "breakout_setup_direction_prob_60_floor": 0.68,
@@ -135,6 +135,12 @@ DEFAULT_STRATEGY_PARAMS = {
     "breakout_active_exit_probability_cap": 0.34,
     "breakout_active_projected_move_atr_floor": 1.20,
     "breakout_active_one_atr_probability_floor": 0.50,
+    "anticipate_breaks": 1,
+    "anticipatory_breakout_score_threshold": 55.0,
+    "anticipatory_breakout_active_score": 68.0,
+    "anticipatory_breakout_tradeability_floor": 45.0,
+    "anticipatory_breakout_max_fakeout_probability": 0.58,
+    "vwap_rejection_threshold_pct": 0.04,
     "smooth_adx_center": 20.0,
     "smooth_adx_scale": 2.6,
     "smooth_atr_percent_center": 0.24,
@@ -150,14 +156,14 @@ DEFAULT_STRATEGY_PARAMS = {
     "rr_signal_tp_pips": 200,
     "rr_signal_target_move_pips": 200,
     "rr_signal_pip_size": 0.1,
-    "rr_signal_min_confidence": 70.0,
-    "rr_signal_min_tradeability_score": 56.0,
-    "rr_signal_min_move_probability": 0.56,
-    "rr_signal_min_expected_edge_pct": 0.05,
+    "rr_signal_min_confidence": 60.0,
+    "rr_signal_min_tradeability_score": 48.0,
+    "rr_signal_min_move_probability": 0.52,
+    "rr_signal_min_expected_edge_pct": 0.03,
     "rr_signal_allow_b_grade": 1,
     "rr_signal_b_min_move_probability": 0.60,
-    "rr_signal_b_min_session_quality": 0.72,
-    "rr_signal_b_require_active_state": 1,
+    "rr_signal_b_min_session_quality": 0.0,
+    "rr_signal_b_require_active_state": 0,
     "rr_signal_b_min_mtf_matches": 3,
     "rr_signal_strong_stack_target_atr_cap": 1.20,
     "rr_signal_allow_soft_no_trade": 1,
@@ -172,7 +178,7 @@ DEFAULT_STRATEGY_PARAMS = {
     "rr_signal_risk_fraction": 0.01,
     "rr_signal_partial_take_profit_pips": 100,
     "rr_signal_move_sl_to_be_after_partial": 1,
-    "rr_signal_trade_hours_utc": [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
+    "rr_signal_trade_hours_utc": [],
     "rr_signal_require_m15_trigger": 1,
     "rr_signal_max_signals_per_day": 5,
     "rr_signal_h1_neutral_override_enabled": 1,
@@ -1771,9 +1777,9 @@ def _build_rr_signal_state(
     status_text = "Stand by. Current RR direction is not actionable yet."
     if status == "arming":
         if momentum_override_qualified and h1_neutral:
-            status_text = "15M momentum acceleration detected while H1 is neutral; waiting for H1 trend confirmation."
+            status_text = "15M momentum acceleration detected before H1 confirmation; the early RR stack is building."
         else:
-            status_text = "Directional setup detected; waiting for full fixed-target confirmation."
+            status_text = "Directional setup detected; structure and momentum are aligning for a fixed-target entry."
     elif status == "ready":
         status_text = "High-accuracy RR 1:2 signal is ready for alerting."
     if status != "ready" and blockers:
@@ -1858,6 +1864,250 @@ def _warning_from_rank(rank):
         4: "Active Momentum Event",
     }
     return mapping.get(int(rank), "Normal")
+
+
+def _calculate_anticipatory_breakout_context(
+    *,
+    strategy_params,
+    current_price,
+    ema_20,
+    ema_50,
+    adx_14,
+    volume_zscore,
+    volume_spike,
+    trend,
+    alignment_score,
+    pa_struct,
+    sr_reaction,
+    support_distance_pct,
+    resistance_distance_pct,
+    opening_range_break,
+    sweep_reclaim_signal,
+    dist_session_vwap_pct,
+):
+    if not bool(int(strategy_params.get("anticipate_breaks", 1) or 0)):
+        return {
+            "direction": "Neutral",
+            "score": 0.0,
+            "setup_boost": 0.0,
+            "trigger_boost": 0.0,
+            "signals": [],
+            "components": {},
+        }
+
+    current_price = _safe_float(current_price, 0.0)
+    ema_20 = _safe_float(ema_20, 0.0)
+    ema_50 = _safe_float(ema_50, 0.0)
+    adx_14 = _safe_float(adx_14, 0.0)
+    volume_zscore = _safe_float(volume_zscore, 0.0)
+    alignment_score = _safe_float(alignment_score, 0.0)
+    opening_range_break = int(_safe_float(opening_range_break, 0.0))
+    sweep_reclaim_signal = int(_safe_float(sweep_reclaim_signal, 0.0))
+    dist_session_vwap_pct = _safe_float(dist_session_vwap_pct, 0.0)
+    pa_struct = str(pa_struct or "")
+    sr_reaction = str(sr_reaction or "None")
+
+    bearish_ema_stack = current_price > 0.0 and ema_20 > 0.0 and ema_50 > 0.0 and current_price < ema_20 < ema_50
+    bullish_ema_stack = current_price > 0.0 and ema_20 > 0.0 and ema_50 > 0.0 and current_price > ema_20 > ema_50
+    vwap_threshold = float(strategy_params.get("vwap_rejection_threshold_pct", 0.04) or 0.04)
+    adx_threshold = float(strategy_params.get("adx_trending_threshold", 20.0) or 20.0)
+    volume_threshold = max(1.4, float(strategy_params.get("volume_spike_zscore_threshold", 1.8) or 1.8) - 0.4)
+
+    direction = "Neutral"
+    components = {}
+    signals = []
+
+    structure_direction = "Neutral"
+    structure_strength = 0.0
+    if "Bearish Breakdown" in pa_struct:
+        structure_direction = "Bearish"
+        structure_strength = 1.0
+    elif "Bullish Breakout" in pa_struct:
+        structure_direction = "Bullish"
+        structure_strength = 1.0
+    elif "Bearish Structure" in pa_struct or "Lower Highs / Lower Lows" in pa_struct:
+        structure_direction = "Bearish"
+        structure_strength = 0.8
+    elif "Bullish Structure" in pa_struct or "Higher Highs / Higher Lows" in pa_struct:
+        structure_direction = "Bullish"
+        structure_strength = 0.8
+    elif "Bearish Drift" in pa_struct or "Bearish Pressure" in pa_struct:
+        structure_direction = "Bearish"
+        structure_strength = 0.6
+    elif "Bullish Drift" in pa_struct or "Bullish Pressure" in pa_struct:
+        structure_direction = "Bullish"
+        structure_strength = 0.6
+
+    if opening_range_break < 0 and structure_direction in {"Neutral", "Bearish"}:
+        structure_direction = "Bearish"
+        structure_strength = max(structure_strength, 0.78)
+    elif opening_range_break > 0 and structure_direction in {"Neutral", "Bullish"}:
+        structure_direction = "Bullish"
+        structure_strength = max(structure_strength, 0.78)
+
+    if bearish_ema_stack and structure_direction == "Bearish":
+        structure_strength = max(structure_strength, 0.82)
+    elif bullish_ema_stack and structure_direction == "Bullish":
+        structure_strength = max(structure_strength, 0.82)
+
+    if structure_direction in {"Bullish", "Bearish"} and structure_strength > 0.0:
+        direction = structure_direction
+        components["structure"] = round(structure_strength * 35.0, 2)
+        signals.append(f"{structure_direction} structure break")
+
+    vwap_direction = "Neutral"
+    vwap_strength = 0.0
+    if dist_session_vwap_pct <= -vwap_threshold and (
+        direction in {"Neutral", "Bearish"}
+        or bearish_ema_stack
+        or trend == "Bearish"
+        or alignment_score < 0.0
+        or opening_range_break < 0
+        or sweep_reclaim_signal < 0
+    ):
+        vwap_direction = "Bearish"
+        vwap_strength = _clamp(
+            0.45 + max(0.0, abs(dist_session_vwap_pct) - vwap_threshold) * 8.0 + (0.15 if bearish_ema_stack else 0.0),
+            0.0,
+            1.0,
+        )
+    elif dist_session_vwap_pct >= vwap_threshold and (
+        direction in {"Neutral", "Bullish"}
+        or bullish_ema_stack
+        or trend == "Bullish"
+        or alignment_score > 0.0
+        or opening_range_break > 0
+        or sweep_reclaim_signal > 0
+    ):
+        vwap_direction = "Bullish"
+        vwap_strength = _clamp(
+            0.45 + max(0.0, dist_session_vwap_pct - vwap_threshold) * 8.0 + (0.15 if bullish_ema_stack else 0.0),
+            0.0,
+            1.0,
+        )
+
+    if vwap_direction in {"Bullish", "Bearish"}:
+        if direction == "Neutral":
+            direction = vwap_direction
+        if direction == vwap_direction:
+            components["vwap"] = round(vwap_strength * 20.0, 2)
+            signals.append(f"{vwap_direction} VWAP rejection")
+
+    if bearish_ema_stack and direction in {"Neutral", "Bearish"}:
+        direction = "Bearish"
+        components["ema_alignment"] = 15.0
+        signals.append("Bearish EMA stack")
+    elif bullish_ema_stack and direction in {"Neutral", "Bullish"}:
+        direction = "Bullish"
+        components["ema_alignment"] = 15.0
+        signals.append("Bullish EMA stack")
+
+    if adx_14 >= adx_threshold:
+        components["adx"] = 10.0
+        signals.append("Trend strength confirmed")
+    elif adx_14 >= max(15.0, adx_threshold - 5.0):
+        components["adx"] = 5.0
+        signals.append("Weak trend expansion")
+
+    if bool(volume_spike) or volume_zscore >= volume_threshold:
+        components["volume"] = 10.0
+        signals.append("Volume impulse")
+
+    if direction == "Bearish" and (
+        sr_reaction == "Bearish Breakdown Through Support"
+        or (isinstance(support_distance_pct, (int, float)) and support_distance_pct <= 0.15)
+    ):
+        components["sr_break"] = 10.0
+        signals.append("Breaking nearby support")
+    elif direction == "Bullish" and (
+        sr_reaction == "Bullish Breakout Through Resistance"
+        or (isinstance(resistance_distance_pct, (int, float)) and resistance_distance_pct <= 0.15)
+    ):
+        components["sr_break"] = 10.0
+        signals.append("Breaking nearby resistance")
+
+    stack_aligned = (
+        (direction == "Bearish" and bearish_ema_stack and opening_range_break < 0 and dist_session_vwap_pct <= -vwap_threshold)
+        or (direction == "Bullish" and bullish_ema_stack and opening_range_break > 0 and dist_session_vwap_pct >= vwap_threshold)
+    )
+    if direction in {"Bullish", "Bearish"} and stack_aligned:
+        components["stack_bonus"] = 5.0
+        signals.append("Directional stack is aligned")
+
+    score = round(min(sum(components.values()), 100.0), 2)
+    if direction not in {"Bullish", "Bearish"} or score <= 0.0:
+        return {
+            "direction": "Neutral",
+            "score": 0.0,
+            "setup_boost": 0.0,
+            "trigger_boost": 0.0,
+            "signals": [],
+            "components": {},
+        }
+
+    return {
+        "direction": direction,
+        "score": score,
+        "setup_boost": round(min(2.0, score / 36.0), 2),
+        "trigger_boost": round(min(2.8, score / 24.0), 2),
+        "signals": signals[:6],
+        "components": components,
+    }
+
+
+def _breakout_watch_gate_params(
+    *,
+    warning_ladder,
+    event_regime_label,
+    directional_bias,
+    h4_filter_pass,
+    directional_conviction,
+    directional_trigger_score,
+    trigger_min_score,
+    direction_probability_floor,
+    anti_chop_tradeability_floor,
+    breakout_setup_tradeability_floor,
+    breakout_active_tradeability_floor,
+):
+    relaxation_active = (
+        str(warning_ladder or "") == "Expansion Watch"
+        and str(event_regime_label or "") == "breakout_watch"
+        and str(directional_bias or "") in {"Bullish", "Bearish"}
+        and bool(h4_filter_pass)
+        and float(directional_conviction or 0.0) >= max(float(direction_probability_floor or 0.56), 0.64)
+        and (
+            float(directional_trigger_score or 0.0) >= float(trigger_min_score or 1.3)
+            or float(directional_conviction or 0.0) >= max(float(direction_probability_floor or 0.56) + 0.10, 0.67)
+        )
+    )
+
+    effective_anti_chop_tradeability_floor = float(anti_chop_tradeability_floor or 68.0)
+    effective_fakeout_risk_threshold = 3.6
+    effective_fakeout_directional_conviction_floor = 0.74
+    effective_fakeout_expansion_floor = 58.0
+    effective_fakeout_probability_buffer = 0.10
+    effective_fakeout_probability_cap_floor = 0.42
+
+    if relaxation_active:
+        effective_anti_chop_tradeability_floor = min(
+            effective_anti_chop_tradeability_floor,
+            max(float(breakout_setup_tradeability_floor or 28.0), 28.0),
+        )
+        effective_fakeout_risk_threshold = 6.1
+        effective_fakeout_directional_conviction_floor = max(float(direction_probability_floor or 0.56), 0.64)
+        effective_fakeout_expansion_floor = 48.0
+        effective_fakeout_probability_buffer = 0.20
+        effective_fakeout_probability_cap_floor = 0.62
+
+    return {
+        "relaxation_active": relaxation_active,
+        "anti_chop_tradeability_floor": round(effective_anti_chop_tradeability_floor, 2),
+        "fakeout_risk_threshold": round(effective_fakeout_risk_threshold, 2),
+        "fakeout_directional_conviction_floor": round(effective_fakeout_directional_conviction_floor, 4),
+        "fakeout_expansion_floor": round(effective_fakeout_expansion_floor, 2),
+        "fakeout_probability_buffer": round(effective_fakeout_probability_buffer, 2),
+        "fakeout_probability_cap_floor": round(effective_fakeout_probability_cap_floor, 2),
+    }
 
 
 def _stabilize_runtime_regime_state(regime_state, memory, strategy_params):
@@ -2384,6 +2634,35 @@ def compute_prediction_from_ta(ta_data):
     sweep_signal_strength = min(max(sweep_reclaim_quality, 0.0), 1.0) if sweep_reclaim_signal != 0 else 0.0
     support_special_families = _nearby_level_special_family_count(nearby_supports)
     resistance_special_families = _nearby_level_special_family_count(nearby_resistances)
+    anticipatory_context = _calculate_anticipatory_breakout_context(
+        strategy_params=strategy_params,
+        current_price=ta_data.get("current_price"),
+        ema_20=ta_data.get("ema_20"),
+        ema_50=ta_data.get("ema_50"),
+        adx_14=adx_14,
+        volume_zscore=volume_zscore,
+        volume_spike=volume_spike,
+        trend=trend,
+        alignment_score=alignment_score,
+        pa_struct=pa_struct,
+        sr_reaction=sr_reaction,
+        support_distance_pct=support_distance_pct,
+        resistance_distance_pct=resistance_distance_pct,
+        opening_range_break=opening_range_break,
+        sweep_reclaim_signal=sweep_reclaim_signal,
+        dist_session_vwap_pct=structure_context.get("distSessionVwapPct"),
+    )
+    anticipatory_direction = anticipatory_context["direction"]
+    anticipatory_score = float(anticipatory_context["score"] or 0.0)
+    if anticipatory_direction == "Bullish":
+        bull_setup += anticipatory_context["setup_boost"]
+        bull_trigger += anticipatory_context["trigger_boost"]
+    elif anticipatory_direction == "Bearish":
+        bear_setup += anticipatory_context["setup_boost"]
+        bear_trigger += anticipatory_context["trigger_boost"]
+    feature_hits["anticipatory_breakout"] = anticipatory_score > 0.0
+    feature_hits["anticipatory_direction"] = anticipatory_direction
+    feature_hits["anticipatory_score"] = round(anticipatory_score, 2)
     bullish_sweep_reversal_context = (
         sweep_reclaim_signal > 0
         and (
@@ -2646,6 +2925,26 @@ def compute_prediction_from_ta(ta_data):
     h4_filter_pass = directional_resolution["h4_filter_pass"]
     m15_trigger_aligned = directional_resolution["m15_trigger_aligned"]
     m15_trigger_conflict = directional_resolution["m15_trigger_conflict"]
+    anticipatory_score_threshold = float(strategy_params.get("anticipatory_breakout_score_threshold", 55.0) or 55.0)
+    anticipatory_active_score = float(strategy_params.get("anticipatory_breakout_active_score", 68.0) or 68.0)
+    anticipatory_tradeability_floor = float(strategy_params.get("anticipatory_breakout_tradeability_floor", 45.0) or 45.0)
+    anticipatory_fakeout_cap = float(strategy_params.get("anticipatory_breakout_max_fakeout_probability", 0.58) or 0.58)
+    anticipatory_override_active = (
+        anticipatory_direction in {"Bullish", "Bearish"}
+        and anticipatory_score >= anticipatory_score_threshold
+        and m15_trend == anticipatory_direction
+        and directional_bias in {"Neutral", anticipatory_direction}
+        and not h4_opposes_direction
+    )
+    if anticipatory_override_active:
+        directional_bias = anticipatory_direction
+        verdict = anticipatory_direction
+        directional_bias_source = "anticipatory_break"
+        direction_timeframe = "15m"
+        m15_trigger_aligned = True
+        m15_trigger_conflict = False
+        h4_filter_pass = h4_trend in {anticipatory_direction, "Neutral"}
+        h4_opposes_direction = h4_trend in {"Bullish", "Bearish"} and h4_trend != anticipatory_direction
 
     if warning_ladder in {"Directional Expansion Likely", "Active Momentum Event"} and event_breakout_bias != "Neutral":
         if directional_bias != "Neutral" and directional_bias != event_breakout_bias:
@@ -2658,7 +2957,7 @@ def compute_prediction_from_ta(ta_data):
     if directional_bias in {"Bullish", "Bearish"}:
         verdict = directional_bias
 
-    if h1_direction == "Neutral" and not h1_neutral_override_active:
+    if h1_direction == "Neutral" and not h1_neutral_override_active and not anticipatory_override_active:
         no_trade_reasons.append("H1 direction is neutral.")
     if h4_opposes_direction:
         hard_no_trade_reasons.append("H4 trend opposes the selected direction.")
@@ -2807,7 +3106,24 @@ def compute_prediction_from_ta(ta_data):
     anti_chop_reasons = []
     if warning_ladder in {"Expansion Watch", "High Breakout Risk"} and event_breakout_bias == "Neutral":
         anti_chop_reasons.append("Expansion risk is rising without directional confirmation.")
-    if warning_ladder in {"Expansion Watch", "High Breakout Risk"} and tradeability_score < anti_chop_tradeability_floor and regime_label != "transition":
+    breakout_watch_gate_params = _breakout_watch_gate_params(
+        warning_ladder=warning_ladder,
+        event_regime_label=event_regime_label,
+        directional_bias=directional_bias,
+        h4_filter_pass=h4_filter_pass,
+        directional_conviction=max(bullish_prob_60, bearish_prob_60),
+        directional_trigger_score=max(bull_trigger, bear_trigger),
+        trigger_min_score=trigger_min_score,
+        direction_probability_floor=direction_probability_floor,
+        anti_chop_tradeability_floor=anti_chop_tradeability_floor,
+        breakout_setup_tradeability_floor=breakout_setup_tradeability_floor,
+        breakout_active_tradeability_floor=breakout_active_tradeability_floor,
+    )
+    if (
+        warning_ladder in {"Expansion Watch", "High Breakout Risk"}
+        and tradeability_score < breakout_watch_gate_params["anti_chop_tradeability_floor"]
+        and regime_label != "transition"
+    ):
         anti_chop_reasons.append("Tradeability is still below the execution floor for breakout conditions.")
     if alignment_label == "Mixed / Low Alignment" and score_margin < (verdict_margin_threshold + anti_chop_margin_buffer) and max(bullish_prob_60, bearish_prob_60) < 0.60:
         anti_chop_reasons.append("Directional edge is still too narrow in mixed alignment.")
@@ -2878,11 +3194,11 @@ def compute_prediction_from_ta(ta_data):
     fakeout_risk_score = float(((regime_state.get("components") or {}).get("fakeout_risk_score")) or 0.0)
     directional_conviction = max(bullish_prob_60, bearish_prob_60)
     fakeout_hard_block = (
-        fakeout_risk_score >= 3.6
+        fakeout_risk_score >= breakout_watch_gate_params["fakeout_risk_threshold"]
         and not (
-            directional_conviction >= 0.74
-            and expansion_probability_60m >= 58.0
-            and tradeability_score >= breakout_setup_tradeability_floor
+            directional_conviction >= breakout_watch_gate_params["fakeout_directional_conviction_floor"]
+            and expansion_probability_60m >= breakout_watch_gate_params["fakeout_expansion_floor"]
+            and tradeability_score >= breakout_watch_gate_params["anti_chop_tradeability_floor"]
         )
     )
     if fakeout_hard_block:
@@ -3009,10 +3325,31 @@ def compute_prediction_from_ta(ta_data):
         and execution_meta["meta_label_probability"] >= breakout_active_meta_probability_floor
         and expected_edge_pct >= breakout_active_expected_edge_floor
     )
+    anticipatory_setup_eligible = (
+        action_state == "WAIT"
+        and anticipatory_override_active
+        and directional_bias in {"Bullish", "Bearish"}
+        and not hard_no_trade_reasons
+        and h4_filter_pass
+        and m15_trigger_aligned
+        and tradeability_score >= anticipatory_tradeability_floor
+        and anticipatory_score >= anticipatory_score_threshold
+        and meta_scores["fakeout_probability"] <= anticipatory_fakeout_cap
+    )
+    anticipatory_active_eligible = (
+        anticipatory_setup_eligible
+        and anticipatory_score >= anticipatory_active_score
+    )
     if breakout_active_eligible:
         action_state = "LONG_ACTIVE" if directional_bias == "Bullish" else "SHORT_ACTIVE"
         action = "buy" if directional_bias == "Bullish" else "sell"
     elif breakout_setup_eligible:
+        action_state = "SETUP_LONG" if directional_bias == "Bullish" else "SETUP_SHORT"
+        action = "hold"
+    elif anticipatory_active_eligible:
+        action_state = "LONG_ACTIVE" if directional_bias == "Bullish" else "SHORT_ACTIVE"
+        action = "buy" if directional_bias == "Bullish" else "sell"
+    elif anticipatory_setup_eligible:
         action_state = "SETUP_LONG" if directional_bias == "Bullish" else "SETUP_SHORT"
         action = "hold"
     entry_threshold = float(strategy_params.get("meta_entry_score_threshold", 63.0))
@@ -3020,7 +3357,7 @@ def compute_prediction_from_ta(ta_data):
     exit_cap = float(strategy_params.get("meta_exit_prob_cap", 0.58))
     min_expected_edge_pct = float(strategy_params.get("min_expected_edge_pct", 0.06))
     effective_min_expected_edge_pct = min_expected_edge_pct
-    if directional_bias_source == "breakout_stack":
+    if directional_bias_source in {"breakout_stack", "anticipatory_break"}:
         effective_min_expected_edge_pct = min(min_expected_edge_pct, 0.005)
     elif regime_label == "trend" and directional_bias in {"Bullish", "Bearish"}:
         effective_min_expected_edge_pct = min(min_expected_edge_pct, 0.005)
@@ -3030,11 +3367,23 @@ def compute_prediction_from_ta(ta_data):
             effective_fakeout_cap = max(fakeout_cap, breakout_active_fakeout_probability_cap)
         elif action_state in {"SETUP_LONG", "SETUP_SHORT"}:
             effective_fakeout_cap = max(fakeout_cap, breakout_setup_fakeout_probability_cap)
-    promoted_by_breakout = breakout_active_eligible or breakout_setup_eligible
+    elif directional_bias_source == "anticipatory_break":
+        effective_fakeout_cap = max(fakeout_cap, anticipatory_fakeout_cap)
+    if breakout_watch_gate_params["relaxation_active"] and action_state in {"LONG_ACTIVE", "SHORT_ACTIVE", "SETUP_LONG", "SETUP_SHORT"}:
+        effective_fakeout_cap = max(
+            effective_fakeout_cap,
+            breakout_watch_gate_params["fakeout_probability_cap_floor"],
+        )
+    promoted_by_breakout = (
+        breakout_active_eligible
+        or breakout_setup_eligible
+        or anticipatory_active_eligible
+        or anticipatory_setup_eligible
+    )
 
     if action_state in {"LONG_ACTIVE", "SHORT_ACTIVE", "SETUP_LONG", "SETUP_SHORT"}:
-        if directional_bias_source == "breakout_stack" and promoted_by_breakout:
-            if meta_scores["fakeout_probability"] > (effective_fakeout_cap + 0.10):
+        if directional_bias_source in {"breakout_stack", "anticipatory_break"} and promoted_by_breakout:
+            if meta_scores["fakeout_probability"] > (effective_fakeout_cap + breakout_watch_gate_params["fakeout_probability_buffer"]):
                 no_trade_reasons.append("Fakeout probability is elevated for the current setup.")
             if meta_scores["exit_risk_probability"] > (exit_cap + 0.10) and action_state in {"SETUP_LONG", "SETUP_SHORT"}:
                 no_trade_reasons.append("Exit risk model is too high for a fresh entry.")
