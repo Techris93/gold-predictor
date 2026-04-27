@@ -70,9 +70,20 @@ SHORT_KEYWORDS = (
     "selloff",
 )
 
+HISTORICAL_OUTCOME_LABEL = "30m"
+HISTORICAL_ONE_R_PCT = 0.2
+
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _utc_from_unix_timestamp(value: Any, default: str | None = None) -> str:
+    try:
+        parsed = datetime.fromtimestamp(int(value), tz=timezone.utc)
+    except (TypeError, ValueError, OSError, OverflowError):
+        return default or _utc_now()
+    return parsed.replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _safe_float(value: Any, default: float | None = None) -> float | None:
@@ -144,6 +155,7 @@ class TradeBrainService:
             "emotion_logs": [],
             "notifications": [],
             "last_market_data": None,
+            "backfill": {"historicalOutcomeImports": {}},
             "stats": self._empty_stats(),
         }
 
@@ -180,6 +192,11 @@ class TradeBrainService:
             state["emotion_logs"] = []
         if not isinstance(state.get("notifications"), list):
             state["notifications"] = []
+        if not isinstance(state.get("backfill"), dict):
+            state["backfill"] = {"historicalOutcomeImports": {}}
+        imports = state["backfill"].get("historicalOutcomeImports")
+        if not isinstance(imports, dict):
+            state["backfill"]["historicalOutcomeImports"] = {}
         state["config"] = {**self.config, **(state.get("config") or {})}
         state["stats"] = self._compute_stats_locked(state["trades"])
         return state
@@ -198,6 +215,13 @@ class TradeBrainService:
     def _all_trades_locked(self, user_id: str | None = None) -> list[dict[str, Any]]:
         return [trade for trade in self.state["trades"] if self._trade_matches_user(trade, user_id)]
 
+    def _refresh_active_trade_id_locked(self) -> None:
+        for trade in reversed(self.state["trades"]):
+            if trade.get("status") == "ACTIVE":
+                self.state["active_trade_id"] = trade.get("id")
+                return
+        self.state["active_trade_id"] = None
+
     def _find_trade_locked(self, trade_id: str, user_id: str | None = None) -> tuple[int, dict[str, Any]]:
         for index, trade in enumerate(self.state["trades"]):
             if trade.get("id") == trade_id and self._trade_matches_user(trade, user_id):
@@ -206,13 +230,325 @@ class TradeBrainService:
 
     def _active_trade_locked(self, user_id: str | None = None) -> dict[str, Any] | None:
         active_trade_id = self.state.get("active_trade_id")
-        if not active_trade_id:
-            return None
-        for trade in self.state["trades"]:
-            if trade.get("id") == active_trade_id and trade.get("status") == "ACTIVE":
-                if self._trade_matches_user(trade, user_id):
-                    return trade
+        if active_trade_id:
+            for trade in reversed(self.state["trades"]):
+                if trade.get("id") == active_trade_id and trade.get("status") == "ACTIVE":
+                    if self._trade_matches_user(trade, user_id):
+                        return trade
+        for trade in reversed(self.state["trades"]):
+            if trade.get("status") == "ACTIVE" and self._trade_matches_user(trade, user_id):
+                return trade
         return None
+
+    def _historical_outcomes_path(self) -> Path:
+        return self.storage_path.with_name("live_signal_outcomes.json")
+
+    def _historical_backfill_imports_locked(self) -> dict[str, Any]:
+        backfill = self.state.get("backfill")
+        if not isinstance(backfill, dict):
+            backfill = {"historicalOutcomeImports": {}}
+            self.state["backfill"] = backfill
+        imports = backfill.get("historicalOutcomeImports")
+        if not isinstance(imports, dict):
+            imports = {}
+            backfill["historicalOutcomeImports"] = imports
+        return imports
+
+    def _historical_imported_record_ids_locked(self, user_id: str) -> set[str]:
+        imports = self._historical_backfill_imports_locked()
+        imported_ids: set[str] = set()
+        entry = imports.get(user_id)
+        if isinstance(entry, dict):
+            imported_ids.update(str(item) for item in (entry.get("recordIds") or []) if item)
+        for trade in self.state["trades"]:
+            if not self._trade_matches_user(trade, user_id):
+                continue
+            backfill_meta = trade.get("backfill") if isinstance(trade.get("backfill"), dict) else {}
+            record_id = str(backfill_meta.get("recordId") or "").strip()
+            if record_id:
+                imported_ids.add(record_id)
+        return imported_ids
+
+    def _record_historical_backfill_locked(self, user_id: str, imported_ids: set[str]) -> None:
+        imports = self._historical_backfill_imports_locked()
+        imports[user_id] = {
+            "recordIds": sorted(imported_ids),
+            "checkedAt": _utc_now(),
+        }
+
+    def _load_historical_outcome_records(self) -> list[dict[str, Any]]:
+        path = self._historical_outcomes_path()
+        if not path.exists():
+            return []
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            return []
+        if isinstance(payload, dict):
+            records = payload.get("records")
+            if isinstance(records, list):
+                return [record for record in records if isinstance(record, dict)]
+            return []
+        if isinstance(payload, list):
+            return [record for record in payload if isinstance(record, dict)]
+        return []
+
+    def _session_from_unix_timestamp(self, value: Any) -> str:
+        try:
+            hour = datetime.fromtimestamp(int(value), tz=timezone.utc).hour
+        except (TypeError, ValueError, OSError, OverflowError):
+            return self.get_current_session()
+        if 0 <= hour < 8:
+            return "Asia"
+        if 8 <= hour < 13:
+            return "London"
+        if 13 <= hour < 21:
+            return "New York"
+        return "Rollover"
+
+    def _historical_trigger(self, record: dict[str, Any]) -> str:
+        record_id = str(record.get("id") or "")
+        parts = record_id.split(":", 3)
+        if len(parts) >= 2 and parts[1].strip():
+            return parts[1].strip()
+        snapshot = record.get("snapshot") if isinstance(record.get("snapshot"), dict) else {}
+        stage = str(snapshot.get("trade_playbook_stage") or "").strip()
+        if stage:
+            return _humanize_action(stage)
+        verdict = str(record.get("verdict") or "signal").strip()
+        return f"Historical {verdict} signal"
+
+    def _historical_exit_payload(self, final_r: float, signed_move_pct: float) -> tuple[str, str]:
+        if final_r <= -1.0:
+            return (
+                "HISTORICAL_STOP_OUT",
+                f"Imported from the {HISTORICAL_OUTCOME_LABEL} signal outcome after the move resolved {signed_move_pct:.4f}% against the trade.",
+            )
+        if final_r >= 3.0:
+            return (
+                "HISTORICAL_TAKE_PROFIT_2",
+                f"Imported from the {HISTORICAL_OUTCOME_LABEL} signal outcome after the move resolved {signed_move_pct:.4f}% in favor of the trade.",
+            )
+        if final_r >= float(self.config.get("partialTpR", 1.5) or 1.5):
+            return (
+                "HISTORICAL_TAKE_PROFIT_1",
+                f"Imported from the {HISTORICAL_OUTCOME_LABEL} signal outcome after the move resolved {signed_move_pct:.4f}% in favor of the trade.",
+            )
+        return (
+            "HISTORICAL_TIME_EXIT",
+            f"Imported from the {HISTORICAL_OUTCOME_LABEL} signal outcome after the move resolved {signed_move_pct:.4f}% from entry.",
+        )
+
+    def _build_historical_trade_locked(self, record: dict[str, Any], user_id: str) -> dict[str, Any] | None:
+        verdict = str(record.get("verdict") or "").strip().lower()
+        if verdict.startswith("bull"):
+            direction = "LONG"
+        elif verdict.startswith("bear"):
+            direction = "SHORT"
+        else:
+            return None
+
+        entry_price = _safe_float(record.get("price"), None)
+        outcome = (record.get("outcomes") or {}).get(HISTORICAL_OUTCOME_LABEL)
+        return_pct = _safe_float((outcome or {}).get("return_pct"), None)
+        if entry_price is None or entry_price <= 0 or return_pct is None:
+            return None
+
+        sign = self._direction_sign(direction)
+        one_r_price = max(0.0001, round(entry_price * (HISTORICAL_ONE_R_PCT / 100.0), 4))
+        stop_price = round(entry_price - (one_r_price * sign), 4)
+        tp1 = round(entry_price + (one_r_price * float(self.config.get("partialTpR", 1.5) or 1.5) * sign), 4)
+        tp2 = round(entry_price + (one_r_price * 3.0 * sign), 4)
+        exit_price = round(entry_price * (1.0 + (return_pct / 100.0)), 4)
+        favorable_move_pct = return_pct if direction == "LONG" else -return_pct
+        final_r = round(max(-3.0, min(3.0, favorable_move_pct / HISTORICAL_ONE_R_PCT)), 4)
+        final_pnl = round(final_r * 100.0, 2)
+        entry_ts = _utc_from_unix_timestamp(record.get("ts"))
+        exit_ts = _utc_from_unix_timestamp((outcome or {}).get("resolved_at"), default=entry_ts)
+        snapshot = record.get("snapshot") if isinstance(record.get("snapshot"), dict) else {}
+        structure = snapshot.get("market_structure") or snapshot.get("structure") or record.get("breakoutBias") or "neutral"
+        regime = snapshot.get("event_regime") or record.get("eventRegime") or record.get("warningLadder") or "normal"
+        session = self._session_from_unix_timestamp(record.get("ts"))
+        trigger = self._historical_trigger(record)
+        confidence = _safe_float(record.get("confidence"), 50.0) or 50.0
+        if confidence > 1.0:
+            confidence = round(confidence / 100.0, 2)
+        exit_reason, exit_reasoning = self._historical_exit_payload(final_r, favorable_move_pct)
+        trade_id = f"hist-{_slug_text(record.get('id'), 'signal')[:72]}"
+
+        decisions = [
+            {
+                "time": entry_ts,
+                "price": round(entry_price, 4),
+                "action": "ENTER",
+                "reasoning": f"Imported {direction} entry from historical {HISTORICAL_OUTCOME_LABEL} outcome tracking.",
+                "emotion": "calm",
+                "marketContext": str(regime),
+            },
+            {
+                "time": exit_ts,
+                "price": exit_price,
+                "action": "EXIT",
+                "reasoning": exit_reasoning,
+                "emotion": "calm",
+                "marketContext": str(regime),
+            },
+        ]
+
+        return {
+            "id": trade_id,
+            "userId": user_id,
+            "symbol": str(record.get("symbol") or "XAUUSD"),
+            "direction": direction,
+            "status": "CLOSED",
+            "createdAt": entry_ts,
+            "updatedAt": exit_ts,
+            "entry": {
+                "price": round(entry_price, 4),
+                "timestamp": entry_ts,
+                "trigger": trigger,
+                "confidence": confidence,
+                "session": session,
+                "context": {
+                    "adx": 0.0,
+                    "atrPercent": round(HISTORICAL_ONE_R_PCT, 4),
+                    "atrDollar": round(one_r_price, 4),
+                    "vwap": round(entry_price, 4),
+                    "structure": structure,
+                    "regime": regime,
+                    "invalidation": stop_price,
+                    "price": round(entry_price, 4),
+                    "session": session,
+                    "trigger": trigger,
+                    "confidence": confidence,
+                    "source": "historical_signal_outcome_import",
+                    "sourceRecordId": record.get("id"),
+                    "note": f"Imported from live signal outcomes using the resolved {HISTORICAL_OUTCOME_LABEL} horizon.",
+                },
+            },
+            "plan": {
+                "entryPrice": round(entry_price, 4),
+                "initialStop": stop_price,
+                "invalidationPrice": stop_price,
+                "tp1": tp1,
+                "tp2": tp2,
+                "riskPercent": 1.0,
+                "riskDollar": 100.0,
+                "positionSize": 0.0,
+                "rrPlanned": 3.0,
+            },
+            "live": {
+                "status": "CLOSED",
+                "currentPrice": exit_price,
+                "unrealizedPnL": final_pnl,
+                "unrealizedR": final_r,
+                "highestPrice": round(max(entry_price, exit_price), 4),
+                "lowestPrice": round(min(entry_price, exit_price), 4),
+                "stopLoss": {
+                    "current": stop_price,
+                    "history": [
+                        {
+                            "price": stop_price,
+                            "time": entry_ts,
+                            "reason": "Historical import synthetic protective stop",
+                            "type": "INITIAL",
+                        }
+                    ],
+                },
+                "takeProfit": {
+                    "tp1": {
+                        "target": tp1,
+                        "hit": final_r >= float(self.config.get("partialTpR", 1.5) or 1.5),
+                        "partialClosed": final_r >= float(self.config.get("partialTpR", 1.5) or 1.5),
+                        "percent": 50,
+                    },
+                    "tp2": {
+                        "target": tp2,
+                        "hit": final_r >= 3.0,
+                        "partialClosed": final_r >= 3.0,
+                        "percent": 50,
+                    },
+                },
+                "trailing": {
+                    "active": False,
+                    "method": None,
+                    "adxAtTrigger": None,
+                    "highestPriceSinceTrail": round(max(entry_price, exit_price), 4),
+                    "lowestPriceSinceTrail": round(min(entry_price, exit_price), 4),
+                    "buffer": 0.0,
+                },
+                "decisions": decisions,
+                "exit": {
+                    "price": exit_price,
+                    "timestamp": exit_ts,
+                    "reason": exit_reason,
+                    "reasoning": exit_reasoning,
+                    "finalPnL": final_pnl,
+                    "finalR": final_r,
+                    "emotion": "calm",
+                },
+                "lastEvaluationSignature": None,
+            },
+            "exit": {
+                "price": exit_price,
+                "timestamp": exit_ts,
+                "reason": exit_reason,
+                "reasoning": exit_reasoning,
+                "finalPnL": final_pnl,
+                "finalR": final_r,
+                "emotion": "calm",
+            },
+            "review": None,
+            "snapshots": [
+                {
+                    "timestamp": entry_ts,
+                    "price": round(entry_price, 4),
+                    "adx": 0.0,
+                    "vwap": round(entry_price, 4),
+                    "atrDollar": round(one_r_price, 4),
+                    "structure": structure,
+                    "regime": str(regime),
+                }
+            ],
+            "backfill": {
+                "recordId": record.get("id"),
+                "source": "live_signal_outcomes",
+                "outcomeLabel": HISTORICAL_OUTCOME_LABEL,
+                "riskUnitPercent": HISTORICAL_ONE_R_PCT,
+            },
+        }
+
+    def _ensure_historical_backfill_locked(self, user_id: str | None) -> int:
+        normalized_user_id = str(user_id or "").strip()
+        if not normalized_user_id or normalized_user_id == "anonymous":
+            return 0
+
+        imported_ids = self._historical_imported_record_ids_locked(normalized_user_id)
+        imported_count = 0
+        for record in self._load_historical_outcome_records():
+            record_id = str(record.get("id") or "").strip()
+            if not record_id or record_id in imported_ids:
+                continue
+            if str(record.get("executionStatus") or "").strip().lower() != "enter":
+                continue
+            if not isinstance(record.get("outcomes"), dict) or HISTORICAL_OUTCOME_LABEL not in record.get("outcomes", {}):
+                continue
+            trade = self._build_historical_trade_locked(record, normalized_user_id)
+            if trade is None:
+                continue
+            self.state["trades"].append(trade)
+            self.state["decision_history"].extend({"tradeId": trade["id"], **decision} for decision in trade["live"]["decisions"])
+            trade["review"] = self._derive_review_locked(trade)
+            imported_ids.add(record_id)
+            imported_count += 1
+
+        self.state["decision_history"] = self.state["decision_history"][-int(self.config["maxDecisionHistory"]):]
+        self._record_historical_backfill_locked(normalized_user_id, imported_ids)
+        if imported_count:
+            self.state["trades"].sort(key=lambda trade: str(trade.get("createdAt") or (trade.get("entry") or {}).get("timestamp") or ""))
+            self._refresh_active_trade_id_locked()
+            self._save_state_locked()
+        return imported_count
 
     def _next_trade_id_locked(self) -> str:
         date_key = datetime.now(timezone.utc).strftime("%Y%m%d")
@@ -403,8 +739,7 @@ class TradeBrainService:
             "emotion": emotion,
         }
         trade["live"]["exit"] = copy.deepcopy(trade["exit"])
-        if self.state.get("active_trade_id") == trade.get("id"):
-            self.state["active_trade_id"] = None
+        self._refresh_active_trade_id_locked()
         self._append_decision_locked(trade, "EXIT", exit_price, reasoning, emotion=emotion)
         review = self._derive_review_locked(trade)
         trade["review"] = review
@@ -789,6 +1124,7 @@ class TradeBrainService:
         user_id: str | None = None,
     ) -> dict[str, Any]:
         with self.lock:
+            self._ensure_historical_backfill_locked(user_id)
             return copy.deepcopy(
                 self._get_learning_adjustment_locked(
                     direction=direction,
@@ -1000,7 +1336,7 @@ class TradeBrainService:
             }
 
             self.state["trades"].append(trade)
-            self.state["active_trade_id"] = trade_id
+            self._refresh_active_trade_id_locked()
             self.state["last_market_data"] = {
                 "price": round(price, 4),
                 "adx": trade["entry"]["context"]["adx"],
@@ -1020,6 +1356,32 @@ class TradeBrainService:
             self._append_notification_locked(event)
             self._save_state_locked()
             return copy.deepcopy(trade)
+
+    def evaluate_all_active_trades(
+        self,
+        current_price: float,
+        market_data: dict[str, Any] | None,
+        decision: str | None = None,
+    ) -> list[dict[str, Any]]:
+        with self.lock:
+            active_user_ids = []
+            seen_user_ids = set()
+            for trade in self.state["trades"]:
+                if trade.get("status") != "ACTIVE":
+                    continue
+                user_id = str(trade.get("userId") or "anonymous")
+                if user_id in seen_user_ids:
+                    continue
+                seen_user_ids.add(user_id)
+                active_user_ids.append(user_id)
+
+        results = []
+        for user_id in active_user_ids:
+            result = self.evaluate_active_trade(current_price, market_data, decision=decision, user_id=user_id)
+            if result is None:
+                continue
+            results.append({"userId": user_id, **result})
+        return results
 
     def evaluate_active_trade(
         self,
@@ -1393,6 +1755,7 @@ class TradeBrainService:
         limit: int = 50,
     ) -> dict[str, Any]:
         with self.lock:
+            self._ensure_historical_backfill_locked(user_id)
             trades = list(reversed(self._all_trades_locked(user_id)))
             if status:
                 normalized_status = str(status).upper()
@@ -1417,8 +1780,13 @@ class TradeBrainService:
             trade = self._active_trade_locked(user_id)
             return copy.deepcopy(trade) if trade else None
 
+    def has_active_trades(self) -> bool:
+        with self.lock:
+            return any(trade.get("status") == "ACTIVE" for trade in self.state["trades"])
+
     def get_stats(self, user_id: str | None = None) -> dict[str, Any]:
         with self.lock:
+            self._ensure_historical_backfill_locked(user_id)
             trades = self._all_trades_locked(user_id)
             return copy.deepcopy(self._compute_stats_locked(trades))
 
@@ -1437,6 +1805,7 @@ class TradeBrainService:
         learning_setup: Any | None = None,
     ) -> dict[str, Any]:
         with self.lock:
+            self._ensure_historical_backfill_locked(user_id)
             analytics = self._build_analytics_locked(user_id)
             trades = self._all_trades_locked(user_id)
             recent = list(reversed(trades))[:8]

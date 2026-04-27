@@ -449,7 +449,12 @@
     let stopLoss = asNumber(executionQuality.stopLoss?.price, null);
     if (blocked) {
       stopLoss = null;
-    } else if (stopLoss === null && price !== null && atrDollar !== null && direction) {
+    } else if (
+      stopLoss === null &&
+      price !== null &&
+      atrDollar !== null &&
+      direction
+    ) {
       stopLoss =
         direction === "SHORT"
           ? price + atrDollar * 1.25
@@ -458,12 +463,12 @@
 
     const qualified = Boolean(
       direction &&
-        (grade.startsWith("A") || grade.startsWith("B")) &&
-        status === "ready" &&
-        !blocked &&
-        price !== null &&
-        stopLoss !== null &&
-        Math.abs(price - stopLoss) > 0.0001,
+      (grade.startsWith("A") || grade.startsWith("B")) &&
+      status === "ready" &&
+      !blocked &&
+      price !== null &&
+      stopLoss !== null &&
+      Math.abs(price - stopLoss) > 0.0001,
     );
 
     return {
@@ -1114,6 +1119,49 @@
     updateAutoTrackUi();
   }
 
+  function dashboardHasTrackedData(dashboard) {
+    if (!dashboard || typeof dashboard !== "object") {
+      return false;
+    }
+    const stats =
+      dashboard.stats && typeof dashboard.stats === "object"
+        ? dashboard.stats
+        : {};
+    return (
+      Boolean(dashboard.activeTrade) ||
+      (asNumber(stats.totalTrades, 0) || 0) > 0
+    );
+  }
+
+  function maybeEvaluateActiveTrade(prediction = state.latestPrediction) {
+    const activeTrade = currentActiveTrade();
+    if (!activeTrade || !state.socket) {
+      return;
+    }
+
+    const derivedMarketData =
+      currentDashboard().marketData ||
+      deriveMarketDataFromPrediction(prediction) ||
+      {};
+    const price = asNumber(
+      derivedMarketData.price,
+      asNumber(prediction?.TechnicalAnalysis?.current_price, null),
+    );
+    if (price === null) {
+      return;
+    }
+
+    state.socket.emit("trade:evaluate", {
+      tradeId: activeTrade.id,
+      price,
+      marketData: {
+        ...derivedMarketData,
+        price,
+      },
+      userId: getUserId(),
+    });
+  }
+
   function buildCreatePayload() {
     const direction = safeText(byId("tb-direction")?.value, "LONG");
     const price = asNumber(byId("tb-entry-price")?.value, null);
@@ -1380,18 +1428,28 @@
 
   function syncFromPrediction(prediction) {
     state.latestPrediction = prediction || null;
-    if (
+    const embeddedDashboard =
       prediction &&
       prediction.TradeBrain &&
       typeof prediction.TradeBrain === "object"
+        ? prediction.TradeBrain
+        : null;
+    const existingHasTrackedData = dashboardHasTrackedData(currentDashboard());
+    const embeddedHasTrackedData = dashboardHasTrackedData(embeddedDashboard);
+
+    if (
+      embeddedDashboard &&
+      (!existingHasTrackedData || embeddedHasTrackedData)
     ) {
-      renderDashboard(prediction.TradeBrain);
+      renderDashboard(embeddedDashboard);
       maybeAutoTrackPrediction(prediction);
+      maybeEvaluateActiveTrade(prediction);
       return;
     }
     maybePrefillForm(deriveMarketDataFromPrediction(prediction));
     updateAutoTrackUi(prediction);
     maybeAutoTrackPrediction(prediction);
+    maybeEvaluateActiveTrade(prediction);
   }
 
   function init() {
@@ -1412,6 +1470,7 @@
     attachSocket,
     refreshDashboard,
     syncFromPrediction,
+    getUserId,
     __test: {
       derivePredictionDirection,
       predictionStopLoss,

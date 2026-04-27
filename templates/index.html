@@ -2978,7 +2978,20 @@
         }
 
         try {
-          const response = await fetch("/api/predict", { cache: "no-store" });
+          const predictionHeaders = {};
+          if (
+            window.TradeBrainUI &&
+            typeof window.TradeBrainUI.getUserId === "function"
+          ) {
+            const tradeBrainUserId = window.TradeBrainUI.getUserId();
+            if (tradeBrainUserId) {
+              predictionHeaders["x-user-id"] = tradeBrainUserId;
+            }
+          }
+          const response = await fetch("/api/predict", {
+            cache: "no-store",
+            headers: predictionHeaders,
+          });
           if (!response.ok) {
             throw new Error(`Server Error: ${response.status}`);
           }

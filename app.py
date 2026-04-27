@@ -5910,7 +5910,11 @@ def _indicator_monitor_loop():
     while True:
         try:
             # Skip polling only when there are no live viewers and no background push subscribers.
-            if _monitor_state["clients"] <= 0 and not _has_background_alert_channels():
+            if (
+                _monitor_state["clients"] <= 0
+                and not _has_background_alert_channels()
+                and not trade_brain_service.has_active_trades()
+            ):
                 socketio.sleep(2)
                 continue
 
@@ -5930,6 +5934,21 @@ def _indicator_monitor_loop():
                 current_price = float(((payload.get("TechnicalAnalysis") or {}).get("current_price")) or 0.0)
                 if current_price > 0:
                     _update_live_signal_outcomes(current_price, int(time.time()))
+                trade_brain_market_data = _build_trade_brain_market_data(
+                    payload.get("TechnicalAnalysis"),
+                    payload.get("RegimeState"),
+                )
+                if trade_brain_market_data.get("price") is not None:
+                    for result in trade_brain_service.evaluate_all_active_trades(
+                        trade_brain_market_data["price"],
+                        trade_brain_market_data,
+                    ):
+                        if result.get("events"):
+                            _emit_trade_brain_events(
+                                result.get("events"),
+                                trade=result.get("trade"),
+                                dashboard=result.get("dashboard"),
+                            )
                 if last_snapshot is not None:
                     changes = _diff_snapshot(last_snapshot, current_snapshot)
                     notification_changes = _filter_notification_changes(changes)
