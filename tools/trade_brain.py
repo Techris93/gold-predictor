@@ -72,6 +72,9 @@ SHORT_KEYWORDS = (
 
 HISTORICAL_OUTCOME_LABEL = "30m"
 HISTORICAL_ONE_R_PCT = 0.2
+BUNDLED_HISTORICAL_OUTCOMES_PATH = (
+    Path(__file__).resolve().parent / "seed_data" / "trade_brain_historical_outcomes.json"
+)
 
 
 def _utc_now() -> str:
@@ -243,6 +246,18 @@ class TradeBrainService:
     def _historical_outcomes_path(self) -> Path:
         return self.storage_path.with_name("live_signal_outcomes.json")
 
+    def _historical_outcome_candidate_paths(self) -> list[Path]:
+        paths = [self._historical_outcomes_path(), BUNDLED_HISTORICAL_OUTCOMES_PATH]
+        unique_paths: list[Path] = []
+        seen = set()
+        for path in paths:
+            key = str(path)
+            if key in seen:
+                continue
+            seen.add(key)
+            unique_paths.append(path)
+        return unique_paths
+
     def _historical_backfill_imports_locked(self) -> dict[str, Any]:
         backfill = self.state.get("backfill")
         if not isinstance(backfill, dict):
@@ -276,8 +291,7 @@ class TradeBrainService:
             "checkedAt": _utc_now(),
         }
 
-    def _load_historical_outcome_records(self) -> list[dict[str, Any]]:
-        path = self._historical_outcomes_path()
+    def _load_historical_outcome_records_from_path(self, path: Path) -> list[dict[str, Any]]:
         if not path.exists():
             return []
         try:
@@ -292,6 +306,19 @@ class TradeBrainService:
         if isinstance(payload, list):
             return [record for record in payload if isinstance(record, dict)]
         return []
+
+    def _load_historical_outcome_records(self) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        seen_record_ids: set[str] = set()
+        for path in self._historical_outcome_candidate_paths():
+            for record in self._load_historical_outcome_records_from_path(path):
+                record_id = str(record.get("id") or "").strip()
+                if record_id and record_id in seen_record_ids:
+                    continue
+                if record_id:
+                    seen_record_ids.add(record_id)
+                records.append(record)
+        return records
 
     def _session_from_unix_timestamp(self, value: Any) -> str:
         try:

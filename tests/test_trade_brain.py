@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import app as app_module
+import tools.trade_brain as trade_brain_module
 from tools.trade_brain import TradeBrainService
 
 
@@ -272,16 +273,126 @@ class TradeBrainServiceTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            service = TradeBrainService(temp_path / "trade_brain_state.json")
+            with patch.object(trade_brain_module, "BUNDLED_HISTORICAL_OUTCOMES_PATH", temp_path / "missing_seed.json"):
+                service = TradeBrainService(temp_path / "trade_brain_state.json")
 
-            first_dashboard = service.get_dashboard_payload(user_id="tb-user")
-            second_dashboard = service.get_dashboard_payload(user_id="tb-user")
+                first_dashboard = service.get_dashboard_payload(user_id="tb-user")
+                second_dashboard = service.get_dashboard_payload(user_id="tb-user")
 
             self.assertEqual(first_dashboard["stats"]["closedTrades"], 1)
             self.assertEqual(second_dashboard["stats"]["closedTrades"], 1)
             self.assertEqual(first_dashboard["recentTrades"][0]["direction"], "SHORT")
             self.assertEqual(first_dashboard["recentTrades"][0]["entry"]["trigger"], "Enter With Confirmation")
             self.assertEqual(first_dashboard["recentTrades"][0]["backfill"]["recordId"], "1777244605:Enter With Confirmation:Bearish:4681.43")
+
+    def test_dashboard_backfills_from_bundled_seed_when_runtime_outcomes_are_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            bundled_seed_path = temp_path / "trade_brain_historical_outcomes.json"
+            bundled_seed_path.write_text(
+                json.dumps(
+                    {
+                        "records": [
+                            {
+                                "id": "1777244673:Enter With Confirmation:Bearish:4682.74",
+                                "ts": 1777244673,
+                                "price": 4682.74,
+                                "verdict": "Bearish",
+                                "confidence": 66,
+                                "breakoutBias": "Bearish",
+                                "warningLadder": "Directional Expansion Likely",
+                                "eventRegime": "breakout_watch",
+                                "executionStatus": "enter",
+                                "entryAllowed": True,
+                                "snapshot": {
+                                    "market_structure": "Bearish Drift",
+                                    "event_regime": "breakout_watch",
+                                },
+                                "outcomes": {
+                                    "30m": {
+                                        "return_pct": -0.0606,
+                                        "resolved_at": 1777246479,
+                                    }
+                                },
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.object(trade_brain_module, "BUNDLED_HISTORICAL_OUTCOMES_PATH", bundled_seed_path):
+                service = TradeBrainService(temp_path / "trade_brain_state.json")
+                dashboard = service.get_dashboard_payload(user_id="tb-user")
+
+            self.assertEqual(dashboard["stats"]["closedTrades"], 1)
+            self.assertEqual(dashboard["recentTrades"][0]["entry"]["trigger"], "Enter With Confirmation")
+            self.assertEqual(dashboard["recentTrades"][0]["backfill"]["recordId"], "1777244673:Enter With Confirmation:Bearish:4682.74")
+
+    def test_dashboard_merges_runtime_and_bundled_outcomes_without_duplicates(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            runtime_record = {
+                "id": "1777244605:Enter With Confirmation:Bearish:4681.43",
+                "ts": 1777244605,
+                "price": 4681.43,
+                "verdict": "Bearish",
+                "confidence": 66,
+                "breakoutBias": "Bearish",
+                "warningLadder": "Directional Expansion Likely",
+                "eventRegime": "breakout_watch",
+                "executionStatus": "enter",
+                "entryAllowed": True,
+                "snapshot": {
+                    "market_structure": "Bearish Drift",
+                    "event_regime": "breakout_watch",
+                },
+                "outcomes": {
+                    "30m": {
+                        "return_pct": -0.0282,
+                        "resolved_at": 1777246413,
+                    }
+                },
+            }
+            bundled_record = {
+                "id": "1777244673:Enter With Confirmation:Bearish:4682.74",
+                "ts": 1777244673,
+                "price": 4682.74,
+                "verdict": "Bearish",
+                "confidence": 66,
+                "breakoutBias": "Bearish",
+                "warningLadder": "Directional Expansion Likely",
+                "eventRegime": "breakout_watch",
+                "executionStatus": "enter",
+                "entryAllowed": True,
+                "snapshot": {
+                    "market_structure": "Bearish Drift",
+                    "event_regime": "breakout_watch",
+                },
+                "outcomes": {
+                    "30m": {
+                        "return_pct": -0.0606,
+                        "resolved_at": 1777246479,
+                    }
+                },
+            }
+
+            (temp_path / "live_signal_outcomes.json").write_text(
+                json.dumps({"records": [runtime_record, bundled_record]}),
+                encoding="utf-8",
+            )
+            bundled_seed_path = temp_path / "trade_brain_historical_outcomes.json"
+            bundled_seed_path.write_text(
+                json.dumps({"records": [runtime_record, bundled_record]}),
+                encoding="utf-8",
+            )
+
+            with patch.object(trade_brain_module, "BUNDLED_HISTORICAL_OUTCOMES_PATH", bundled_seed_path):
+                service = TradeBrainService(temp_path / "trade_brain_state.json")
+                dashboard = service.get_dashboard_payload(user_id="tb-user")
+
+            self.assertEqual(dashboard["stats"]["closedTrades"], 2)
+            self.assertEqual(len(dashboard["recentTrades"]), 2)
 
 
 class TradeBrainPredictionRouteTests(unittest.TestCase):

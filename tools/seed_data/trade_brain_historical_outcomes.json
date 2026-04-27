@@ -1,0 +1,154 @@
+{
+  "records": [
+    {
+      "id": "1777244605:Enter With Confirmation:Bearish:4681.43",
+      "ts": 1777244605,
+      "price": 4681.43,
+      "verdict": "Bearish",
+      "confidence": 66,
+      "breakoutBias": "Bearish",
+      "warningLadder": "Directional Expansion Likely",
+      "eventRegime": "breakout_watch",
+      "executionStatus": "enter",
+      "entryAllowed": true,
+      "snapshot": {
+        "market_structure": "Bearish Drift",
+        "event_regime": "breakout_watch"
+      },
+      "outcomes": {
+        "15m": {
+          "return_pct": 0.0797,
+          "resolved_at": 1777245514
+        },
+        "30m": {
+          "return_pct": -0.0282,
+          "resolved_at": 1777246413
+        },
+        "60m": {
+          "return_pct": -0.0795,
+          "resolved_at": 1777248214
+        }
+      }
+    },
+    {
+      "id": "1777244673:Enter With Confirmation:Bearish:4682.74",
+      "ts": 1777244673,
+      "price": 4682.74,
+      "verdict": "Bearish",
+      "confidence": 66,
+      "breakoutBias": "Bearish",
+      "warningLadder": "Directional Expansion Likely",
+      "eventRegime": "breakout_watch",
+      "executionStatus": "enter",
+      "entryAllowed": true,
+      "snapshot": {
+        "market_structure": "Bearish Drift",
+        "event_regime": "breakout_watch"
+      },
+      "outcomes": {
+        "15m": {
+          "return_pct": 0.047,
+          "resolved_at": 1777245582
+        },
+        "30m": {
+          "return_pct": -0.0606,
+          "resolved_at": 1777246479
+        },
+        "60m": {
+          "return_pct": -0.1215,
+          "resolved_at": 1777248284
+        }
+      }
+    },
+    {
+      "id": "1777244741:Enter With Confirmation:Bearish:4681.65",
+      "ts": 1777244741,
+      "price": 4681.65,
+      "verdict": "Bearish",
+      "confidence": 66,
+      "breakoutBias": "Bearish",
+      "warningLadder": "Directional Expansion Likely",
+      "eventRegime": "breakout_watch",
+      "executionStatus": "enter",
+      "entryAllowed": true,
+      "snapshot": {
+        "market_structure": "Bearish Drift",
+        "event_regime": "breakout_watch"
+      },
+      "outcomes": {
+        "15m": {
+          "return_pct": 0.0703,
+          "resolved_at": 1777245654
+        },
+        "30m": {
+          "return_pct": -0.0374,
+          "resolved_at": 1777246544
+        },
+        "60m": {
+          "return_pct": -0.0983,
+          "resolved_at": 1777248344
+        }
+      }
+    },
+    {
+      "id": "1777244798:Enter With Confirmation:Bearish:4682.31",
+      "ts": 1777244798,
+      "price": 4682.31,
+      "verdict": "Bearish",
+      "confidence": 66,
+      "breakoutBias": "Bearish",
+      "warningLadder": "Directional Expansion Likely",
+      "eventRegime": "breakout_watch",
+      "executionStatus": "enter",
+      "entryAllowed": true,
+      "snapshot": {
+        "market_structure": "Bearish Drift",
+        "event_regime": "breakout_watch"
+      },
+      "outcomes": {
+        "15m": {
+          "return_pct": 0.0468,
+          "resolved_at": 1777245709
+        },
+        "30m": {
+          "return_pct": -0.0423,
+          "resolved_at": 1777246610
+        },
+        "60m": {
+          "return_pct": -0.0703,
+          "resolved_at": 1777248408
+        }
+      }
+    },
+    {
+      "id": "1777317250:Enter On Normal Flow:Bearish:4680.55",
+      "ts": 1777317250,
+      "price": 4680.55,
+      "verdict": "Bearish",
+      "confidence": 52,
+      "breakoutBias": "Bearish",
+      "warningLadder": "Expansion Watch",
+      "eventRegime": "breakout_watch",
+      "executionStatus": "enter",
+      "entryAllowed": true,
+      "snapshot": {
+        "market_structure": "Bullish Drift",
+        "event_regime": "breakout_watch"
+      },
+      "outcomes": {
+        "15m": {
+          "return_pct": 0.0235,
+          "resolved_at": 1777318153
+        },
+        "30m": {
+          "return_pct": -0.0374,
+          "resolved_at": 1777319068
+        },
+        "60m": {
+          "return_pct": -0.0233,
+          "resolved_at": 1777320856
+        }
+      }
+    }
+  ]
+}
