@@ -1,6 +1,7 @@
 import unittest
 
 import app as app_module
+from tools.signal_engine import compute_prediction_from_ta
 
 
 def _sample_ta_payload(direction="Short", session="London", bar_timestamp=None):
@@ -59,6 +60,79 @@ def _sample_execution_state(direction="Short", active=False):
     }
 
 
+def _streamlined_bearish_ta_payload():
+    return {
+        "current_price": 3320.0,
+        "ema_20": 3326.0,
+        "ema_50": 3334.0,
+        "price_action": {
+            "structure": "Bearish Breakdown",
+            "latest_candle_pattern": "None",
+        },
+        "support_resistance": {
+            "reaction": "Bearish Resistance Rejection",
+            "support_distance_pct": 0.08,
+            "resistance_distance_pct": 0.32,
+            "nearest_support": {"label": "Recent Swing Low", "price": 3312.0},
+            "nearest_resistance": {"label": "Recent Swing High", "price": 3332.0},
+            "nearby_supports": [{"label": "Recent Swing Low", "price": 3312.0}],
+            "nearby_resistances": [{"label": "Recent Swing High", "price": 3332.0}],
+            "pivot_levels": {
+                "pp": 3324.0,
+                "r1": 3336.0,
+                "s1": 3310.0,
+                "r2": 3346.0,
+                "s2": 3300.0,
+            },
+        },
+        "structure_context": {
+            "distSessionVwapPct": -0.12,
+            "sessionVwap": 3325.0,
+            "openingRangeBreak": -1,
+            "sweepReclaimSignal": 0,
+            "recentSwingHigh": 3330.0,
+            "recentSwingLow": 3321.0,
+            "pivotPoint": 3324.0,
+            "pivotResistance1": 3336.0,
+            "pivotSupport1": 3310.0,
+            "pivotResistance2": 3346.0,
+            "pivotSupport2": 3300.0,
+        },
+        "volatility_regime": {
+            "market_regime": "Weak Trend",
+            "adx_14": 24.0,
+            "atr_14": 8.0,
+            "atr_percent": 0.24,
+        },
+        "multi_timeframe": {
+            "m15_trend": "Bearish",
+            "h1_trend": "Bearish",
+            "h4_trend": "Neutral",
+            "alignment_score": -2,
+            "alignment_label": "Strong Bearish Alignment",
+        },
+        "momentum_features": {
+            "macdHistogramSlope": -0.08,
+            "volumeSpike": 1,
+        },
+        "volume_analysis": {
+            "overall_volume_signal": "Strong Selling Pressure (Distribution)",
+        },
+        "session_context": {
+            "isMarketClosed": False,
+            "current_session": {"isMarketClosed": False},
+            "bar_session": {"marketStatus": "open"},
+        },
+        "event_risk": {"active": False},
+        "market_regime_scores": {
+            "trend_probability": 0.62,
+            "expansion_probability": 0.58,
+            "chop_probability": 0.18,
+        },
+        "active_strategy_params": {},
+    }
+
+
 def _step_state(state, now_ts, direction="Short", score=84, active=False):
     ta_payload = _sample_ta_payload(direction=direction)
     regime_state = {"event_regime": "breakout_watch"}
@@ -86,6 +160,44 @@ def _step_state(state, now_ts, direction="Short", score=84, active=False):
 
 
 class StableDecisionEngineTests(unittest.TestCase):
+    def test_streamlined_bearish_signal_stays_actionable(self):
+        ta_data = _streamlined_bearish_ta_payload()
+
+        prediction = compute_prediction_from_ta(ta_data)
+        market_state = app_module._build_market_state_from_prediction(prediction)
+        execution_state = dict(prediction.get("ExecutionState") or {})
+        decision_status = app_module._evaluate_decision_status(
+            verdict=prediction["verdict"],
+            confidence=int(prediction["confidence"]),
+            ta_data=ta_data,
+            trade_guidance=prediction["TradeGuidance"],
+            execution_state=execution_state,
+            tradeability=prediction.get("tradeability"),
+            regime=prediction.get("regime"),
+        )
+        execution_permission = app_module._evaluate_execution_permission(
+            decision_status,
+            market_state,
+        )
+        execution_quality = app_module._build_execution_quality_plan(
+            ta_data,
+            prediction.get("RegimeState") or {},
+            decision_status,
+            execution_state,
+        )
+
+        self.assertEqual(prediction["verdict"], "Bearish")
+        self.assertEqual(prediction["actionState"], "SHORT_ACTIVE")
+        self.assertEqual(prediction.get("signalEngineMode"), "streamlined_fixed")
+        self.assertEqual(prediction.get("tradeability"), "High")
+        self.assertEqual(decision_status["status"], "sell")
+        self.assertNotIn("Watchlist", decision_status["text"])
+        self.assertEqual(execution_permission["status"], "entry_allowed")
+        self.assertEqual(execution_quality["status"], "ready")
+        self.assertEqual(execution_quality["grade"], "A")
+        self.assertEqual(execution_quality["setup"], "VWAP / ORB Continuation Short")
+        self.assertEqual(execution_quality["riskReward"], 2.0)
+
     def test_trade_brain_direction_prefers_final_execution_direction(self):
         prediction = {
             "verdict": "Bearish",

@@ -2470,6 +2470,283 @@ def compute_trade_guidance(ta_data, confidence):
     }
 
 
+def _streamlined_signal_text_matches(text, markers):
+    normalized = str(text or "").strip().lower()
+    if not normalized:
+        return False
+    return any(str(marker or "").strip().lower() in normalized for marker in markers)
+
+
+def _streamlined_dedupe(items):
+    seen = set()
+    ordered = []
+    for item in items or []:
+        value = str(item or "").strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        ordered.append(value)
+    return ordered
+
+
+def _compute_streamlined_fixed_signal(ta_data, strategy_params):
+    ta_data = ta_data if isinstance(ta_data, dict) else {}
+    price_action = ta_data.get("price_action") if isinstance(ta_data.get("price_action"), dict) else {}
+    support_resistance = ta_data.get("support_resistance") if isinstance(ta_data.get("support_resistance"), dict) else {}
+    structure_context = ta_data.get("structure_context") if isinstance(ta_data.get("structure_context"), dict) else {}
+    momentum_features = ta_data.get("momentum_features") if isinstance(ta_data.get("momentum_features"), dict) else {}
+    volatility_regime = ta_data.get("volatility_regime") if isinstance(ta_data.get("volatility_regime"), dict) else {}
+    multi_timeframe = ta_data.get("multi_timeframe") if isinstance(ta_data.get("multi_timeframe"), dict) else {}
+    session_context = ta_data.get("session_context") if isinstance(ta_data.get("session_context"), dict) else {}
+    current_session = session_context.get("current_session") if isinstance(session_context.get("current_session"), dict) else {}
+    event_risk = ta_data.get("event_risk") if isinstance(ta_data.get("event_risk"), dict) else {}
+
+    current_price = _safe_float(ta_data.get("current_price"), 0.0)
+    if current_price <= 0:
+        return {"active": False}
+
+    min_confidence = float(strategy_params.get("streamlined_min_confidence", 55.0) or 55.0)
+    min_tradeability = float(strategy_params.get("streamlined_min_tradeability", 45.0) or 45.0)
+    direction_margin = float(strategy_params.get("streamlined_direction_threshold", 4.0) or 4.0)
+    adx_threshold = float(
+        strategy_params.get(
+            "adx_threshold",
+            strategy_params.get("adx_trending_threshold", 20.0),
+        )
+        or 20.0
+    )
+    weak_adx_threshold = min(15.0, adx_threshold)
+    vwap_threshold_pct = float(strategy_params.get("vwap_rejection_threshold_pct", 0.04) or 0.04)
+
+    ema_20 = _optional_float(ta_data.get("ema_20"))
+    ema_50 = _optional_float(ta_data.get("ema_50"))
+    adx_14 = _safe_float(volatility_regime.get("adx_14"), 0.0)
+    alignment_score = int(round(_safe_float(multi_timeframe.get("alignment_score"), 0.0)))
+    structure_text = str(price_action.get("structure") or "")
+    sr_reaction = str(support_resistance.get("reaction") or "")
+    combined_text = f"{structure_text} {sr_reaction}".strip().lower()
+    vwap_delta = _safe_float(structure_context.get("distSessionVwapPct"), 0.0)
+    session_vwap = _optional_float(structure_context.get("sessionVwap"))
+    orb_state = int(round(_safe_float(structure_context.get("openingRangeBreak"), 0.0)))
+    sweep_state = int(round(_safe_float(structure_context.get("sweepReclaimSignal"), 0.0)))
+    recent_high = _optional_float(structure_context.get("recentSwingHigh"))
+    recent_low = _optional_float(structure_context.get("recentSwingLow"))
+    support_distance_pct = _optional_float(support_resistance.get("support_distance_pct"))
+    resistance_distance_pct = _optional_float(support_resistance.get("resistance_distance_pct"))
+    volume_spike = bool(int(_safe_float(momentum_features.get("volumeSpike"), 0.0)))
+    macd_hist_slope = _safe_float(momentum_features.get("macdHistogramSlope"), 0.0)
+    market_closed = bool(session_context.get("isMarketClosed") or current_session.get("isMarketClosed"))
+    event_active = bool(event_risk.get("active"))
+
+    bearish_markers = (
+        "bearish breakdown",
+        "bearish drift",
+        "bearish pressure",
+        "bearish continuation",
+        "breakdown through support",
+        "bearish resistance rejection",
+        "resistance rejection",
+        "supply rejection",
+    )
+    bullish_markers = (
+        "bullish breakout",
+        "bullish drift",
+        "bullish pressure",
+        "bullish continuation",
+        "breakout through resistance",
+        "bullish support rejection",
+        "support rejection",
+        "demand rejection",
+    )
+
+    bear_score = 0.0
+    bull_score = 0.0
+    bear_signals = []
+    bull_signals = []
+
+    bear_structure_strength = 0.0
+    bull_structure_strength = 0.0
+    if _streamlined_signal_text_matches(combined_text, bearish_markers):
+        bear_structure_strength = 0.7 if "breakdown" in combined_text else 0.55
+    if _streamlined_signal_text_matches(combined_text, bullish_markers):
+        bull_structure_strength = 0.7 if "breakout" in combined_text else 0.55
+    if recent_low is not None and current_price < recent_low:
+        bear_structure_strength = max(bear_structure_strength, 0.9)
+    if recent_high is not None and current_price > recent_high:
+        bull_structure_strength = max(bull_structure_strength, 0.9)
+    if orb_state < 0 or sweep_state < 0:
+        bear_structure_strength = max(bear_structure_strength, 0.65)
+    if orb_state > 0 or sweep_state > 0:
+        bull_structure_strength = max(bull_structure_strength, 0.65)
+
+    if bear_structure_strength > 0:
+        bear_score += bear_structure_strength * 35.0
+        bear_signals.append(f"Bearish structure break (strength: {bear_structure_strength:.2f})")
+    if bull_structure_strength > 0:
+        bull_score += bull_structure_strength * 35.0
+        bull_signals.append(f"Bullish structure break (strength: {bull_structure_strength:.2f})")
+
+    bear_vwap_strength = 0.0
+    bull_vwap_strength = 0.0
+    if vwap_delta <= -abs(vwap_threshold_pct):
+        bear_vwap_strength = 0.55 + min(abs(vwap_delta) / max(abs(vwap_threshold_pct), 0.01), 0.35)
+        if session_vwap is not None and current_price < session_vwap:
+            bear_vwap_strength += 0.1
+        if bear_structure_strength > 0 or orb_state < 0 or sweep_state < 0:
+            bear_vwap_strength += 0.1
+    elif vwap_delta >= abs(vwap_threshold_pct):
+        bull_vwap_strength = 0.55 + min(abs(vwap_delta) / max(abs(vwap_threshold_pct), 0.01), 0.35)
+        if session_vwap is not None and current_price > session_vwap:
+            bull_vwap_strength += 0.1
+        if bull_structure_strength > 0 or orb_state > 0 or sweep_state > 0:
+            bull_vwap_strength += 0.1
+
+    if bear_vwap_strength > 0:
+        bear_vwap_strength = min(bear_vwap_strength, 1.0)
+        bear_score += bear_vwap_strength * 20.0
+        bear_signals.append(f"VWAP bearish rejection (strength: {bear_vwap_strength:.2f})")
+    if bull_vwap_strength > 0:
+        bull_vwap_strength = min(bull_vwap_strength, 1.0)
+        bull_score += bull_vwap_strength * 20.0
+        bull_signals.append(f"VWAP bullish rejection (strength: {bull_vwap_strength:.2f})")
+
+    bearish_ma_alignment = bool(
+        ema_20 is not None
+        and ema_50 is not None
+        and current_price < ema_20 < ema_50
+    )
+    bullish_ma_alignment = bool(
+        ema_20 is not None
+        and ema_50 is not None
+        and current_price > ema_20 > ema_50
+    )
+    if bearish_ma_alignment:
+        bear_score += 15.0
+        bear_signals.append("Bearish MA alignment")
+    if bullish_ma_alignment:
+        bull_score += 15.0
+        bull_signals.append("Bullish MA alignment")
+
+    if alignment_score <= -2:
+        bear_score += 5.0
+        bear_signals.append("Strong bearish multi-timeframe alignment")
+    elif alignment_score >= 2:
+        bull_score += 5.0
+        bull_signals.append("Strong bullish multi-timeframe alignment")
+
+    provisional_direction = "Neutral"
+    if bear_score > bull_score:
+        provisional_direction = "Bearish"
+    elif bull_score > bear_score:
+        provisional_direction = "Bullish"
+
+    if adx_14 >= adx_threshold:
+        if provisional_direction == "Bearish":
+            bear_score += 10.0
+            bear_signals.append(f"ADX trending ({adx_14:.1f})")
+        elif provisional_direction == "Bullish":
+            bull_score += 10.0
+            bull_signals.append(f"ADX trending ({adx_14:.1f})")
+    elif adx_14 >= weak_adx_threshold:
+        if provisional_direction == "Bearish":
+            bear_score += 5.0
+            bear_signals.append(f"ADX weak trend ({adx_14:.1f})")
+        elif provisional_direction == "Bullish":
+            bull_score += 5.0
+            bull_signals.append(f"ADX weak trend ({adx_14:.1f})")
+
+    if volume_spike:
+        if provisional_direction == "Bearish":
+            bear_score += 10.0
+            bear_signals.append("Volume spike")
+        elif provisional_direction == "Bullish":
+            bull_score += 10.0
+            bull_signals.append("Volume spike")
+
+    if support_distance_pct is not None and support_distance_pct <= 0.15 and provisional_direction == "Bearish":
+        bear_score += 10.0
+        bear_signals.append("Breaking key support")
+    if resistance_distance_pct is not None and resistance_distance_pct <= 0.15 and provisional_direction == "Bullish":
+        bull_score += 10.0
+        bull_signals.append("Breaking key resistance")
+
+    if macd_hist_slope < 0 and bear_score > 0:
+        bear_score += 5.0
+        bear_signals.append("Bearish momentum acceleration")
+    elif macd_hist_slope > 0 and bull_score > 0:
+        bull_score += 5.0
+        bull_signals.append("Bullish momentum acceleration")
+
+    direction = "Neutral"
+    score = max(bear_score, bull_score)
+    signals = _streamlined_dedupe(bear_signals + bull_signals)
+    if bear_score >= (bull_score + direction_margin):
+        direction = "Bearish"
+        score = bear_score
+        signals = _streamlined_dedupe(bear_signals)
+    elif bull_score >= (bear_score + direction_margin):
+        direction = "Bullish"
+        score = bull_score
+        signals = _streamlined_dedupe(bull_signals)
+
+    score = min(score, 100.0)
+    confidence = 50.0
+    if direction in {"Bullish", "Bearish"}:
+        confidence = 50.0 + (score * 0.5)
+        if (direction == "Bullish" and bullish_ma_alignment) or (direction == "Bearish" and bearish_ma_alignment):
+            confidence += 10.0
+        confidence = min(confidence, 95.0)
+
+    tradeability_score = score * 0.9 if direction in {"Bullish", "Bearish"} else 0.0
+    if tradeability_score >= 70.0:
+        tradeability_label = "High"
+    elif tradeability_score >= min_tradeability:
+        tradeability_label = "Medium"
+    else:
+        tradeability_label = "Low"
+
+    blockers = []
+    if market_closed:
+        blockers.append("Market is closed")
+    if event_active:
+        blockers.append("Macro event window is active")
+    if direction == "Neutral":
+        blockers.append("No directional bias")
+    if confidence < min_confidence:
+        blockers.append(f"Confidence {round(confidence)} below {int(min_confidence)}")
+    if tradeability_score < min_tradeability:
+        blockers.append(f"Tradeability {tradeability_score:.1f} below {round(min_tradeability, 1)}")
+
+    if blockers:
+        return {
+            "active": False,
+            "signals": signals,
+            "blockers": blockers,
+        }
+
+    summary = (
+        f"{direction} structure and VWAP alignment are active; direct execution is allowed."
+        if any("VWAP" in item for item in signals)
+        else f"{direction} structure is active with aligned trend and momentum; direct execution is allowed."
+    )
+    action_state = "LONG_ACTIVE" if direction == "Bullish" else "SHORT_ACTIVE"
+    action = "buy" if action_state == "LONG_ACTIVE" else "sell"
+    return {
+        "active": True,
+        "verdict": direction,
+        "confidence": int(round(confidence)),
+        "tradeabilityScore": round(tradeability_score, 2),
+        "tradeability": tradeability_label,
+        "directionalBias": direction,
+        "directionScore": round(score / 10.0, 2),
+        "score": round(score, 2),
+        "actionState": action_state,
+        "action": action,
+        "signals": signals,
+        "summary": summary,
+    }
+
+
 def compute_prediction_from_ta(ta_data):
     if not isinstance(ta_data, dict):
         return {
@@ -3409,6 +3686,40 @@ def compute_prediction_from_ta(ta_data):
     primary_soft_no_trade_reason = no_trade_reasons[0] if no_trade_reasons else ""
     primary_no_trade_reason = primary_hard_no_trade_reason or primary_soft_no_trade_reason
 
+    signal_engine_mode = "legacy_weighted"
+    streamlined_fixed_signal = _compute_streamlined_fixed_signal(ta_data, strategy_params)
+    if streamlined_fixed_signal.get("active"):
+        signal_engine_mode = "streamlined_fixed"
+        verdict = str(streamlined_fixed_signal.get("verdict") or verdict)
+        directional_bias = str(streamlined_fixed_signal.get("directionalBias") or directional_bias)
+        directional_bias_source = "streamlined_fixed_signal"
+        action_state = str(streamlined_fixed_signal.get("actionState") or action_state)
+        action = str(streamlined_fixed_signal.get("action") or action)
+        confidence = max(int(confidence or 0), int(streamlined_fixed_signal.get("confidence") or 0))
+        tradeability_score = max(
+            float(tradeability_score or 0.0),
+            float(streamlined_fixed_signal.get("tradeabilityScore") or 0.0),
+        )
+        tradeability_label = str(streamlined_fixed_signal.get("tradeability") or tradeability_label)
+        direction_score = max(
+            float(direction_score or 0.0),
+            float(streamlined_fixed_signal.get("directionScore") or 0.0),
+        )
+        anti_chop_reasons = []
+        no_trade_reasons = []
+        hard_no_trade_reasons = []
+        all_no_trade_reasons = []
+        primary_hard_no_trade_reason = ""
+        primary_soft_no_trade_reason = ""
+        primary_no_trade_reason = ""
+        confidence_mode = "streamlined_fixed_signal"
+        if confidence >= 70:
+            confidence_bucket = "High"
+        elif confidence >= 60:
+            confidence_bucket = "Guarded"
+        else:
+            confidence_bucket = "Low"
+
     if verdict in {"Bullish", "Bearish"} and not hard_no_trade_reasons and not no_trade_reasons:
         directional_prob_60 = max(bullish_prob_60, bearish_prob_60)
         if (
@@ -3441,6 +3752,7 @@ def compute_prediction_from_ta(ta_data):
         anti_chop_reasons,
         confidence,
     )
+    execution_state["signalEngineMode"] = signal_engine_mode
     execution_state["entryTimingScore"] = meta_scores["entry_timing_score"]
     execution_state["fakeoutProbability"] = meta_scores["fakeout_probability"]
     execution_state["exitRiskProbability"] = meta_scores["exit_risk_probability"]
@@ -3455,6 +3767,14 @@ def compute_prediction_from_ta(ta_data):
         ta_data,
         confidence,
     )
+    if streamlined_fixed_signal.get("active"):
+        if directional_bias == "Bullish":
+            trade_guidance["buyLevel"] = "Strong"
+            trade_guidance["sellLevel"] = "Weak"
+        elif directional_bias == "Bearish":
+            trade_guidance["sellLevel"] = "Strong"
+            trade_guidance["buyLevel"] = "Weak"
+        trade_guidance["exitLevel"] = "Low"
     higher_timeframe_bias, _, _ = _bias_vote(
         trend,
         "Bullish" if alignment_score > 0 else ("Bearish" if alignment_score < 0 else "Neutral"),
@@ -3511,14 +3831,18 @@ def compute_prediction_from_ta(ta_data):
     if action_state == "SETUP_LONG":
         trade_guidance["summary"] = "Long setup is forming, but trigger confirmation is still pending."
     elif action_state == "LONG_ACTIVE":
-        if directional_bias_source == "breakout_stack":
+        if signal_engine_mode == "streamlined_fixed" and streamlined_fixed_signal.get("summary"):
+            trade_guidance["summary"] = str(streamlined_fixed_signal.get("summary"))
+        elif directional_bias_source == "breakout_stack":
             trade_guidance["summary"] = "Long breakout entry is active; momentum and projected follow-through are strong enough for execution."
         else:
             trade_guidance["summary"] = "Long setup confirmed with acceptable tradeability."
     elif action_state == "SETUP_SHORT":
         trade_guidance["summary"] = "Short setup is forming, but trigger confirmation is still pending."
     elif action_state == "SHORT_ACTIVE":
-        if directional_bias_source == "breakout_stack":
+        if signal_engine_mode == "streamlined_fixed" and streamlined_fixed_signal.get("summary"):
+            trade_guidance["summary"] = str(streamlined_fixed_signal.get("summary"))
+        elif directional_bias_source == "breakout_stack":
             trade_guidance["summary"] = "Short breakout entry is active; momentum and projected follow-through are strong enough for execution."
         else:
             trade_guidance["summary"] = "Short setup confirmed with acceptable tradeability."
@@ -3600,6 +3924,7 @@ def compute_prediction_from_ta(ta_data):
         "tradeability": tradeability_label,
         "actionState": action_state,
         "action": action,
+        "signalEngineMode": signal_engine_mode,
         "confidenceMode": confidence_mode,
         "confidenceBucket": confidence_bucket,
         "antiChopActive": bool(anti_chop_reasons),

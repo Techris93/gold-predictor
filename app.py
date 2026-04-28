@@ -1604,11 +1604,185 @@ def _collect_execution_levels(ta_data):
     return sorted(levels, key=lambda item: float(item["price"]))
 
 
+def _build_streamlined_execution_quality_plan(ta_data, regime_state, decision_status, execution_state):
+    ta_data = ta_data if isinstance(ta_data, dict) else {}
+    execution_state = execution_state if isinstance(execution_state, dict) else {}
+    action_state = str(execution_state.get("actionState") or "")
+    if action_state not in {"LONG_ACTIVE", "SHORT_ACTIVE"}:
+        return None
+
+    session = _extract_market_session_state(ta_data)
+    event_risk = ta_data.get("event_risk") if isinstance(ta_data.get("event_risk"), dict) else {}
+    if session["is_market_closed"] or bool(event_risk.get("active")):
+        return None
+
+    current_price = _coerce_float(ta_data.get("current_price"), 0.0) or 0.0
+    if current_price <= 0:
+        return None
+
+    volatility = ta_data.get("volatility_regime") if isinstance(ta_data.get("volatility_regime"), dict) else {}
+    structure_context = ta_data.get("structure_context") if isinstance(ta_data.get("structure_context"), dict) else {}
+    price_action = ta_data.get("price_action") if isinstance(ta_data.get("price_action"), dict) else {}
+    momentum_features = ta_data.get("momentum_features") if isinstance(ta_data.get("momentum_features"), dict) else {}
+
+    adx = _coerce_float(volatility.get("adx_14"), 0.0) or 0.0
+    atr_percent = _coerce_float(volatility.get("atr_percent"), 0.0) or 0.0
+    atr_abs = _coerce_float(volatility.get("atr_14"), None)
+    if atr_abs is None or atr_abs <= 0:
+        atr_abs = (current_price * atr_percent / 100.0) if current_price > 0 and atr_percent > 0 else max(current_price * 0.001, 1.0)
+    atr_label = _atr_status(atr_percent)
+
+    direction = "Long" if action_state == "LONG_ACTIVE" else "Short"
+    vwap_delta = _coerce_float(structure_context.get("distSessionVwapPct"), 0.0) or 0.0
+    orb_state = int(round(_coerce_float(structure_context.get("openingRangeBreak"), 0.0) or 0.0))
+    structure_text = str(price_action.get("structure") or "")
+    structure_lower = structure_text.lower()
+    vwap_threshold = 0.04
+    vwap_aligned = (direction == "Long" and vwap_delta >= vwap_threshold) or (
+        direction == "Short" and vwap_delta <= -vwap_threshold
+    )
+    orb_aligned = (direction == "Long" and orb_state > 0) or (direction == "Short" and orb_state < 0)
+    structure_aligned = (
+        direction == "Long" and any(marker in structure_lower for marker in ("bullish", "breakout", "support rejection"))
+    ) or (
+        direction == "Short" and any(marker in structure_lower for marker in ("bearish", "breakdown", "rejection"))
+    )
+    volume_spike = bool(int(round(_coerce_float(momentum_features.get("volumeSpike"), 0.0) or 0.0)))
+
+    if vwap_aligned and orb_aligned:
+        setup = f"VWAP / ORB Continuation {direction}"
+    elif vwap_aligned:
+        setup = f"VWAP Pullback {direction}"
+    elif structure_aligned:
+        setup = f"Structure Break {direction}"
+    else:
+        setup = f"Directional Continuation {direction}"
+
+    stop_distance = atr_abs * 1.5
+    target_one_distance = atr_abs * 3.0
+    target_two_distance = atr_abs * 4.5
+    entry_low = current_price - (atr_abs * 0.12)
+    entry_high = current_price + (atr_abs * 0.12)
+    if direction == "Long":
+        stop = current_price - stop_distance
+        target_one = current_price + target_one_distance
+        target_two = current_price + target_two_distance
+    else:
+        stop = current_price + stop_distance
+        target_one = current_price - target_one_distance
+        target_two = current_price - target_two_distance
+
+    score = 72.0
+    if structure_aligned:
+        score += 8.0
+    if vwap_aligned:
+        score += 6.0
+    if orb_aligned:
+        score += 6.0
+    if adx >= 25.0:
+        score += 6.0
+    elif adx >= 20.0:
+        score += 4.0
+    if volume_spike:
+        score += 4.0
+    score = min(score, 92.0)
+    grade = "A" if score >= 84.0 else "B"
+
+    reasons = [
+        f"Streamlined fixed-signal mode keeps confirmed {direction.lower()} setups actionable.",
+        "ATR-defined risk model is used instead of nearby-level rejection gating.",
+    ]
+    if structure_aligned:
+        reasons.append(f"{structure_text or direction + ' structure'} remains aligned.")
+    if vwap_aligned:
+        reasons.append(f"VWAP is aligned on the {direction.lower()} side.")
+    if orb_aligned:
+        reasons.append(f"ORB confirms the {direction.lower()} continuation.")
+    if adx >= 20.0:
+        reasons.append(f"ADX {adx:.1f} confirms directional momentum.")
+
+    return {
+        "status": "ready",
+        "grade": grade,
+        "score": round(score, 1),
+        "mode": "Streamlined Fixed Signal",
+        "atrStatus": atr_label,
+        "direction": direction,
+        "setup": setup,
+        "entry": {
+            "low": _round_level(entry_low),
+            "high": _round_level(entry_high),
+            "mid": _round_level(current_price),
+            "text": f"{_format_level_text(entry_low)} - {_format_level_text(entry_high)}",
+        },
+        "stopLoss": {
+            "price": _round_level(stop),
+            "basis": "1.5x ATR fixed stop",
+            "distance": round(stop_distance, 2),
+            "atrMultiple": 1.5,
+        },
+        "targets": [
+            {
+                "label": "TP1",
+                "price": _round_level(target_one),
+                "basis": "3.0x ATR target",
+                "rMultiple": 2.0,
+            },
+            {
+                "label": "TP2",
+                "price": _round_level(target_two),
+                "basis": "4.5x ATR runner target",
+                "rMultiple": 3.0,
+            },
+        ],
+        "riskReward": 2.0,
+        "positionSizeNote": (
+            "Reduced risk / probe only" if atr_label in {"Compressed", "Extreme"} else "Normal planned risk only"
+        ),
+        "riskManagement": {
+            "minStopAtr": 1.5,
+            "maxEntryStopAtr": 1.5,
+            "stopAtrMultiple": 1.5,
+            "trailActive": bool(adx >= 35.0),
+            "text": "Use fixed ATR-defined risk and trail only after directional follow-through strengthens.",
+        },
+        "components": {
+            "regime": 24.0 if adx >= 20.0 else 18.0,
+            "vwap": 20.0 if vwap_aligned else 12.0,
+            "orb": 15.0 if orb_aligned else 7.0,
+            "location": 18.0 if structure_aligned else 12.0,
+            "risk": 20.0,
+        },
+        "reasons": _dedupe_preserve_order(reasons),
+        "blockers": [],
+        "invalidations": (
+            [
+                f"Long thesis fails below {_format_level_text(stop)} (1.5x ATR fixed stop).",
+                "Exit if price loses VWAP and structure flips bearish.",
+            ]
+            if direction == "Long"
+            else [
+                f"Short thesis fails above {_format_level_text(stop)} (1.5x ATR fixed stop).",
+                "Exit if price reclaims VWAP and structure flips bullish.",
+            ]
+        ),
+    }
+
+
 def _build_execution_quality_plan(ta_data, regime_state, decision_status, execution_state):
     ta_data = ta_data if isinstance(ta_data, dict) else {}
     regime_state = regime_state if isinstance(regime_state, dict) else {}
     decision_status = decision_status if isinstance(decision_status, dict) else {}
     execution_state = execution_state if isinstance(execution_state, dict) else {}
+
+    streamlined_plan = _build_streamlined_execution_quality_plan(
+        ta_data,
+        regime_state,
+        decision_status,
+        execution_state,
+    )
+    if streamlined_plan is not None:
+        return streamlined_plan
 
     current_price = _coerce_float(ta_data.get("current_price"), 0.0) or 0.0
     volatility = ta_data.get("volatility_regime") if isinstance(ta_data.get("volatility_regime"), dict) else {}
@@ -1701,14 +1875,14 @@ def _build_execution_quality_plan(ta_data, regime_state, decision_status, execut
         elif mode == "Range Reversion":
             setup = "VWAP Stretch Reversion Long"
         else:
-            setup = "Long Watchlist Reclaim"
+            setup = "Long Reclaim Setup"
     elif direction == "Short":
         if mode == "Trend Continuation":
             setup = "VWAP / ORB Continuation Short" if orb_state < 0 else "VWAP Pullback Short"
         elif mode == "Range Reversion":
             setup = "VWAP Stretch Reversion Short"
         else:
-            setup = "Short Watchlist Rejection"
+            setup = "Short Rejection Setup"
     else:
         setup = "No Clean Entry"
 
@@ -4501,25 +4675,25 @@ def _evaluate_decision_status(
             if sell_passed == len(sell_checks) and sell_passed > buy_passed:
                 reason_suffix = f" because {blocked_reason}" if blocked_reason else ""
                 text = (
-                    "Watchlist Only: sell checklist is confirmed, but execution is blocked"
+                    "Sell bias is intact, but the trigger is not active yet"
                     f"{reason_suffix}."
                 )
             elif buy_passed == len(buy_checks) and buy_passed > sell_passed:
                 reason_suffix = f" because {blocked_reason}" if blocked_reason else ""
                 text = (
-                    "Watchlist Only: buy checklist is confirmed, but execution is blocked"
+                    "Buy bias is intact, but the trigger is not active yet"
                     f"{reason_suffix}."
                 )
             elif sell_passed >= 3 and sell_passed > buy_passed:
                 reason_suffix = f" because {blocked_reason}" if blocked_reason else ""
                 text = (
-                    "Watchlist Only: sell conditions are mostly aligned, but execution is blocked"
+                    "Sell conditions are mostly aligned, but the trigger is still too weak"
                     f"{reason_suffix}."
                 )
             elif buy_passed >= 3 and buy_passed > sell_passed:
                 reason_suffix = f" because {blocked_reason}" if blocked_reason else ""
                 text = (
-                    "Watchlist Only: buy conditions are mostly aligned, but execution is blocked"
+                    "Buy conditions are mostly aligned, but the trigger is still too weak"
                     f"{reason_suffix}."
                 )
         return {
@@ -4616,8 +4790,8 @@ def _evaluate_execution_permission(decision_status, market_state):
         text = "No trade. Execution state and checklist direction are not aligned yet."
         status = "no_trade"
     elif action_state in {"SETUP_LONG", "SETUP_SHORT"}:
-        text = "Watchlist Only: setup is forming, but execution is not confirmed yet."
-        status = "watchlist_only"
+        text = "No trade yet. Directional bias is forming, but the trigger is not active."
+        status = "no_trade"
     elif action_state == "WAIT" and decision_text.startswith("Watchlist Only:"):
         blockers = []
         if tradeability.lower() == "low":
@@ -4626,10 +4800,10 @@ def _evaluate_execution_permission(decision_status, market_state):
             blockers.append(f"{regime.lower()} regime")
         blocker_text = " and ".join(blockers)
         if blocker_text:
-            text = f"Watchlist Only: entry is blocked by {blocker_text}."
+            text = f"No trade yet. Entry is blocked by {blocker_text}."
         else:
-            text = "Watchlist Only: setup is forming, but execution is not confirmed yet."
-        status = "watchlist_only"
+            text = "No trade yet. Directional bias is forming, but execution is not confirmed."
+        status = "no_trade"
 
     return {
         "text": text,
