@@ -1607,6 +1607,8 @@ def _collect_execution_levels(ta_data):
 def _build_streamlined_execution_quality_plan(ta_data, regime_state, decision_status, execution_state):
     ta_data = ta_data if isinstance(ta_data, dict) else {}
     execution_state = execution_state if isinstance(execution_state, dict) else {}
+    if str(execution_state.get("signalEngineMode") or "") != "streamlined_fixed":
+        return None
     action_state = str(execution_state.get("actionState") or "")
     if action_state not in {"LONG_ACTIVE", "SHORT_ACTIVE"}:
         return None
@@ -4675,25 +4677,25 @@ def _evaluate_decision_status(
             if sell_passed == len(sell_checks) and sell_passed > buy_passed:
                 reason_suffix = f" because {blocked_reason}" if blocked_reason else ""
                 text = (
-                    "Sell bias is intact, but the trigger is not active yet"
+                    "Sell bias is intact, but execution is blocked"
                     f"{reason_suffix}."
                 )
             elif buy_passed == len(buy_checks) and buy_passed > sell_passed:
                 reason_suffix = f" because {blocked_reason}" if blocked_reason else ""
                 text = (
-                    "Buy bias is intact, but the trigger is not active yet"
+                    "Buy bias is intact, but execution is blocked"
                     f"{reason_suffix}."
                 )
             elif sell_passed >= 3 and sell_passed > buy_passed:
                 reason_suffix = f" because {blocked_reason}" if blocked_reason else ""
                 text = (
-                    "Sell conditions are mostly aligned, but the trigger is still too weak"
+                    "Sell conditions are mostly aligned, but execution is blocked"
                     f"{reason_suffix}."
                 )
             elif buy_passed >= 3 and buy_passed > sell_passed:
                 reason_suffix = f" because {blocked_reason}" if blocked_reason else ""
                 text = (
-                    "Buy conditions are mostly aligned, but the trigger is still too weak"
+                    "Buy conditions are mostly aligned, but execution is blocked"
                     f"{reason_suffix}."
                 )
         return {
