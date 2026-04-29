@@ -1,13 +1,6 @@
 {
   "windows": [
     {
-      "name": "FOMC Statement / Press Conference",
-      "start": "2026-04-29T17:15:00Z",
-      "end": "2026-04-29T19:30:00Z",
-      "release": "2026-04-29T18:00:00Z",
-      "reason": "Federal Reserve FOMC statement and press conference window for April 29, 2026."
-    },
-    {
       "name": "Personal Income and Outlays",
       "start": "2026-04-30T12:00:00Z",
       "end": "2026-04-30T13:45:00Z",
