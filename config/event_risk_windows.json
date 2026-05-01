@@ -1,13 +1,6 @@
 {
   "windows": [
     {
-      "name": "S&P Global US Manufacturing PMI",
-      "start": "2026-05-01T13:30:00Z",
-      "end": "2026-05-01T14:30:00Z",
-      "release": "2026-05-01T13:45:00Z",
-      "reason": "Official S&P Global PMI calendar lists S&P Global US Manufacturing PMI for May 1, 2026 at 13:45 UTC."
-    },
-    {
       "name": "ISM Manufacturing PMI",
       "start": "2026-05-01T13:45:00Z",
       "end": "2026-05-01T14:45:00Z",
@@ -153,6 +146,13 @@
       "end": "2026-05-28T13:30:00Z",
       "release": "2026-05-28T12:30:00Z",
       "reason": "Release date from the St. Louis Fed FRED release schedule for May 28, 2026 (Unemployment Insurance Weekly Claims Report)."
+    },
+    {
+      "name": "S&P Global US Manufacturing PMI",
+      "start": "2026-06-01T13:30:00Z",
+      "end": "2026-06-01T14:30:00Z",
+      "release": "2026-06-01T13:45:00Z",
+      "reason": "Official S&P Global PMI calendar lists S&P Global US Manufacturing PMI for June 1, 2026 at 13:45 UTC."
     },
     {
       "name": "ISM Manufacturing PMI",
