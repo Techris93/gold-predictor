@@ -169,6 +169,13 @@
       "reason": "Release date from the St. Louis Fed FRED release schedule for June 3, 2026 (ADP National Employment Report)."
     },
     {
+      "name": "S&P Global US Services PMI",
+      "start": "2026-06-03T13:30:00Z",
+      "end": "2026-06-03T14:30:00Z",
+      "release": "2026-06-03T13:45:00Z",
+      "reason": "Official S&P Global PMI calendar lists S&P Global US Services PMI for June 3, 2026 at 13:45 UTC."
+    },
+    {
       "name": "ISM Services PMI",
       "start": "2026-06-03T13:45:00Z",
       "end": "2026-06-03T14:45:00Z",
